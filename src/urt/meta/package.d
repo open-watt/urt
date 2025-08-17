@@ -6,25 +6,28 @@ alias Alias(T) = T;
 
 alias AliasSeq(TList...) = TList;
 
-template IntForWidth(size_t width, bool signed = false)
+template IntForWidth(size_t bits, bool signed = false)
 {
-    static if (width <= 8 && !signed)
+    static if (bits <= 8 && !signed)
         alias IntForWidth = ubyte;
-    else static if (width <= 8 && signed)
+    else static if (bits <= 8 && signed)
         alias IntForWidth = byte;
-    else static if (width <= 16 && !signed)
+    else static if (bits <= 16 && !signed)
         alias IntForWidth = ushort;
-    else static if (width <= 16 && signed)
+    else static if (bits <= 16 && signed)
         alias IntForWidth = short;
-    else static if (width <= 32 && !signed)
+    else static if (bits <= 32 && !signed)
         alias IntForWidth = uint;
-    else static if (width <= 32 && signed)
+    else static if (bits <= 32 && signed)
         alias IntForWidth = int;
-    else static if (width <= 64 && !signed)
+    else static if (bits <= 64 && !signed)
         alias IntForWidth = ulong;
-    else static if (width <= 64 && signed)
+    else static if (bits <= 64 && signed)
         alias IntForWidth = long;
 }
+
+alias TypeForOp(string op, U) = typeof(mixin(op ~ "U()"));
+alias TypeForOp(string op, A, B) = typeof(mixin("A()" ~ op ~ "B()"));
 
 template STATIC_MAP(alias fun, args...)
 {
@@ -72,7 +75,7 @@ template enum_keys(E)
 }
 
 E enum_from_string(E)(const(char)[] key)
-    if (is(E == enum))
+if (is(E == enum))
 {
     foreach (i, k; enum_keys!E)
         if (key[] == k[])

@@ -97,11 +97,11 @@ nothrow @nogc:
 
     size_t toHash() const pure
     {
-        import urt.hash : fnv1aHash, fnv1aHash64;
+        import urt.hash : fnv1a, fnv1a64;
         static if (size_t.sizeof > 4)
-            return fnv1aHash64(b[]);
+            return fnv1a64(b[]);
         else
-            return fnv1aHash(b[]);
+            return fnv1a(b[]);
     }
 
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
@@ -113,7 +113,7 @@ nothrow @nogc:
         {
             if (i > 0)
                 tmp[offset++] = '.';
-            offset += b[i].formatInt(tmp[offset..$]);
+            offset += b[i].format_int(tmp[offset..$]);
         }
 
         if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
@@ -129,22 +129,22 @@ nothrow @nogc:
     {
         ubyte[4] t;
         size_t offset = 0, len;
-        ulong i = s[offset..$].parseInt(&len);
+        ulong i = s[offset..$].parse_int(&len);
         offset += len;
         if (len == 0 || i > 255 || s.length < offset + 1 || s[offset++] != '.')
             return -1;
         t[0] = cast(ubyte)i;
-        i = s[offset..$].parseInt(&len);
+        i = s[offset..$].parse_int(&len);
         offset += len;
         if (len == 0 || i > 255 || s.length < offset + 1 || s[offset++] != '.')
             return -1;
         t[1] = cast(ubyte)i;
-        i = s[offset..$].parseInt(&len);
+        i = s[offset..$].parse_int(&len);
         offset += len;
         if (len == 0 || i > 255 || s.length < offset + 1 || s[offset++] != '.')
             return -1;
         t[2] = cast(ubyte)i;
-        i = s[offset..$].parseInt(&len);
+        i = s[offset..$].parse_int(&len);
         offset += len;
         if (len == 0 || i > 255)
             return -1;
@@ -224,11 +224,11 @@ nothrow @nogc:
 
     size_t toHash() const pure
     {
-        import urt.hash : fnv1aHash, fnv1aHash64;
+        import urt.hash : fnv1a, fnv1a64;
         static if (size_t.sizeof > 4)
-            return fnv1aHash64(cast(ubyte[])s[]);
+            return fnv1a64(cast(ubyte[])s[]);
         else
-            return fnv1aHash(cast(ubyte[])s[]);
+            return fnv1a(cast(ubyte[])s[]);
     }
 
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
@@ -275,7 +275,7 @@ nothrow @nogc:
                     tmp[offset++] = ':';
                 continue;
             }
-            offset += s[i].formatInt(tmp[offset..$], 16);
+            offset += s[i].format_int(tmp[offset..$], 16);
             ++i;
         }
 
@@ -360,7 +360,7 @@ nothrow @nogc:
 
         size_t offset = addr.toString(tmp, null, null);
         tmp[offset++] = '/';
-        offset += prefixLen.formatInt(tmp[offset..$]);
+        offset += prefixLen.format_int(tmp[offset..$]);
 
         if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
         {
@@ -378,7 +378,7 @@ nothrow @nogc:
         if (taken < 0 || s.length <= taken + 1 || s[taken++] != '/')
             return -1;
         size_t t;
-        ulong plen = s[taken..$].parseInt(&t);
+        ulong plen = s[taken..$].parse_int(&t);
         if (t == 0 || plen > 32)
             return -1;
         addr = a;
@@ -449,7 +449,7 @@ nothrow @nogc:
 
         size_t offset = addr.toString(tmp, null, null);
         tmp[offset++] = '/';
-        offset += prefixLen.formatInt(tmp[offset..$]);
+        offset += prefixLen.format_int(tmp[offset..$]);
 
         if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
         {
@@ -467,7 +467,7 @@ nothrow @nogc:
         if (taken < 0 || s.length <= taken + 1 || s[taken++] != '/')
             return -1;
         size_t t;
-        ulong plen = s[taken..$].parseInt(&t);
+        ulong plen = s[taken..$].parse_int(&t);
         if (t == 0 || plen > 32)
             return -1;
         addr = a;
@@ -547,7 +547,7 @@ nothrow @nogc:
         {
             offset = _a.ipv4.addr.toString(tmp, null, null);
             tmp[offset++] = ':';
-            offset += _a.ipv4.port.formatInt(tmp[offset..$]);
+            offset += _a.ipv4.port.format_int(tmp[offset..$]);
         }
         else
         {
@@ -555,7 +555,7 @@ nothrow @nogc:
             offset = 1 + _a.ipv6.addr.toString(tmp[1 .. $], null, null);
             tmp[offset++] = ']';
             tmp[offset++] = ':';
-            offset += _a.ipv6.port.formatInt(tmp[offset..$]);
+            offset += _a.ipv6.port.format_int(tmp[offset..$]);
         }
 
         if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
@@ -602,7 +602,7 @@ nothrow @nogc:
         if (s.length > taken && s[taken] == ':')
         {
             size_t t;
-            ulong p = s[++taken..$].parseInt(&t);
+            ulong p = s[++taken..$].parse_int(&t);
             if (t == 0 || p > 0xFFFF)
                 return -1;
             taken += t;

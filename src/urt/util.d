@@ -98,13 +98,15 @@ T alignUp(T)(T value, size_t alignment)
 bool isAligned(size_t alignment, T)(T value)
     if (isSomeInt!T || is(T == U*, U))
 {
-    static assert(IsPowerOf2!alignment, "Alignment must be a power of two!");
+    static assert(IsPowerOf2!alignment, "Alignment must be a power of two");
+    static assert(T.sizeof <= size_t.sizeof, "TODO");
     return (cast(size_t)value & (alignment - 1)) == 0;
 }
 
 bool isAligned(T)(T value, size_t alignment)
     if (isSomeInt!T || is(T == U*, U))
 {
+    static assert(T.sizeof <= size_t.sizeof, "TODO");
     return (cast(size_t)value & (alignment - 1)) == 0;
 }
 
@@ -442,8 +444,8 @@ ulong byteReverse(ulong v)
 pragma(inline, true) T byteReverse(T)(T val)
     if (!isIntegral!T)
 {
-    import urt.meta : intForWidth;
-    alias U = intForWidth!(T.sizeof*8);
+    import urt.meta : IntForWidth;
+    alias U = IntForWidth!(T.sizeof*8);
     U r = byteReverse(*cast(U*)&val);
     return *cast(T*)&r;
 }

@@ -93,12 +93,12 @@ unittest
     MD5Context ctx;
     md5_init(ctx);
     auto digest = md5_finalise(ctx);
-    assert(digest == Hex!"d41d8cd98f00b204e9800998ecf8427e");
+    assert(digest == HexDecode!"d41d8cd98f00b204e9800998ecf8427e");
 
     md5_init(ctx);
     md5_update(ctx, "Hello, World!");
     digest = md5_finalise(ctx);
-    assert(digest == Hex!"65a8e27d8879283831b664bd8b7f0ad4");
+    assert(digest == HexDecode!"65a8e27d8879283831b664bd8b7f0ad4");
 }
 
 

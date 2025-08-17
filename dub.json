@@ -1,0 +1,23 @@
+{
+  "name": "urt",
+  "description": "μRT (microRuntime) - A small and lightweight runtime library for D, suitable for realtime and embedded systems.",
+  "authors": ["Manu Evans"],
+  "copyright": "Copyright © 2025, Manu Evans",
+  "license": "MIT",
+  "version": "0.1.0",
+  "targetType": "staticLibrary",
+  "targetName": "urt",
+  "targetPath": "bin",
+  "configurations": [
+    {
+      "name": "debug",
+      "targetType": "staticLibrary",
+      "buildOptions": ["debugMode", "debugInfo"]
+    },
+    {
+      "name": "release",
+      "targetType": "staticLibrary",
+      "buildOptions": ["releaseMode", "optimize", "inline"]
+    }
+  ]
+}

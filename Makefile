@@ -22,11 +22,7 @@ DEPFILE := $(OBJDIR)/$(TARGETNAME).d
 
 DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=nosharedaccess -preview=in
 
-ifeq ($(OS),windows)
-SOURCES := $(shell dir /s /b $(SRCDIR)\\*.d)
-else
 SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d')
-endif
 
 # Set target file based on build type and OS
 ifeq ($(BUILD_TYPE),exe)
@@ -93,30 +89,19 @@ else
 endif
 
 ifeq ($(CONFIG),unittest)
-    DFLAGS := $(DFLAGS) -unittest
+    DFLAGS := $(DFLAGS) -unittest -main
 endif
 
 -include $(DEPFILE)
 
 $(TARGET):
-ifeq ($(OS),windows)
-	@if not exist "obj" mkdir "obj" > nul 2>&1
-	@if not exist "$(subst /,\,$(OBJDIR))" mkdir "$(subst /,\,$(OBJDIR))" > nul 2>&1
-	@if not exist "bin" mkdir "bin" > nul 2>&1
-	@if not exist "$(subst /,\,$(TARGETDIR))" mkdir "$(subst /,\,$(TARGETDIR))" > nul 2>&1
-else
 	mkdir -p $(OBJDIR) $(TARGETDIR)
-endif
 ifeq ($(D_COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(SOURCES)
 else ifeq ($(D_COMPILER),dmd)
 ifeq ($(BUILD_TYPE),lib)
-	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
-ifeq ($(OS),windows)
-	move "$(subst /,\,$(OBJDIR))\\$(notdir $(TARGET))" "$(subst /,\,$(TARGETDIR))" > nul
-else
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(OBJDIR)/$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
 	mv "$(OBJDIR)/$(notdir $(TARGET))" "$(TARGETDIR)"
-endif
 else # exe
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
 endif

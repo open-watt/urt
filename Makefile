@@ -9,6 +9,15 @@ TARGET_SUBDIR := $(PLATFORM)_$(CONFIG)
 OBJDIR := obj/$(TARGET_SUBDIR)
 TARGETDIR := bin/$(TARGET_SUBDIR)
 TARGETNAME := urt
+
+# unittest config adjustments
+ifeq ($(CONFIG),unittest)
+    TARGETNAME := $(TARGETNAME)_test
+    BUILD_TYPE := exe
+else
+    BUILD_TYPE := lib
+endif
+
 DEPFILE := $(OBJDIR)/$(TARGETNAME).d
 
 DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=nosharedaccess -preview=in
@@ -19,10 +28,21 @@ else
 SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d')
 endif
 
-ifeq ($(OS),windows)
-    TARGET = $(TARGETDIR)/$(TARGETNAME).lib
-else
-    TARGET = $(TARGETDIR)/lib$(TARGETNAME).a
+# Set target file based on build type and OS
+ifeq ($(BUILD_TYPE),exe)
+    BUILD_CMD_FLAGS :=
+    ifeq ($(OS),windows)
+        TARGET = $(TARGETDIR)/$(TARGETNAME).exe
+    else
+        TARGET = $(TARGETDIR)/$(TARGETNAME)
+    endif
+else # lib
+    BUILD_CMD_FLAGS := -lib
+    ifeq ($(OS),windows)
+        TARGET = $(TARGETDIR)/$(TARGETNAME).lib
+    else
+        TARGET = $(TARGETDIR)/lib$(TARGETNAME).a
+    endif
 endif
 
 ifeq ($(D_COMPILER),ldc)
@@ -74,7 +94,6 @@ endif
 
 ifeq ($(CONFIG),unittest)
     DFLAGS := $(DFLAGS) -unittest
-    TARGETNAME := $(TARGETNAME)_test
 endif
 
 -include $(DEPFILE)
@@ -89,13 +108,17 @@ else
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 endif
 ifeq ($(D_COMPILER),ldc)
-	"$(DC)" $(DFLAGS) -lib -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(SOURCES)
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(SOURCES)
 else ifeq ($(D_COMPILER),dmd)
-	"$(DC)" $(DFLAGS) -lib -of$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
+ifeq ($(BUILD_TYPE),lib)
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
 ifeq ($(OS),windows)
 	move "$(subst /,\,$(OBJDIR))\\$(notdir $(TARGET))" "$(subst /,\,$(TARGETDIR))" > nul
 else
 	mv "$(OBJDIR)/$(notdir $(TARGET))" "$(TARGETDIR)"
+endif
+else # exe
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
 endif
 endif
 

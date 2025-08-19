@@ -253,6 +253,94 @@ unittest
 }
 
 
+ptrdiff_t parse(T)(const char[] text, out T result)
+{
+    import urt.array : beginsWith;
+    import urt.traits;
+
+    alias UT = Unqual!T;
+
+    static if (is(UT == bool))
+    {
+        if (text.beginsWith("true"))
+        {
+            result = true;
+            return 4;
+        }
+        result = false;
+        if (text.beginsWith("false"))
+            return 5;
+        return -1;
+    }
+    else static if (is_some_int!T)
+    {
+        size_t taken;
+        static if (is_signed_int!T)
+            long r = text.parse_int(&taken);
+        else
+            ulong r = text.parse_uint(&taken);
+        if (!taken)
+            return -1;
+        if (r >= T.min && r <= T.max)
+        {
+            result = cast(T)r;
+            return taken;
+        }
+        return -2;
+    }
+    else static if (is_some_float!T)
+    {
+        size_t taken;
+        double f = text.parse_float(&taken);
+        if (!taken)
+            return -1;
+        result = cast(T)f;
+        return taken;
+    }
+    else static if (is_enum!T)
+    {
+        static assert(false, "TODO: do we want to parse from enum keys?");
+        // case-sensitive?
+    }
+    else static if (is(T == struct) && __traits(compiles, { result.fromString(text); }))
+    {
+        return result.fromString(text);
+    }
+    else
+        static assert(false, "Cannot parse " ~ T.stringof ~ " from string");
+}
+
+unittest
+{
+    {
+        bool r;
+        assert("true".parse(r) == 4 && r == true);
+        assert("false".parse(r) == 5 && r == false);
+        assert("wow".parse(r) == -1);
+    }
+    {
+        int r;
+        assert("-10".parse(r) == 3 && r == -10);
+    }
+    {
+        ubyte r;
+        assert("10".parse(r) == 2 && r == 10);
+        assert("-10".parse(r) == -1);
+        assert("257".parse(r) == -2);
+    }
+    {
+        float r;
+        assert("10".parse(r) == 2 && r == 10.0f);
+        assert("-2.5".parse(r) == 4 && r == -2.5f);
+    }
+    {
+        import urt.inet;
+        IPAddr r;
+        assert("10.0.0.1".parse(r) == 8 && r == IPAddr(10,0,0,1));
+    }
+}
+
+
 ptrdiff_t format_int(long value, char[] buffer, uint base = 10, uint width = 0, char fill = ' ', bool show_sign = false) pure
 {
     const bool neg = value < 0;

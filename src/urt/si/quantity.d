@@ -194,7 +194,7 @@ nothrow @nogc:
 
     // not clear if this should return the raw value, or the normalised value...?
 //    T opCast(T)() const pure
-//        if (isSomeFloat!T || isSomeInt!T)
+//        if (is_some_float!T || is_some_int!T)
 //    {
 //        assert(unit.pack == 0, "Non-scalar unit can't cast to scalar");
 //        assert(false, "TODO: should we be applying the scale to this result?");

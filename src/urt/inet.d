@@ -74,6 +74,16 @@ nothrow @nogc:
     bool opEquals(const(ubyte)[4] bytes) const pure
         => b == bytes;
 
+    int opCmp(ref const IPAddr rhs) const pure
+    {
+        uint a = loadBigEndian(&address), b = loadBigEndian(&rhs.address);
+        if (a < b)
+            return -1;
+        else if (a > b)
+            return 1;
+        return 0;
+    }
+
     IPAddr opUnary(string op : "~")() const pure
     {
         IPAddr r;

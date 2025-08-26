@@ -2,7 +2,6 @@ module urt.math;
 
 import urt.intrinsic;
 import core.stdc.stdio; // For writeDebugf
-import std.format;      // For format
 
 version (LDC) version = GDC_OR_LDC;
 version (GNU) version = GDC_OR_LDC;

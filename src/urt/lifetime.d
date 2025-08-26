@@ -3,8 +3,6 @@ module urt.lifetime;
 
 T* emplace(T)(T* chunk) @safe pure
 {
-    import core.internal.lifetime : emplaceRef;
-
     emplaceRef!T(*chunk);
     return chunk;
 }
@@ -12,8 +10,6 @@ T* emplace(T)(T* chunk) @safe pure
 T* emplace(T, Args...)(T* chunk, auto ref Args args)
     if (is(T == struct) || Args.length == 1)
 {
-    import core.internal.lifetime : emplaceRef;
-
     emplaceRef!T(*chunk, forward!args);
     return chunk;
 }
@@ -73,8 +69,7 @@ T emplace(T, Args...)(void[] chunk, auto ref Args args)
 T* emplace(T, Args...)(void[] chunk, auto ref Args args)
     if (!is(T == class))
 {
-    import core.internal.traits : Unqual;
-    import core.internal.lifetime : emplaceRef;
+    import urt.traits : Unqual;
 
     assert(chunk.length >= T.sizeof, "chunk size too small.");
     assert((cast(size_t) chunk.ptr) % T.alignof == 0, "emplace: Chunk is not aligned.");
@@ -82,6 +77,11 @@ T* emplace(T, Args...)(void[] chunk, auto ref Args args)
     emplaceRef!(T, Unqual!T)(*cast(Unqual!T*) chunk.ptr, forward!args);
     return cast(T*) chunk.ptr;
 }
+
+
+// HACK: we should port this to our lib...
+static import core.internal.lifetime;
+alias emplaceRef = core.internal.lifetime.emplaceRef;
 
 
 /+

@@ -182,13 +182,10 @@ template reduce(fun...)
 
     Returns:
         the final result of the accumulator applied to the iterable
-
-    Throws: `Exception` if `r` is empty
     +/
     auto reduce(R)(R r)
         if (isIterable!R)
     {
-        import std.exception : enforce;
         alias E = Select!(is_input_range!R, ElementType!R, ForeachType!R);
         alias Args = STATIC_MAP!(ReduceSeedType!E, binfuns);
 
@@ -199,7 +196,7 @@ template reduce(fun...)
             {
                 static assert(r.length > 0);
             }))
-                enforce(!r.empty, "Cannot reduce an empty input range w/o an explicit seed value.");
+                assert(!r.empty, "Cannot reduce an empty input range w/o an explicit seed value.");
 
             Args result = r.front;
             r.popFront();
@@ -279,7 +276,7 @@ template reduce(fun...)
 
             static if (mustInitialize) if (initialized == false)
             {
-                import core.internal.lifetime : emplaceRef;
+                import urt.lifetime : emplaceRef;
                 foreach (i, f; binfuns)
                     emplaceRef!(Args[i])(args[i], e);
                 initialized = true;
@@ -323,7 +320,7 @@ template fold(fun...)
         }
         else
         {
-            import std.typecons : tuple;
+            import urt.meta : tuple;
             return reduce!fun(tuple(seeds), r);
         }
     }

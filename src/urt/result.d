@@ -19,6 +19,24 @@ nothrow @nogc:
         => systemCode != 0;
 }
 
+struct StringResult
+{
+nothrow @nogc:
+    enum success = StringResult();
+
+    const(char)[] message = null;
+
+    bool opCast(T : bool)() const
+        => message is null;
+
+    bool succeeded() const
+        => message is null;
+    bool failed() const
+        => message !is null;
+}
+
+// TODO: should we have a way to convert Result to StringResult, so we can format error messages?
+
 
 version (Windows)
 {

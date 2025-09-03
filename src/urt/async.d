@@ -60,7 +60,7 @@ Promise!(ReturnType!Fun)* async(size_t stackSize = DefaultStackSize, Fun, Args..
 
 void freePromise(T)(ref Promise!T* promise)
 {
-    assert(promise.state() != Promise!T.State.Pending, "Promise still pending!");
+    assert(promise.state() != PromiseState.Pending, "Promise still pending!");
     defaultAllocator().freeT(promise);
     promise = null;
 }
@@ -84,15 +84,15 @@ void asyncUpdate()
 }
 
 
+enum PromiseState
+{
+    Pending,
+    Ready,
+    Failed
+}
+
 struct Promise(Result)
 {
-    enum State
-    {
-        Pending,
-        Ready,
-        Failed,
-    }
-
     // construct using `async()` functions...
     this() @disable;
     this(ref typeof(this)) @disable; // disable copy constructor
@@ -117,29 +117,29 @@ struct Promise(Result)
         }
     }
 
-    State state() const
+    PromiseState state() const
     {
         if (async.fibre.wasAborted())
-            return State.Failed;
+            return PromiseState.Failed;
         else if (async.fibre.isFinished())
-            return State.Ready;
+            return PromiseState.Ready;
         else
-            return State.Pending;
+            return PromiseState.Pending;
     }
 
     bool finished() const
-        => state() != State.Pending;
+        => state() != PromiseState.Pending;
 
     ref Result result()
     {
-        assert(state() == State.Ready, "Promise not fulfilled!");
+        assert(state() == PromiseState.Ready, "Promise not fulfilled!");
         static if (!is(Result == void))
             return value;
     }
 
     void abort()
     {
-        assert(state() == State.Pending, "Promise already fulfilled!");
+        assert(state() == PromiseState.Pending, "Promise already fulfilled!");
         async.fibre.abort();
     }
 
@@ -180,11 +180,11 @@ unittest
     }
 
     auto p = async!fun(1, 2);
-    assert(p.state() == p.State.Ready);
+    assert(p.state() == PromiseState.Ready);
     assert(p.result() == 3);
     freePromise(p);
     p = async!fun(10, 20);
-    assert(p.state() == p.State.Ready);
+    assert(p.state() == PromiseState.Ready);
     assert(p.result() == 30);
     freePromise(p);
 
@@ -201,13 +201,13 @@ unittest
     }
 
     auto p_yield = async(&fun_yield);
-    assert(p_yield.state() == p_yield.State.Pending);
+    assert(p_yield.state() == PromiseState.Pending);
     assert(val == 1);
     asyncUpdate();
-    assert(p_yield.state() == p_yield.State.Pending);
+    assert(p_yield.state() == PromiseState.Pending);
     assert(val == 2);
     asyncUpdate();
-    assert(p_yield.state() == p_yield.State.Ready);
+    assert(p_yield.state() == PromiseState.Ready);
     assert(val == 3);
     assert(p_yield.result() == 4);
     freePromise(p_yield);

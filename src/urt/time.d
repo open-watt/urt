@@ -100,14 +100,22 @@ pure nothrow @nogc:
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
-        long ms = (ticks != 0 ? appTime(this) : Duration()).as!"msecs";
-        if (!buffer.ptr)
-            return 2 + timeToString(ms, null);
-        if (buffer.length < 2)
-            return -1;
-        buffer[0..2] = "T+";
-        ptrdiff_t len = timeToString(ms, buffer[2..$]);
-        return len < 0 ? len : 2 + len;
+        static if (clock == Clock.SystemTime)
+        {
+            DateTime dt = getDateTime(this);
+            return dt.toString(buffer, format, formatArgs);
+        }
+        else
+        {
+            long ms = (ticks != 0 ? appTime(this) : Duration()).as!"msecs";
+            if (!buffer.ptr)
+                return 2 + timeToString(ms, null);
+            if (buffer.length < 2)
+                return -1;
+            buffer[0..2] = "T+";
+            ptrdiff_t len = timeToString(ms, buffer[2..$]);
+            return len < 0 ? len : 2 + len;
+        }
     }
 
     auto __debugOverview() const
@@ -410,7 +418,7 @@ DateTime getDateTime()
         static assert(false, "TODO");
 }
 
-DateTime getDateTime(SysTime time)
+DateTime getDateTime(SysTime time) pure
 {
     version (Windows)
         return fileTimeToDateTime(time);
@@ -553,13 +561,14 @@ unittest
 
 version (Windows)
 {
-    DateTime fileTimeToDateTime(SysTime ftime)
+    DateTime fileTimeToDateTime(SysTime ftime) pure
     {
         version (BigEndian)
             static assert(false, "Only works in little endian!");
 
         SYSTEMTIME stime;
-        FileTimeToSystemTime(cast(FILETIME*)&ftime.ticks, &stime);
+        alias PureHACK = extern(Windows) BOOL function(const(FILETIME)*, LPSYSTEMTIME) pure nothrow @nogc;
+        (cast(PureHACK)&FileTimeToSystemTime)(cast(FILETIME*)&ftime.ticks, &stime);
 
         DateTime dt;
         dt.year = stime.wYear;
@@ -578,10 +587,11 @@ version (Windows)
 }
 else version (Posix)
 {
-    DateTime realtimeToDateTime(timespec ts)
+    DateTime realtimeToDateTime(timespec ts) pure
     {
         tm t;
-        gmtime_r(&ts.tv_sec, &t);
+        alias PureHACK = extern(C) tm* function(time_t* timer, tm* buf) pure nothrow @nogc;
+        (cast(PureHACK)&gmtime_r)(&ts.tv_sec, &t);
 
         DateTime dt;
         dt.year = cast(short)(t.tm_year + 1900);

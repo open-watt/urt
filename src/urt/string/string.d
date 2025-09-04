@@ -23,8 +23,7 @@ enum StringAlloc : ubyte
     TempString, // allocates in the temp ring buffer; could be overwritten at any time!
 
     // these must be last... (because comparison logic)
-    StringCache,        // writes to the immutable string cache
-    StringCacheDedup,   // writes to the immutable string cache with de-duplication
+    StringCache,    // writes to the immutable string cache with de-duplication
 }
 
 struct StringAllocator
@@ -87,11 +86,11 @@ String makeString(const(char)[] s, StringAlloc allocator, void* userData = null)
     {
         return String(writeString(cast(char*)tempAllocator().alloc(2 + s.length, 2).ptr + 2, s), false);
     }
-    else if (allocator >= StringAlloc.StringCache)
+    else if (allocator == StringAlloc.StringCache)
     {
         import urt.mem.string : CacheString, addString;
 
-        CacheString cs = s.addString(allocator == StringAlloc.StringCacheDedup);
+        CacheString cs = s.addString();
         return String(cs.ptr, false);
     }
     assert(false, "Invalid string allocator");

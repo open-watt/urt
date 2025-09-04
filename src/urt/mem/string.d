@@ -18,40 +18,48 @@ struct StringCache
 
 struct CacheString
 {
+nothrow @nogc:
     alias toString this;
 
-    this(typeof(null)) pure nothrow @nogc
+    this(typeof(null)) pure 
     {
         offset = 0;
     }
 
-    string toString() const nothrow @nogc
+    string toString() const pure
     {
-        ushort len = *cast(ushort*)(stringHeap.ptr + offset);
-        return cast(string)stringHeap[offset + 2 .. offset + 2 + len];
+        // HACK: deploy the pure hack!
+        static char[] pureHack() nothrow @nogc => stringHeap;
+        string heap = (cast(immutable(char[]) function() pure nothrow @nogc)&pureHack)();
+
+        ushort len = *cast(ushort*)(heap.ptr + offset);
+        return heap[offset + 2 .. offset + 2 + len];
     }
 
-    immutable(char)* ptr() const nothrow @nogc
-        => cast(immutable(char)*)(stringHeap.ptr + offset + 2);
+    immutable(char)* ptr() const pure
+        => toString().ptr;
 
-    size_t length() const nothrow @nogc
-        => *cast(ushort*)(stringHeap.ptr + offset);
+    size_t length() const pure
+        => toString().length;
 
-    bool opCast(T : bool)() const pure nothrow @nogc
+    string opIndex() const pure
+        => toString();
+
+    bool opCast(T : bool)() const pure
         => offset != 0;
 
-    void opAssign(typeof(null)) pure nothrow @nogc
+    void opAssign(typeof(null)) pure
     {
         offset = 0;
     }
 
-    bool opEquals(const(char)[] rhs) const nothrow @nogc
+    bool opEquals(const(char)[] rhs) const pure
     {
         string s = toString();
-        return s.length == rhs.length && (s.ptr == rhs.ptr || s[] == rhs[]);
+        return s.length == rhs.length && (s.ptr is rhs.ptr || s[] == rhs[]);
     }
 
-    size_t toHash() const nothrow @nogc
+    size_t toHash() const pure
     {
         import urt.hash;
 
@@ -79,13 +87,11 @@ void initStringHeap(uint stringHeapSize) nothrow
     assert(stringHeapInitialised == false, "String heap already initialised!");
     assert(stringHeapSize <= ushort.max, "String heap too large!");
 
-    stringHeap = new char[stringHeapSize];
+    stringHeap = defaultAllocator.allocArray!char(stringHeapSize);
 
     // write the null string to the start
-    stringHeapCursor = 0;
-    stringHeap[stringHeapCursor++] = 0;
-    stringHeap[stringHeapCursor++] = 0;
-    numStrings = 1;
+    stringHeap[0..2] = 0;
+    stringHeapCursor = 2;
 
     stringHeapInitialised = true;
 }
@@ -104,43 +110,45 @@ uint getStringHeapRemaining() nothrow @nogc
     return cast(uint)stringHeap.length - stringHeapCursor;
 }
 
-CacheString addString(const(char)[] str, bool dedup = true) nothrow @nogc
+CacheString addString(const(char)[] str) pure nothrow @nogc
 {
-    // null string
-    if (str.length == 0)
-        return CacheString(0);
-
-    assert(str.length < 2^^14, "String longer than max string len (32768 chars)");
-
-    if (dedup)
+    // HACK: even though this mutates global state, the string cache is immutable after it's emplaced
+    //       so, multiple calls with the same source string will always return the same result!
+    static CacheString impl(const(char)[] str) nothrow @nogc
     {
+        // null string
+        if (str.length == 0)
+            return CacheString(0);
+
+        assert(str.length < 2^^14, "String longer than max string len (32768 chars)");
+
         // first we scan to see if it's already in here...
-        for (ushort i = 1; i < stringHeapCursor;)
+        for (ushort i = 2; i < stringHeapCursor;)
         {
             ushort offset = i;
-            ushort len = stringHeap[i++];
-            if (len >= 128)
-                len = (len & 0x7F) | ((stringHeap[i++] << 7) & 0x7F);
+            ushort len = *cast(ushort*)(stringHeap.ptr + i);
+            i += 2;
             if (len == str.length && stringHeap[i .. i + len] == str[])
                 return CacheString(offset);
-            i += len;
+            i += len + (len & 1);
         }
+
+        // add the string to the heap...
+        assert(stringHeapCursor + str.length < stringHeap.length, "String heap overflow!");
+
+        char[] heap = stringHeap[stringHeapCursor .. $];
+        ushort offset = stringHeapCursor;
+
+        *cast(ushort*)heap.ptr = cast(ushort)str.length;
+        heap[2 .. 2 + str.length] = str[];
+        stringHeapCursor += str.length + 2;
+        if (stringHeapCursor & 1)
+            stringHeap[stringHeapCursor++] = '\0';
+
+        return CacheString(offset);
     }
-
-    if (stringHeapCursor & 1)
-        stringHeap[stringHeapCursor++] = '\0';
-
-    // add the string to the heap...
-    assert(stringHeapCursor + str.length < stringHeap.length, "String heap overflow!");
-
-    ushort offset = stringHeapCursor;
-    str.makeString(stringHeap[stringHeapCursor .. $]);
-    stringHeapCursor += str.length + 2;
-    ++numStrings;
-
-    return CacheString(offset);
+    return (cast(CacheString function(const(char)[]) pure nothrow @nogc)&impl)(str);
 }
-
 
 void* allocWithStringCache(size_t bytes, String[] cachedStrings, const(char[])[] strings) nothrow @nogc
 {
@@ -191,7 +199,6 @@ private:
 __gshared bool stringHeapInitialised = false;
 __gshared char[] stringHeap = null;
 __gshared ushort stringHeapCursor = 0;
-__gshared uint numStrings = 0;
 
 
 unittest

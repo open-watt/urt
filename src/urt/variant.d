@@ -15,6 +15,7 @@ nothrow @nogc:
 
 
 enum ValidUserType(T) = (is(T == struct) || is(T == class)) &&
+                        is(Unqual!T == T) &&
                         !is(T == Variant) &&
                         !is(T == VariantKVP) &&
                         !is(T == Array!U, U) &&
@@ -213,6 +214,7 @@ nothrow @nogc:
         static if (is(T == class))
         {
             count = UserTypeId!T;
+            alloc = type_detail_index!T();
             ptr = cast(void*)thing;
         }
         else static if (EmbedUserType!T)
@@ -547,15 +549,32 @@ nothrow @nogc:
         => flags == Flags.Array;
     bool isObject() const pure
         => flags == Flags.Map;
+    bool isUserType() const pure
+        => (flags & Flags.TypeMask) == Type.User;
     bool isUser(T)() const pure
-        if (ValidUserType!T)
+        if (ValidUserType!(Unqual!T))
     {
+        alias U = Unqual!T;
         if ((flags & Flags.TypeMask) != Type.User)
             return false;
-        static if (EmbedUserType!T)
-            return alloc == UserTypeId!T;
+        static if (EmbedUserType!U)
+            return alloc == UserTypeId!U;
         else
-            return count == UserTypeId!T;
+        {
+            if (count == UserTypeId!U)
+                return true;
+            static if (is(T == class))
+            {
+                immutable(TypeDetails)* td = &get_type_details(alloc);
+                while (td.super_type_id)
+                {
+                    if (td.super_type_id == UserTypeId!U)
+                        return true;
+                    td = &find_type_details(td.super_type_id);
+                }
+            }
+            return false;
+        }
     }
 
     bool canFitInt(I)() const pure
@@ -690,27 +709,30 @@ nothrow @nogc:
     }
 
     ref inout(T) asUser(T)() inout pure
-        if (ValidUserType!T && UserTypeReturnByRef!T)
+        if (ValidUserType!(Unqual!T) && UserTypeReturnByRef!T)
     {
-        if (!isUser!T)
-            assert(false, "Variant is not a " ~ T.stringof);
-        static assert(!is(T == class), "Should be impossible?");
-        static if (EmbedUserType!T)
+        alias U = Unqual!T;
+        if (!isUser!U)
+            assert(false, "Variant is not a " ~ U.stringof);
+        static assert(!is(U == class), "Should be impossible?");
+        static if (EmbedUserType!U)
             return *cast(inout(T)*)embed.ptr;
         else
             return *cast(inout(T)*)ptr;
     }
     inout(T) asUser(T)() inout pure
-        if (ValidUserType!T && !UserTypeReturnByRef!T)
+        if (ValidUserType!(Unqual!T) && !UserTypeReturnByRef!T)
     {
-        if (!isUser!T)
-            assert(false, "Variant is not a " ~ T.stringof);
-        static if (is(T == class))
+        alias U = Unqual!T;
+        if (!isUser!U)
+            assert(false, "Variant is not a " ~ U.stringof);
+        static if (is(U == class))
             return cast(inout(T))ptr;
-        else static if (EmbedUserType!T)
+        else static if (EmbedUserType!U)
         {
-            T r = void;
-            TypeDetailsFor!T.copy_emplace(embed.ptr, &r, false);
+            // make a copy on the stack and return by value
+            U r = void;
+            TypeDetailsFor!U.copy_emplace(embed.ptr, &r, false);
             return r;
         }
         else
@@ -718,7 +740,7 @@ nothrow @nogc:
     }
 
     auto as(T)() inout pure
-        if (!ValidUserType!T || !UserTypeReturnByRef!T)
+        if (!ValidUserType!(Unqual!T) || !UserTypeReturnByRef!T)
     {
         static if (is_some_int!T)
         {
@@ -765,13 +787,13 @@ nothrow @nogc:
             else
                 return asString;
         }
-        else static if (ValidUserType!T)
+        else static if (ValidUserType!(Unqual!T))
             return asUser!T;
         else
             static assert(false, "TODO!");
     }
     ref inout(T) as(T)() inout pure
-        if (ValidUserType!T && UserTypeReturnByRef!T)
+        if (ValidUserType!(Unqual!T) && UserTypeReturnByRef!T)
         => asUser!T;
 
     size_t length() const pure
@@ -882,7 +904,7 @@ nothrow @nogc:
                 if (flags & Flags.Embedded)
                     return find_type_details(alloc).stringify(cast(void*)embed.ptr, buffer, true);
                 else
-                    return type_details[alloc].stringify(cast(void*)ptr, buffer, true);
+                    return g_type_details[alloc].stringify(cast(void*)ptr, buffer, true);
         }
     }
 
@@ -949,28 +971,29 @@ nothrow @nogc:
 
         align(64) void[256] buffer = void;
         this = null; // clear the object since we'll probably use the embed buffer...
-        foreach (ushort i; 0 .. num_type_details)
+        foreach (ushort i; 0 .. g_num_type_details)
         {
-            debug assert(type_details[i].alignment <= 64 && type_details[i].size <= buffer.sizeof, "Buffer is too small for user type!");
-            ptrdiff_t taken = type_details[i].stringify(type_details[i].embedded ? embed.ptr : buffer.ptr, cast(char[])s, false);
+            ref immutable TypeDetails td = get_type_details(i);
+            debug assert(td.alignment <= 64 && td.size <= buffer.sizeof, "Buffer is too small for user type!");
+            ptrdiff_t taken = td.stringify(td.embedded ? embed.ptr : buffer.ptr, cast(char[])s, false);
             if (taken > 0)
             {
                 flags = Flags.User;
-                if (type_details[i].destroy)
+                if (td.destroy)
                     flags |= Flags.NeedDestruction;
-                if (type_details[i].embedded)
+                if (td.embedded)
                 {
                     flags |= Flags.Embedded;
-                    alloc = cast(ushort)type_details[i].type_id;
+                    alloc = cast(ushort)td.type_id;
                 }
                 else
                 {
-                    void* object = defaultAllocator().alloc(type_details[i].size, type_details[i].alignment).ptr;
-                    type_details[i].copy_emplace(buffer.ptr, object, true);
-                    if (type_details[i].destroy)
-                        type_details[i].destroy(buffer.ptr);
+                    void* object = defaultAllocator().alloc(td.size, td.alignment).ptr;
+                    td.copy_emplace(buffer.ptr, object, true);
+                    if (td.destroy)
+                        td.destroy(buffer.ptr);
                     ptr = object;
-                    count = type_details[i].type_id;
+                    count = td.type_id;
                     alloc = i;
                 }
                 return taken;
@@ -1060,7 +1083,7 @@ package:
             nodeArray.destroy!false();
         else if (t == Type.User)
         {
-            ref const TypeDetails td = (flags & Flags.Embedded) ? find_type_details(alloc) : type_details[alloc];
+            ref const TypeDetails td = (flags & Flags.Embedded) ? find_type_details(alloc) : g_type_details[alloc];
             if (td.destroy)
                 td.destroy(userPtr);
             if (!(flags & Flags.Embedded))
@@ -1169,22 +1192,25 @@ ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
 
 template MakeTypeDetails(T)
 {
+    static assert(is(Unqual!T == T), "Only instantiate for mutable types");
+
     // this is a hack which populates an array of user type details when the program starts
     // TODO: we can probably NOT do this for class types, and just use RTTI instead...
     shared static this()
     {
-        assert(num_type_details < type_details.length, "Too many user types!");
-        type_details[num_type_details++] = TypeDetailsFor!T;
+        assert(g_num_type_details < g_type_details.length, "Too many user types!");
+        g_type_details[g_num_type_details++] = TypeDetailsFor!T;
     }
 
     alias MakeTypeDetails = void;
 }
 
-ushort type_detail_index(T)()
+ushort type_detail_index(T)() pure
     if (ValidUserType!T)
 {
-    foreach (i; 0 .. num_type_details)
-        if (type_details[i].type_id == UserTypeId!T)
+    ushort count = (cast(ushort function() pure nothrow @nogc)&num_type_details)();
+    foreach (ushort i; 0 .. count)
+        if (get_type_details(i).type_id == UserTypeId!T)
             return i;
     assert(false, "Why wasn't the type registered?");
 }
@@ -1192,6 +1218,7 @@ ushort type_detail_index(T)()
 struct TypeDetails
 {
     uint type_id;
+    uint super_type_id;
     ushort size;
     ubyte alignment;
     bool embedded;
@@ -1200,68 +1227,142 @@ struct TypeDetails
     ptrdiff_t function(void* val, char[] buffer, bool format) nothrow @nogc stringify;
     int function(const void* a, const void* b, int type) pure nothrow @nogc cmp;
 }
-__gshared TypeDetails[8] type_details;
-__gshared ushort num_type_details = 0;
+__gshared TypeDetails[8] g_type_details;
+__gshared ushort g_num_type_details = 0;
 
-ref TypeDetails find_type_details(uint type_id)
+typeof(g_type_details)* type_details() => &g_type_details;
+ushort num_type_details() => g_num_type_details;
+
+ref immutable(TypeDetails) find_type_details(uint type_id) pure
 {
-    foreach (i, ref td; type_details[0 .. num_type_details])
+    auto tds = (cast(immutable(typeof(g_type_details)*) function() pure nothrow @nogc)&type_details)();
+    ushort count = (cast(ushort function() pure nothrow @nogc)&num_type_details)();
+    foreach (i, ref td; (*tds)[0 .. count])
     {
         if (td.type_id == type_id)
             return td;
     }
     assert(false, "TypeDetails not found!");
 }
-ref TypeDetails get_type_details(uint index)
+ref immutable(TypeDetails) get_type_details(uint index) pure
 {
-    debug assert(index < num_type_details);
-    return type_details[index];
+    auto tds = (cast(immutable(typeof(g_type_details)*) function() pure nothrow @nogc)&type_details)();
+    debug assert(index < g_num_type_details);
+    return (*tds)[index];
 }
 
-enum TypeDetailsFor(T) = TypeDetails(UserTypeId!T,
-                                     T.sizeof,
-                                     T.alignof,
-                                     EmbedUserType!T,
-                                     // moveEmplace
-                                     is(T == class) ? null : (void* src, void* dst, bool move) {
-                                        if (move)
-                                            moveEmplace(*cast(T*)src, *cast(T*)dst);
-                                        else
-                                            *cast(T*)dst = *cast(const T*)src;
-                                     },
-                                     // destroy
-                                     is(T == class) ? null : (void* val) {
-                                        destroy!false(*cast(T*)val);
-                                     },
-                                     // stringify
-                                     (void* val, char[] buffer, bool format) {
-                                        import urt.string.format : toString;
-                                        if (format)
-                                            return toString(*cast(const T*)val, buffer);
-                                        else
-                                        {
-                                            static if (__traits(compiles, { buffer.parse!T(*cast(T*)val); }))
-                                                return buffer.parse!T(*cast(T*)val);
-                                            else
-                                                return -1;
-                                        }
-                                     },
-                                     // cmp
-                                     (const void* pa, const void* pb, int type) {
-                                        ref const T a = *cast(const T*)pa;
-                                        ref const T b = *cast(const T*)pb;
-                                        switch (type)
-                                        {
-                                            case 0:
-                                                static if (__traits(compiles, { a.opCmp(b); }))
-                                                    return a.opCmp(b);
-                                                else
-                                                    return a < b ? -1 : a > b ? 1 : 0;
-                                            case 1:
-                                                return a == b ? 1 : 0;
-                                            case 2:
-                                                return a is b ? 1 : 0;
-                                            default:
-                                                assert(false);
-                                        }
-                                     });
+public template TypeDetailsFor(T)
+    if (is(Unqual!T == T) && (is(T == struct) || is(T == class)))
+{
+    static if (is(T == class) && is(T S == super))
+    {
+        alias Super = Unqual!S;
+        static if (!is(Super == Object))
+        {
+            alias dummy = MakeTypeDetails!Super;
+            enum SuperTypeId = UserTypeId!Super;
+        }
+        else
+            enum ushort SuperTypeId = 0;
+    }
+    else
+        enum ushort SuperTypeId = 0;
+
+    static if (!is(T == class))
+    {
+        static void move_emplace_impl(void* src, void* dst, bool move) nothrow @nogc
+        {
+            if (move)
+                moveEmplace(*cast(T*)src, *cast(T*)dst);
+            else
+            {
+                static if (__traits(compiles, { *cast(T*)dst = *cast(const T*)src; }))
+                    *cast(T*)dst = *cast(const T*)src;
+                else
+                    assert(false, "Can't copy " ~ T.stringof);
+            }
+        }
+        enum move_emplace = &move_emplace_impl;
+    }
+    else
+        enum move_emplace = null;
+
+    static if (!is(T == class) && is(typeof(destroy!(false, T))))
+    {
+        static void destroy_impl(void* val) nothrow @nogc
+        {
+            destroy!false(*cast(T*)val);
+        }
+        enum destroy_fun = &destroy_impl;
+    }
+    else
+        enum destroy_fun = null;
+
+    static ptrdiff_t stringify(void* val, char[] buffer, bool format) nothrow @nogc
+    {
+        import urt.string.format : toString;
+        if (format)
+        {
+            static if (is(typeof(toString!T)))
+                return toString(*cast(const T*)val, buffer);
+            else
+                return -1;
+        }
+        else
+        {
+            static if (is(typeof(parse!T)))
+                return buffer.parse!T(*cast(T*)val);
+            else
+                return -1;
+        }
+    }
+
+    int compare(const void* pa, const void* pb, int type) pure nothrow @nogc
+    {
+        ref const T a = *cast(const T*)pa;
+        ref const T b = *cast(const T*)pb;
+        switch (type)
+        {
+            case 0:
+                static if (is(T == class) || is(T == U*, U) || is(T == V[], V))
+                {
+                    if (pa is pb)
+                        return 0;
+                }
+                static if (__traits(compiles, { a.opCmp(b); }))
+                    return a.opCmp(b);
+                else static if (__traits(compiles, { b.opCmp(a); }))
+                    return -b.opCmp(a);
+                else
+                {
+                    static if (is(T == class))
+                    {
+                        ptrdiff_t r = cast(ptrdiff_t)pa - cast(ptrdiff_t)pb;
+                        return r < 0 ? -1 : r > 0 ? 1 : 0;
+                    }
+                    else
+                        return a < b ? -1 : a > b ? 1 : 0;
+                }
+            case 1:
+                static if (is(T == class) || is(T == U*, U) || is(T == V[], V))
+                {
+                    if (pa is pb)
+                        return 1;
+                }
+                static if (__traits(compiles, { a.opEquals(b); }))
+                    return a.opEquals(b);
+                else static if (__traits(compiles, { b.opEquals(a); }))
+                    return b.opEquals(a);
+                else static if (!is(T == class) && !is(T == U*, U) && !is(T == V[], V))
+                    return a == b ? 1 : 0;
+                else
+                    return 0;
+            case 2:
+                return pa is pb ? 1 : 0;
+            default:
+                assert(false);
+        }
+    }
+
+    enum TypeDetailsFor = TypeDetails(UserTypeId!T, SuperTypeId, T.sizeof, T.alignof, EmbedUserType!T, move_emplace, destroy_fun, &stringify, &compare);
+}

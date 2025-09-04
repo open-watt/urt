@@ -10,36 +10,44 @@ nothrow @nogc:
 
 auto compare(T, U)(auto ref T a, auto ref U b)
 {
-    static if (__traits(compiles, lvalue_of!T.opCmp(lvalue_of!U)))
+    static if (__traits(compiles, a.opCmp(b)))
         return a.opCmp(b);
-    else static if (__traits(compiles, lvalue_of!U.opCmp(lvalue_of!T)))
+    else static if (__traits(compiles, b.opCmp(a)))
         return -b.opCmp(a);
-    else static if (is(T : A[], A))
+    else static if (is(T : A[], A) || is(U : B[], B))
     {
         import urt.traits : is_primitive;
 
+        static assert(is(T : A[], A) && is(U : B[], B), "TODO: compare an array with a not-array?");
+
         auto ai = a.ptr;
         auto bi = b.ptr;
-        size_t len = a.length < b.length ? a.length : b.length;
-        static if (is_primitive!A)
+
+        // first compere the pointers...
+        if (ai !is bi)
         {
-            // compare strings
-            foreach (i; 0 .. len)
+            size_t len = a.length < b.length ? a.length : b.length;
+            static if (is_primitive!A)
             {
-                if (ai[i] != bi[i])
-                    return ai[i] < bi[i] ? -1 : 1;
+                // compare strings
+                foreach (i; 0 .. len)
+                {
+                    if (ai[i] != bi[i])
+                        return ai[i] < bi[i] ? -1 : 1;
+                }
+            }
+            else
+            {
+                // compare arrays
+                foreach (i; 0 .. len)
+                {
+                    if (auto cmp = compare(ai[i], bi[i]))
+                        return cmp;
+                }
             }
         }
-        else
-        {
-            // compare arrays
-            foreach (i; 0 .. len)
-            {
-                auto cmp = compare(ai[i], bi[i]);
-                if (cmp != 0)
-                    return cmp;
-            }
-        }
+
+        // finally, compare the lengths
         if (a.length == b.length)
             return 0;
         return a.length < b.length ? -1 : 1;

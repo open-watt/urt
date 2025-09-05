@@ -288,7 +288,18 @@ nothrow @nogc:
     }
 
     // manipulation
-    ref Array!(T, EmbedCount) concat(Things...)(auto ref Things things);
+    ref Array!(T, EmbedCount) concat(Things...)(auto ref Things things)
+    {
+        reserve(_length + things.length);
+        static foreach (i; 0 .. things.length)
+        {
+            static if (is(T == class) || is(T == interface))
+                ptr[_length++] = things[i];
+            else
+                emplace!T(&ptr[_length++], forward!(things[i]));
+        }
+        return this;
+    }
 
     bool empty() const
         => _length == 0;
@@ -318,26 +329,20 @@ nothrow @nogc:
     {
         static if (is(T == class) || is(T == interface))
         {
-            uint len = _length;
-            reserve(len + 1);
-            _length = len + 1;
-            for (uint i = len; i > 0; --i)
+            reserve(_length + 1);
+            for (uint i = _length++; i > 0; --i)
                 ptr[i] = ptr[i-1];
-            ptr[0] = item;
-            return ptr[0];
+            return (ptr[0] = item);
         }
         else
         {
-            uint len = _length;
-            reserve(len + 1);
-            _length = len + 1;
-            for (uint i = len; i > 0; --i)
+            reserve(_length + 1);
+            for (uint i = _length++; i > 0; --i)
             {
                 moveEmplace!T(ptr[i-1], ptr[i]);
                 destroy!false(ptr[i-1]);
             }
-            emplace!T(&ptr[0], forward!item);
-            return ptr[0];
+            return *emplace!T(&ptr[0], forward!item);
         }
     }
 
@@ -351,45 +356,30 @@ nothrow @nogc:
     ref T pushBack(U)(auto ref U item)
         if (is(U : T))
     {
+        reserve(_length + 1);
         static if (is(T == class) || is(T == interface))
-        {
-            uint len = _length;
-            reserve(len + 1);
-            _length = len + 1;
-            ptr[len] = item;
-            return ptr[len];
-        }
+            return (ptr[_length++] = item);
         else
-        {
-            uint len = _length;
-            reserve(len + 1);
-            _length = len + 1;
-            emplace!T(&ptr[len], forward!item);
-            return ptr[len];
-        }
+            return *emplace!T(&ptr[_length++], forward!item);
     }
 
     ref T emplaceFront(Args...)(auto ref Args args)
+        if (!is(T == class) && !is(T == interface))
     {
-        uint len = _length;
-        reserve(len + 1);
-        _length = len + 1;
-        for (uint i = len; i > 0; --i)
+        reserve(_length + 1);
+        for (uint i = _length++; i > 0; --i)
         {
             moveEmplace(ptr[i-1], ptr[i]);
             destroy!false(ptr[i-1]);
         }
-        emplace!T(&ptr[0], forward!args);
-        return ptr[0];
+        retirn *emplace!T(&ptr[0], forward!args);
     }
 
     ref T emplaceBack(Args...)(auto ref Args args)
+        if (!is(T == class) && !is(T == interface))
     {
-        uint len = _length;
-        reserve(len + 1);
-        _length = len + 1;
-        emplace!T(&ptr[len], forward!args);
-        return ptr[len];
+        reserve(_length + 1);
+        return *emplace!T(&ptr[_length++], forward!args);
     }
 
     T popFront()
@@ -414,7 +404,7 @@ nothrow @nogc:
                 moveEmplace(ptr[i], ptr[i-1]);
             }
             destroy!false(ptr[--_length]);
-            return copy.move;
+            return copy;
         }
     }
 
@@ -424,19 +414,15 @@ nothrow @nogc:
 
         static if (is(T == class) || is(T == interface))
         {
-            uint last = _length-1;
-            T copy = ptr[last];
-            ptr[last] = null;
-            _length = last;
+            T copy = ptr[--_length];
+            ptr[_length] = null;
             return copy;
         }
         else
         {
-            uint last = _length-1;
-            T copy = ptr[last].move;
-            destroy!false(ptr[last]);
-            _length = last;
-            return copy.move;
+            T copy = ptr[--_length].move;
+            destroy!false(ptr[_length]);
+            return copy;
         }
     }
 

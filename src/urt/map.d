@@ -292,13 +292,13 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
         => Range!(IterateBy.Keys, true)(pRoot);
     auto values() nothrow
         => Range!(IterateBy.Values)(pRoot);
-//    auto values() const nothrow
-//        => Range!(IterateBy.Values, true)(pRoot);
+    auto values() const nothrow
+        => Range!(IterateBy.Values, true)(pRoot);
 
     auto opIndex() nothrow
         => Range!(IterateBy.KVP)(pRoot);
-//    auto opIndex() const nothrow
-//        => Range!(IterateBy.KVP, true)(pRoot);
+    auto opIndex() const nothrow
+        => Range!(IterateBy.KVP, true)(pRoot);
 
 private:
 nothrow:
@@ -657,9 +657,7 @@ public:
                             PN n;
                             ref const(K) key() @property const pure
                                 => n.kvp.key;
-//                            ref const(V) value() @property const pure
-//                                => n.kvp.value;
-                            ref V value() @property pure
+                            ref inout(V) value() @property inout pure
                                 => n.kvp.value;
                         }
                         return KV(n);
@@ -900,7 +898,7 @@ unittest
         assert(map.get(2) is null);
     }
 
-    // Iteration (opApply)
+    // Iteration (range)
     {
         TestAVLTree map;
         map.insert(3, 30);
@@ -908,26 +906,54 @@ unittest
         map.insert(2, 20);
         map.insert(4, 40);
 
-        int sumKeys = 0;
-        int sumValues = 0;
-        int count = 0;
-
         // Iterate key-value pairs
+        int sumKeys = 0, sumValues = 0, count = 0;
         foreach (kv; map)
         {
             sumKeys += kv.key;
             sumValues += kv.value;
             count++;
         }
-
         assert(count == 4);
         assert(sumKeys == 1 + 2 + 3 + 4);
         assert(sumValues == 10 + 20 + 30 + 40);
 
-        sumValues = 0;
-        count = 0;
+        // Iterate const key-value pairs
+        ref const cmap = map;
+        sumKeys = sumValues = count = 0;
+        foreach (kv; cmap)
+        {
+            sumKeys += kv.key;
+            sumValues += kv.value;
+            count++;
+        }
+        assert(count == 4);
+        assert(sumKeys == 1 + 2 + 3 + 4);
+        assert(sumValues == 10 + 20 + 30 + 40);
+
+        // Iterate keys only
+        sumKeys = 0, count = 0;
+        foreach (v; map.keys)
+        {
+            sumKeys += v;
+            count++;
+        }
+        assert(count == 4);
+        assert(sumKeys == 1 + 2 + 3 + 4);
+
         // Iterate values only
+        sumValues = 0, count = 0;
         foreach (v; map.values)
+        {
+            sumValues += v;
+            count++;
+        }
+        assert(count == 4);
+        assert(sumValues == 10 + 20 + 30 + 40);
+
+        // Iterate const values only
+        sumValues = 0, count = 0;
+        foreach (v; cmap.values)
         {
             sumValues += v;
             count++;
@@ -944,27 +970,6 @@ unittest
                 break; // Stop when key is 2
         }
         assert(count == 2); // Should stop after 1 and 2
-    }
-
-    // Iteration (Iterator struct)
-    {
-        TestAVLTree map;
-        map.insert(3, 30);
-        map.insert(1, 10);
-        map.insert(2, 20);
-        map.insert(4, 40);
-
-        foreach (kvp; map) // Uses Iterator internally
-        {
-            // Note: D's foreach over structs with opApply might not directly use the Iterator struct
-            // but opApply tests cover the iteration logic.
-            // This loop tests if the basic range primitives work.
-            // A direct Iterator test:
-        }
-
-        // Test empty map iteration
-        TestAVLTree emptyMap;
-        assert(emptyMap[].empty);
     }
 
     // Test with string keys

@@ -285,6 +285,9 @@ Result accept(Socket socket, out Socket connection, InetAddress* connectingSocke
         return socket_getlasterror();
     else if (connectingSocketAddress)
         *connectingSocketAddress = make_InetAddress(addr);
+    // platforms are inconsistent regarding whether accept inherits the listening socket's blocking mode
+    // for consistentency, we always set blocking on the accepted socket
+    connection.set_socket_option(SocketOption.non_blocking, false);
     return Result.success;
 }
 

@@ -7,50 +7,12 @@ public import urt.string.tailstring;
 // seful string operations defined elsewhere
 public import urt.array : empty, popFront, popBack, takeFront, takeBack;
 public import urt.mem : strlen;
+public import urt.mem.temp : tstringz, twstringz;
+
+nothrow @nogc:
 
 
-enum TempStringBufferLen = 1024;
-enum TempStringMaxLen = TempStringBufferLen / 2;
-
-static char[TempStringBufferLen] s_tempStringBuffer;
-static size_t s_tempStringBufferPos = 0;
-
-
-char[] allocTempString(size_t len) nothrow @nogc
-{
-    assert(len <= TempStringMaxLen);
-
-    if (len <= TempStringBufferLen - s_tempStringBufferPos)
-    {
-        char[] s = s_tempStringBuffer[s_tempStringBufferPos .. s_tempStringBufferPos + len];
-        s_tempStringBufferPos += len;
-        return s;
-    }
-    s_tempStringBufferPos = len;
-    return s_tempStringBuffer[0 .. len];
-}
-
-char* tstringz(const(char)[] str) nothrow @nogc
-{
-    char[] buffer = allocTempString(str.length + 1);
-    buffer[0..str.length] = str[];
-    buffer[str.length] = 0;
-    return buffer.ptr;
-}
-
-wchar* twstringz(const(char)[] str) nothrow @nogc
-{
-    wchar[] buffer = cast(wchar[])allocTempString((str.length + 1) * 2);
-
-    // TODO: actually decode UTF8 into UTF16!!
-
-    foreach (i, c; str)
-        buffer[i] = c;
-    buffer[str.length] = 0;
-    return buffer.ptr;
-}
-
-ptrdiff_t cmp(const(char)[] a, const(char)[] b) pure nothrow @nogc
+ptrdiff_t cmp(const(char)[] a, const(char)[] b) pure
 {
     if (a.length != b.length)
         return a.length - b.length;
@@ -63,7 +25,7 @@ ptrdiff_t cmp(const(char)[] a, const(char)[] b) pure nothrow @nogc
     return 0;
 }
 
-ptrdiff_t icmp(const(char)[] a, const(char)[] b) pure nothrow @nogc
+ptrdiff_t icmp(const(char)[] a, const(char)[] b) pure
 {
     if (a.length != b.length)
         return a.length - b.length;
@@ -76,24 +38,24 @@ ptrdiff_t icmp(const(char)[] a, const(char)[] b) pure nothrow @nogc
     return 0;
 }
 
-bool ieq(const(char)[] a, const(char)[] b) pure nothrow @nogc
+bool ieq(const(char)[] a, const(char)[] b) pure
     => icmp(a, b) == 0;
 
-bool startsWith(const(char)[] s, const(char)[] prefix) pure nothrow @nogc
+bool startsWith(const(char)[] s, const(char)[] prefix) pure
 {
     if (s.length < prefix.length)
         return false;
     return s[0 .. prefix.length] == prefix[];
 }
 
-bool endsWith(const(char)[] s, const(char)[] suffix) pure nothrow @nogc
+bool endsWith(const(char)[] s, const(char)[] suffix) pure
 {
     if (s.length < suffix.length)
         return false;
     return s[$ - suffix.length .. $] == suffix[];
 }
 
-inout(char)[] trim(bool Front = true, bool Back = true)(inout(char)[] s) pure nothrow @nogc
+inout(char)[] trim(bool Front = true, bool Back = true)(inout(char)[] s) pure
 {
     size_t first = 0, last = s.length;
     static if (Front)
@@ -113,7 +75,7 @@ alias trimFront = trim!(true, false);
 
 alias trimBack = trim!(false, true);
 
-inout(char)[] trimComment(char Delimiter)(inout(char)[] s)
+inout(char)[] trimComment(char Delimiter)(inout(char)[] s) pure
 {
     size_t i = 0;
     for (; i < s.length; ++i)
@@ -126,7 +88,7 @@ inout(char)[] trimComment(char Delimiter)(inout(char)[] s)
     return s[0 .. i];
 }
 
-inout(char)[] takeLine(ref inout(char)[] s) pure nothrow @nogc
+inout(char)[] takeLine(ref inout(char)[] s) pure
 {
     for (size_t i = 0; i < s.length; ++i)
     {
@@ -148,7 +110,7 @@ inout(char)[] takeLine(ref inout(char)[] s) pure nothrow @nogc
     return t;
 }
 
-inout(char)[] split(char Separator, bool HandleQuotes = true)(ref inout(char)[] s)
+inout(char)[] split(char Separator, bool HandleQuotes = true)(ref inout(char)[] s) pure
 {
     static if (HandleQuotes)
         int inQuotes = 0;
@@ -176,7 +138,7 @@ inout(char)[] split(char Separator, bool HandleQuotes = true)(ref inout(char)[] 
     return t;
 }
 
-inout(char)[] split(Separator...)(ref inout(char)[] s, out char sep)
+inout(char)[] split(Separator...)(ref inout(char)[] s, out char sep) pure
 {
     sep = '\0';
     int inQuotes = 0;
@@ -204,7 +166,7 @@ inout(char)[] split(Separator...)(ref inout(char)[] s, out char sep)
     return t;
 }
 
-char[] unQuote(const(char)[] s, char[] buffer) pure nothrow @nogc
+char[] unQuote(const(char)[] s, char[] buffer) pure
 {
     // TODO: should this scan and match quotes rather than assuming there are no rogue closing quotes in the middle of the string?
     if (s.empty)
@@ -223,18 +185,18 @@ char[] unQuote(const(char)[] s, char[] buffer) pure nothrow @nogc
     return buffer;
 }
 
-char[] unQuote(char[] s) pure nothrow @nogc
+char[] unQuote(char[] s) pure
 {
     return unQuote(s, s);
 }
 
-char[] unQuote(const(char)[] s) nothrow @nogc
+char[] unQuote(const(char)[] s)
 {
     import urt.mem.temp : talloc;
     return unQuote(s, cast(char[])talloc(s.length));
 }
 
-char[] unEscape(inout(char)[] s, char[] buffer) pure nothrow @nogc
+char[] unEscape(inout(char)[] s, char[] buffer) pure
 {
     if (s.empty)
         return null;
@@ -266,13 +228,13 @@ char[] unEscape(inout(char)[] s, char[] buffer) pure nothrow @nogc
     return buffer[0..len];
 }
 
-char[] unEscape(char[] s) pure nothrow @nogc
+char[] unEscape(char[] s) pure
 {
     return unEscape(s, s);
 }
 
 
-char[] toHexString(const(void[]) data, char[] buffer, uint group = 0, uint secondaryGroup = 0, const(char)[] seps = " -") pure nothrow @nogc
+char[] toHexString(const(void[]) data, char[] buffer, uint group = 0, uint secondaryGroup = 0, const(char)[] seps = " -") pure
 {
     import urt.util : is_power_of_2;
     assert(group.is_power_of_2);
@@ -307,7 +269,7 @@ char[] toHexString(const(void[]) data, char[] buffer, uint group = 0, uint secon
     }
 }
 
-char[] toHexString(const(ubyte[]) data, uint group = 0, uint secondaryGroup = 0, const(char)[] seps = " -") nothrow @nogc
+char[] toHexString(const(ubyte[]) data, uint group = 0, uint secondaryGroup = 0, const(char)[] seps = " -")
 {
     import urt.mem.temp;
 
@@ -319,7 +281,7 @@ char[] toHexString(const(ubyte[]) data, uint group = 0, uint secondaryGroup = 0,
 
 unittest
 {
-    ubyte[] data = [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF];
+    ubyte[8] data = [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF];
     assert(data.toHexString(0) == "0123456789ABCDEF");
     assert(data.toHexString(1) == "01 23 45 67 89 AB CD EF");
     assert(data.toHexString(2) == "0123 4567 89AB CDEF");
@@ -329,7 +291,7 @@ unittest
 }
 
 
-bool wildcardMatch(const(char)[] wildcard, const(char)[] value)
+bool wildcardMatch(const(char)[] wildcard, const(char)[] value) pure
 {
     // TODO: write this function...
 

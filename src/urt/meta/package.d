@@ -1,10 +1,25 @@
 module urt.meta;
 
+pure nothrow @nogc:
 
 alias Alias(alias a) = a;
 alias Alias(T) = T;
 
 alias AliasSeq(TList...) = TList;
+
+ulong bit_mask(size_t bits)
+{
+    return (1UL << bits) - 1;
+}
+
+template bit_mask(size_t bits, bool signed = false)
+{
+    static assert(bits <= 64, "bit_mask only supports up to 64 bits");
+    static if (bits == 64)
+        enum IntForWidth!(64, signed) bit_mask = ~0UL;
+    else
+        enum IntForWidth!(bits, signed) bit_mask = (1UL << bits) - 1;
+}
 
 template IntForWidth(size_t bits, bool signed = false)
 {

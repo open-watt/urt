@@ -119,11 +119,35 @@ nothrow @nogc:
     this(F)(F f)
         if (is_some_float!F)
     {
-        static if (is(F == float))
-            flags = Flags.NumberFloat;
+        import urt.math : float_is_integer;
+
+        if (int sign = float_is_integer(f, value.ul))
+        {
+            if (sign < 0)
+            {
+                flags = Flags.NumberInt64;
+                if (value.l >= int.min)
+                    flags |= Flags.IntFlag;
+            }
+            else
+            {
+                flags = Flags.NumberUint64;
+                if (value.ul <= int.max)
+                    flags |= Flags.IntFlag | Flags.UintFlag | Flags.Int64Flag;
+                else if (value.ul <= uint.max)
+                    flags |= Flags.UintFlag | Flags.Int64Flag;
+                else if (value.ul <= long.max)
+                    flags |= Flags.Int64Flag;
+            }
+        }
         else
-            flags = Flags.NumberDouble;
-        value.d = f;
+        {
+            static if (is(F == float))
+                flags = Flags.NumberFloat;
+            else
+                flags = Flags.NumberDouble;
+            value.d = f;
+        }
     }
 
     this(E)(E e)

@@ -3,6 +3,9 @@ module urt.math;
 import urt.intrinsic;
 import core.stdc.stdio; // For writeDebugf
 
+// for arch where using FPU for int<->float conversions is preferred
+//version = PreferFPUIntConv;
+
 version (LDC) version = GDC_OR_LDC;
 version (GNU) version = GDC_OR_LDC;
 
@@ -63,6 +66,85 @@ extern(C)
     double acos(double x);
 }
 
+int float_is_integer(double f, out ulong i)
+{
+    version (PreferFPUIntConv)
+    {
+        if (!(f == f))
+            return 0; // NaN
+        if (f < 0)
+        {
+            if (f < long.min)
+                return 0; // out of range
+            long t = cast(long)f;
+            if (cast(double)t != f)
+                return 0; // not an integer
+            i = cast(ulong)t;
+            return -1;
+        }
+        if (f >= ulong.max)
+            return 0; // out of range
+        ulong t = cast(ulong)f;
+        if (cast(double)t != f)
+            return 0; // not an integer
+        i = t;
+        return 1;
+    }
+    else
+    {
+        import urt.meta : bit_mask;
+        enum M = 52, E = 11, B = 1023;
+
+        ulong u = *cast(const(ulong)*)&f;
+        int e = (u >> M) & bit_mask!E;
+        ulong m = u & bit_mask!M;
+
+        if (e == bit_mask!E)
+            return 0; // NaN/Inf
+        if (e == 0)
+        {
+            if (m)
+                return 0; // denormal
+            i = 0;
+            return 1; // +/- 0
+        }
+        int shift = e - B;
+        if (shift < 0)
+            return 0; // |f| < 1
+        bool integral = shift >= M || (m & bit_mask(M - shift)) == 0;
+        if (!integral)
+            return 0; // not an integer
+        if (f < 0)
+        {
+            if (f < long.min)
+                return 0; // out of range
+            i = cast(ulong)cast(long)f;
+            return -1;
+        }
+        if (f >= ulong.max)
+            return 0; // out of range
+        i = cast(ulong)f;
+        return 1;
+    }
+}
+
+unittest
+{
+    // this covers all the branches, but maybe test some extreme cases?
+    ulong i;
+    assert(float_is_integer(double.nan, i) == 0);
+    assert(float_is_integer(double.infinity, i) == 0);
+    assert(float_is_integer(-double.infinity, i) == 0);
+    assert(float_is_integer(double.max, i) == 0);
+    assert(float_is_integer(-double.max, i) == 0);
+    assert(float_is_integer(0.5, i) == 0);
+    assert(float_is_integer(1.5, i) == 0);
+    assert(float_is_integer(cast(double)ulong.max, i) == 0);
+    assert(float_is_integer(0.0, i) == 1 && i == 0);
+    assert(float_is_integer(-0.0, i) == 1 && i == 0);
+    assert(float_is_integer(200, i) == 1 && i == 200);
+    assert(float_is_integer(-200, i) == -1 && cast(long)i == -200);
+}
 
 pragma(inline, true)
 bool addc(T = uint)(T a, T b, out T r, bool c_in)

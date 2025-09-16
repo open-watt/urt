@@ -16,11 +16,7 @@ void[] talloc(size_t size) nothrow @nogc
         assert(InFormatFunction == false, "It is illegal to use the temp allocator inside string conversion functions. Consider using stack or scratchpad.");
     }
 
-    if (size >= TempMemSize / 2)
-    {
-        assert(false, "Requested temp memory size is too large");
-        return null;
-    }
+    assert(size <= TempMemSize / 2, "Requested temp memory size is too large");
 
     if (alloc_offset + size > TempMemSize)
         alloc_offset = 0;
@@ -73,17 +69,33 @@ void tfree(void[] mem) nothrow @nogc
 
 char* tstringz(const(char)[] str) nothrow @nogc
 {
-    if (str.length > TempMemSize / 2)
-        return null;
-
-    size_t len = str.length;
-    if (alloc_offset + len + 1 > TempMemSize)
-        alloc_offset = 0;
-
-    char* r = cast(char*)tempMem.ptr + alloc_offset;
-    r[0 .. len] = str[];
+    char* r = cast(char*)talloc(str.length + 1).ptr;
+    r[0 .. str.length] = str[];
+    r[str.length] = '\0';
+    return r;
+}
+char* tstringz(const(wchar)[] str) nothrow @nogc
+{
+    import urt.string.uni : uni_convert;
+    char* r = cast(char*)talloc(str.length*3 + 1).ptr;
+    size_t len = uni_convert(str, r[0 .. str.length*3]);
     r[len] = '\0';
-    alloc_offset += len + 1;
+    return r;
+}
+
+wchar* twstringz(const(char)[] str) nothrow @nogc
+{
+    import urt.string.uni : uni_convert;
+    wchar* r = cast(wchar*)talloc(str.length*2 + 2).ptr;
+    size_t len = uni_convert(str, r[0 .. str.length]);
+    r[len] = '\0';
+    return r;
+}
+wchar* twstringz(const(wchar)[] str) nothrow @nogc
+{
+    wchar* r = cast(wchar*)talloc(str.length*2 + 2).ptr;
+    r[0 .. str.length] = str[];
+    r[str.length] = '\0';
     return r;
 }
 

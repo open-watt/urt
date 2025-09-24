@@ -208,6 +208,18 @@ nothrow @nogc:
     bool opEquals(const(ushort)[8] words) const pure
         => s == words;
 
+    int opCmp(ref const IPv6Addr rhs) const pure
+    {
+        for (int i = 0; i < 8; i++)
+        {
+            if (s[i] < rhs.s[i])
+                return -1;
+            else if (s[i] > rhs.s[i])
+                return 1;
+        }
+        return 0;
+    }
+
     IPv6Addr opUnary(string op : "~")() const pure
     {
         IPv6Addr r;
@@ -428,8 +440,11 @@ nothrow @nogc:
         IPv6Addr r;
         int i, j = prefixLen / 16;
         while (i < j) r.s[i++] = 0xFFFF;
-        r.s[i++] = cast(ushort)(0xFFFF << (16 - (prefixLen % 16)));
-        while (i < 8) r.s[i++] = 0;
+        if (j < 8)
+        {
+            r.s[i++] = cast(ushort)(0xFFFF << (16 - (prefixLen % 16)));
+            while (i < 8) r.s[i++] = 0;
+        }
         return r;
     }
 
@@ -448,6 +463,11 @@ nothrow @nogc:
         }
         return true;
     }
+
+    IPv6Addr getNetwork(IPv6Addr ip) const pure
+        => ip & netMask();
+    IPv6Addr getLocal(IPv6Addr ip) const pure
+        => ip & ~netMask();
 
     size_t toHash() const pure
         => addr.toHash() ^ prefixLen;
@@ -532,11 +552,57 @@ nothrow @nogc:
         this._a.ipv4.port = port;
     }
 
-    this(IPv6Addr addr, ushort port)
+    this(IPv6Addr addr, ushort port, int flowInfo = 0, uint scopeId = 0)
     {
         family = AddressFamily.IPv6;
         this._a.ipv6.addr = addr;
         this._a.ipv6.port = port;
+        this._a.ipv6.flowInfo = flowInfo;
+        this._a.ipv6.scopeId = scopeId;
+    }
+
+    bool opCast(T : bool)() const pure
+        => family > AddressFamily.Unspecified;
+
+    bool opEquals(ref const InetAddress rhs) const pure
+    {
+        if (family != rhs.family)
+            return false;
+        switch (family)
+        {
+            case AddressFamily.IPv4:
+                return _a.ipv4 == rhs._a.ipv4;
+            case AddressFamily.IPv6:
+                return _a.ipv6 == rhs._a.ipv6;
+            default:
+                return true;
+        }
+    }
+
+    int opCmp(ref const InetAddress rhs) const pure
+    {
+        if (family != rhs.family)
+            return family < rhs.family ? -1 : 1;
+        switch (family)
+        {
+            case AddressFamily.IPv4:
+                int c = _a.ipv4.addr.opCmp(rhs._a.ipv4.addr);
+                return c != 0 ? c : _a.ipv4.port - rhs._a.ipv4.port;
+            case AddressFamily.IPv6:
+                int c = _a.ipv6.addr.opCmp(rhs._a.ipv6.addr);
+                if (c != 0)
+                    return c;
+                if (_a.ipv6.port == rhs._a.ipv6.port)
+                {
+                    if (_a.ipv6.flowInfo == rhs._a.ipv6.flowInfo)
+                        return _a.ipv6.scopeId - rhs._a.ipv6.scopeId;
+                    return _a.ipv6.flowInfo - rhs._a.ipv6.flowInfo;
+                }
+                return _a.ipv6.port - rhs._a.ipv6.port;
+            default:
+                return 0;
+        }
+        return 0;
     }
 
     size_t toHash() const pure
@@ -651,8 +717,12 @@ unittest
     char[64] tmp;
 
     assert(~IPAddr(255, 255, 248, 0) == IPAddr(0, 0, 7, 255));
+    assert((IPAddr(255, 255, 248, 0) & IPAddr(255, 0, 255, 255)) == IPAddr(255, 0, 248, 0));
+    assert((IPAddr(255, 255, 248, 0) | IPAddr(255, 0, 255, 255)) == IPAddr(255, 255, 255, 255));
     assert((IPAddr(255, 255, 248, 0) ^ IPAddr(255, 0, 255, 255)) == IPAddr(0, 255, 7, 255));
     assert(IPSubnet(IPAddr(), 21).netMask() == IPAddr(0xFF, 0xFF, 0xF8, 0));
+    assert(IPSubnet(IPAddr(192, 168, 0, 0), 24).getNetwork(IPAddr(192, 168, 0, 10)) == IPAddr(192, 168, 0, 0));
+    assert(IPSubnet(IPAddr(192, 168, 0, 0), 24).getLocal(IPAddr(192, 168, 0, 10)) == IPAddr(0, 0, 0, 10));
 
     assert(tmp[0 .. IPAddr(192, 168, 0, 1).toString(tmp, null, null)] == "192.168.0.1");
     assert(tmp[0 .. IPAddr(0, 0, 0, 0).toString(tmp, null, null)] == "0.0.0.0");
@@ -671,8 +741,13 @@ unittest
     assert(subnet.fromString("0.0.0.0/0") == 9 && subnet == IPSubnet(IPAddr(0, 0, 0, 0), 0));
 
     assert(~IPv6Addr(0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFF0, 0, 0, 0) == IPv6Addr(0, 0, 0, 0, 0xF, 0xFFFF, 0xFFFF, 0xFFFF));
+    assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) & IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFF00, 0, 1, 0, 0, 0, 0, 2));
+    assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) | IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFFFF, 0, 3, 2, 3, 4, 5, 6));
     assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) ^ IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFF, 0, 2, 2, 3, 4, 5, 4));
     assert(IPv6Subnet(IPv6Addr(), 21).netMask() == IPv6Addr(0xFFFF, 0xF800, 0, 0, 0, 0, 0, 0));
+    assert(IPv6Subnet(IPv6Addr.any, 64).getNetwork(IPv6Addr.loopback) == IPv6Addr.any);
+    assert(IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).getNetwork(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1)) == IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0));
+    assert(IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).getLocal(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1)) == IPv6Addr(0, 0, 0, 1, 0, 0, 0, 1));
 
     assert(tmp[0 .. IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1).toString(tmp, null, null)] == "2001:db8:0:1::1");
     assert(tmp[0 .. IPv6Addr(0x2001, 0xdb8, 0, 0, 1, 0, 0, 1).toString(tmp, null, null)] == "2001:db8::1:0:0:1");
@@ -704,4 +779,78 @@ unittest
 
 //    assert(address.fromString("[2001:db8:0:1::1]:12345") == 14 && address == InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1), 12345));
 //    assert(address.fromString("[::]:21") == 14 && address == InetAddress(IPv6Addr(), 21));
+
+    // IPAddr sorting tests
+    {
+        IPAddr[8] expected = [
+            IPAddr(0, 0, 0, 0),
+            IPAddr(1, 2, 3, 4),
+            IPAddr(1, 2, 3, 5),
+            IPAddr(1, 2, 4, 4),
+            IPAddr(10, 0, 0, 1),
+            IPAddr(127, 0, 0, 1),
+            IPAddr(192, 168, 1, 1),
+            IPAddr(255, 255, 255, 255),
+        ];
+
+        for (size_t i = 0; i < expected.length - 1; ++i)
+        {
+            assert(expected[i].opCmp(expected[i]) == 0, "IPAddr self-comparison failed");
+            assert(expected[i].opCmp(expected[i+1]) < 0, "IPAddr sorting is incorrect");
+            assert(expected[i+1].opCmp(expected[i]) > 0, "IPAddr sorting is incorrect");
+        }
+    }
+
+    // IPv6Addr sorting tests
+    {
+        IPv6Addr[14] expected = [
+            IPv6Addr(0, 0, 0, 0, 0, 0, 0, 0), // ::
+            IPv6Addr(0, 0, 0, 0, 0, 0, 0, 1), // ::1
+            IPv6Addr(0, 0, 0, 0, 0, 0, 0, 2), // ::2
+            IPv6Addr(0, 0, 0, 0, 0, 0, 9, 0), // ::9:0
+            IPv6Addr(0, 0, 0, 0, 0, 8, 0, 0), // ::8:0:0
+            IPv6Addr(0, 0, 0, 0, 7, 0, 0, 0), // ::7:0:0:0
+            IPv6Addr(0, 0, 0, 6, 0, 0, 0, 0), // 0:0:0:6::
+            IPv6Addr(0, 0, 5, 0, 0, 0, 0, 0), // 0:0:5::
+            IPv6Addr(0, 4, 0, 0, 0, 0, 0, 0), // 0:4::
+            IPv6Addr(1, 0, 0, 0, 0, 0, 0, 0), // 1::
+            IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+            IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2),
+            IPv6Addr(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+            IPv6Addr(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+        ];
+
+        for (size_t i = 0; i < expected.length - 1; ++i)
+        {
+            assert(expected[i].opCmp(expected[i]) == 0, "IPv6Addr self-comparison failed");
+            assert(expected[i].opCmp(expected[i+1]) < 0, "IPv6Addr sorting is incorrect");
+            assert(expected[i+1].opCmp(expected[i]) > 0, "IPv6Addr sorting is incorrect");
+        }
+    }
+
+    // InetAddress sorting tests
+    {
+        InetAddress[10] expected = [
+            // IPv4 sorted first
+            InetAddress(IPAddr(10, 0, 0, 1), 80),
+            InetAddress(IPAddr(127, 0, 0, 1), 8080),
+            InetAddress(IPAddr(192, 168, 1, 1), 80),
+            InetAddress(IPAddr(192, 168, 1, 1), 443),
+
+            // IPv6 sorted next
+            InetAddress(IPv6Addr(1, 0, 0, 0, 0, 0, 0, 0), 1024),
+            InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 80, 0, 0),
+            InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 433, 1, 1),
+            InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 8080, 0, 0), // flow=0, scope=0
+            InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 8080, 0, 1), // flow=0, scope=1
+            InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 8080, 1, 0), // flow=1, scope=0
+        ];
+
+        for (size_t i = 0; i < expected.length - 1; ++i)
+        {
+            assert(expected[i].opCmp(expected[i]) == 0, "InetAddress self-comparison failed");
+            assert(expected[i].opCmp(expected[i+1]) < 0, "InetAddress sorting is incorrect");
+            assert(expected[i+1].opCmp(expected[i]) > 0, "InetAddress sorting is incorrect");
+        }
+    }
 }

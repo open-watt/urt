@@ -208,6 +208,18 @@ nothrow @nogc:
     bool opEquals(const(ushort)[8] words) const pure
         => s == words;
 
+    int opCmp(ref const IPv6Addr rhs) const pure
+    {
+        for (int i = 0; i < 8; i++)
+        {
+            if (s[i] < rhs.s[i])
+                return -1;
+            else if (s[i] > rhs.s[i])
+                return 1;
+        }
+        return 0;
+    }
+
     IPv6Addr opUnary(string op : "~")() const pure
     {
         IPv6Addr r;
@@ -537,6 +549,50 @@ nothrow @nogc:
         family = AddressFamily.IPv6;
         this._a.ipv6.addr = addr;
         this._a.ipv6.port = port;
+    }
+
+    bool opCast(T : bool)() const pure
+        => family > AddressFamily.Unspecified;
+
+    bool opEquals(ref const InetAddress rhs) const pure
+    {
+        if (family != rhs.family)
+            return false;
+        switch (family)
+        {
+            case AddressFamily.IPv4:
+                return _a.ipv4 == rhs._a.ipv4;
+            case AddressFamily.IPv6:
+                return _a.ipv6 == rhs._a.ipv6;
+            default:
+                return true;
+        }
+    }
+
+    int opCmp(ref const InetAddress rhs) const pure
+    {
+        if (family != rhs.family)
+            return family < rhs.family ? -1 : 1;
+        switch (family)
+        {
+            case AddressFamily.IPv4:
+                int c = _a.ipv4.addr.opCmp(rhs._a.ipv4.addr);
+                return c != 0 ? c : _a.ipv4.port - rhs._a.ipv4.port;
+            case AddressFamily.IPv6:
+                int c = _a.ipv6.addr.opCmp(rhs._a.ipv6.addr);
+                if (c != 0)
+                    return c;
+                if (_a.ipv6.port == rhs._a.ipv6.port)
+                {
+                    if (_a.ipv6.flowInfo == rhs._a.ipv6.flowInfo)
+                        return _a.ipv6.scopeId - rhs._a.ipv6.scopeId;
+                    return _a.ipv6.flowInfo - rhs._a.ipv6.flowInfo;
+                }
+                return _a.ipv6.port - rhs._a.ipv6.port;
+            default:
+                return 0;
+        }
+        return 0;
     }
 
     size_t toHash() const pure

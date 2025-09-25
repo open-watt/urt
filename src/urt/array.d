@@ -273,6 +273,8 @@ nothrow @nogc:
     void opAssign(U)(U[] arr)
         if (is(U : T))
     {
+        // TODO: WHAT IF arr IS A SLICE OF THIS?!!?
+
         debug assert(arr.length <= uint.max);
         clear();
         reserve(arr.length);
@@ -452,8 +454,7 @@ nothrow @nogc:
 
         static if (is(T == class) || is(T == interface))
         {
-            for (size_t j = i + 1; j < _length; ++j)
-                ptr[j-1] = ptr[j];
+            ptr[i .. _length - 1] = ptr[i + 1 .. _length];
             ptr[--_length] = null;
         }
         else
@@ -461,12 +462,36 @@ nothrow @nogc:
             destroy!false(ptr[i]);
             for (size_t j = i + 1; j < _length; ++j)
             {
-                emplace!T(&ptr[j-1], ptr[j].move);
+                moveEmplace(ptr[j], ptr[j-1]);
                 destroy!false(ptr[j]);
             }
             --_length;
         }
     }
+
+    void remove(size_t i, size_t count)
+    {
+        debug assert(i + count <= _length);
+
+        static if (is(T == class) || is(T == interface))
+        {
+            ptr[i .. _length - count] = ptr[i + count .. _length];
+            ptr[_length - count .. _length] = null;
+            _length -= cast(uint)count;
+        }
+        else
+        {
+            for (size_t j = i; j < i + count; ++j)
+                destroy!false(ptr[j]);
+            for (size_t j = i + count; j < _length; ++j)
+            {
+                moveEmplace(ptr[j], ptr[j - count]);
+                destroy!false(ptr[j]);
+            }
+        }
+        _length -= cast(uint)count;
+    }
+
 
     void remove(const(T)* pItem)                    { remove(ptr[0 .. _length].indexOfElement(pItem)); }
     void removeFirst(U)(ref const U item)           { remove(ptr[0 .. _length].findFirst(item)); }
@@ -504,31 +529,43 @@ nothrow @nogc:
             return ptr ? ptr[0 .. allocCount()] : null;
     }
 
-    bool opCast(T : bool)() const
+    bool opCast(T : bool)() const pure
         => _length != 0;
 
-    size_t opDollar() const
+    size_t opDollar() const pure
         => _length;
 
     // full slice: arr[]
-    inout(T)[] opIndex() inout
+    inout(T)[] opIndex() inout pure
         => ptr[0 .. _length];
 
+    void opIndexAssign(U)(U[] rh)
+    {
+        debug assert(rh.length == _length, "Range error");
+        ptr[0 .. _length] = rh[];
+    }
+
     // array indexing: arr[i]
-    ref inout(T) opIndex(size_t i) inout
+    ref inout(T) opIndex(size_t i) inout pure
     {
         debug assert(i < _length, "Range error");
         return ptr[i];
     }
 
     // array slicing: arr[x .. y]
-    inout(T)[] opIndex(uint[2] i) inout
+    inout(T)[] opIndex(size_t[2] i) inout pure
         => ptr[i[0] .. i[1]];
 
-    uint[2] opSlice(size_t dim : 0)(size_t x, size_t y)
+    void opIndexAssign(U)(U[] rh, size_t[2] i)
+    {
+        debug assert(i[1] <= _length && i[1] - i[0] == rh.length, "Range error");
+        ptr[i[0] .. i[1]] = rh[];
+    }
+
+    size_t[2] opSlice(size_t dim : 0)(size_t x, size_t y) const pure
     {
         debug assert(y <= _length, "Range error");
-        return [cast(uint)x, cast(uint)y];
+        return [x, y];
     }
 
     void opOpAssign(string op : "~", U)(auto ref U el)
@@ -631,14 +668,14 @@ private:
     static if (EmbedCount > 0)
         T[EmbedCount] embed = void;
 
-    bool hasAllocation() const
+    bool hasAllocation() const pure
     {
         static if (EmbedCount > 0)
             return ptr && ptr != embed.ptr;
         else
             return ptr !is null;
     }
-    uint allocCount() const
+    uint allocCount() const pure
         => hasAllocation() ? (cast(uint*)ptr)[-1] : EmbedCount;
 
     T* allocate(uint count)
@@ -659,7 +696,7 @@ private:
     }
 
     pragma(inline, true)
-    static uint numToAlloc(uint i)
+    static uint numToAlloc(uint i) pure
     {
         // TODO: i'm sure we can imagine a better heuristic...
         return i > 16 ? i * 2 : 16;

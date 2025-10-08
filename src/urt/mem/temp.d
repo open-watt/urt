@@ -118,6 +118,18 @@ char[] tstring(T)(auto ref T value)
     return result;
 }
 
+dchar[] tdstring(T)(auto ref T value) nothrow @nogc
+{
+    static if (is(T : const(char)[]) || is(T : const(wchar)[]) || is(T : const(dchar)[]))
+        alias s = value;
+    else
+        char[] s = tstring(value);
+    import urt.string.uni : uni_convert;
+    dchar* r = cast(dchar*)talloc(s[].length*4).ptr;
+    size_t len = uni_convert(s[], r[0 .. s.length]);
+    return r[0 .. len];
+}
+
 char[] tconcat(Args...)(ref Args args)
 {
     import urt.string.format : concat;

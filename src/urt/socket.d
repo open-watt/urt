@@ -746,7 +746,7 @@ Result get_hostname(char* name, size_t len)
 
 Result get_address_info(const(char)[] nodeName, const(char)[] service, AddressInfo* hints, out AddressInfoResolver result)
 {
-    import urt.array : findFirst;
+    import urt.string : findFirst;
     import urt.mem.temp : tstringz;
 
     size_t colon = nodeName.findFirst(':');

@@ -1,7 +1,7 @@
 module urt.array;
 
 import urt.mem;
-
+import urt.traits : is_some_char;
 
 nothrow @nogc:
 
@@ -79,22 +79,9 @@ ref inout(T)[N] takeBack(size_t N, T)(ref inout(T)[] arr) pure
     return t[0..N];
 }
 
-bool exists(T)(const(T)[] arr, auto ref const T el, size_t *pIndex = null)
-{
-    foreach (i, ref e; arr)
-    {
-        if (e.elCmp(el))
-        {
-            if (pIndex)
-                *pIndex = i;
-            return true;
-        }
-    }
-    return false;
-}
-
 // TODO: I'd like it if these only had one arg (T) somehow...
 size_t findFirst(T, U)(const(T)[] arr, auto ref const U el)
+    if (!is_some_char!T)
 {
     size_t i = 0;
     while (i < arr.length && !arr[i].elCmp(el))
@@ -104,15 +91,17 @@ size_t findFirst(T, U)(const(T)[] arr, auto ref const U el)
 
 // TODO: I'd like it if these only had one arg (T) somehow...
 size_t findLast(T, U)(const(T)[] arr, auto ref const U el)
+    if (!is_some_char!T)
 {
-    ptrdiff_t last = length-1;
+    ptrdiff_t last = arr.length-1;
     while (last >= 0 && !arr[last].elCmp(el))
         --last;
-    return last < 0 ? length : last;
+    return last < 0 ? arr.length : last;
 }
 
 // TODO: I'd like it if these only had one arg (T) somehow...
 size_t findFirst(T, U)(const(T)[] arr, U[] seq)
+    if (!is_some_char!T)
 {
     if (seq.length == 0)
         return 0;
@@ -129,6 +118,7 @@ size_t findFirst(T, U)(const(T)[] arr, U[] seq)
 
 // TODO: I'd like it if these only had one arg (T) somehow...
 size_t findLast(T, U)(const(T)[] arr, U[] seq)
+    if (!is_some_char!T)
 {
     if (seq.length == 0)
         return arr.length;
@@ -143,12 +133,46 @@ size_t findLast(T, U)(const(T)[] arr, U[] seq)
     return arr.length;
 }
 
-size_t findFirst(T)(const(T)[] arr, bool delegate(auto ref const T) nothrow @nogc pred)
+size_t findFirst(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pred)
+    if (!is_some_char!T)
 {
     size_t i = 0;
     while (i < arr.length && !pred(arr[i]))
         ++i;
     return i;
+}
+
+bool contains(T, U)(const(T)[] arr, auto ref const U el, size_t *index = null)
+    if (!is_some_char!T)
+{
+    size_t i = findFirst(arr, el);
+    if (i == arr.length)
+        return false;
+    if (index)
+        *index = i;
+    return true;
+}
+
+bool contains(T, U)(const(T)[] arr, U[] seq, size_t *index = null)
+    if (!is_some_char!T)
+{
+    size_t i = findFirst(arr, seq);
+    if (i == arr.length)
+        return false;
+    if (index)
+        *index = i;
+    return true;
+}
+
+bool contains(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pred, size_t *index = null)
+    if (!is_some_char!T)
+{
+    size_t i = findFirst(arr, pred);
+    if (i == arr.length)
+        return false;
+    if (index)
+        *index = i;
+    return true;
 }
 
 ptrdiff_t indexOfElement(T, U)(const(T)[] arr, const(U)* el)

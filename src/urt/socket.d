@@ -20,6 +20,9 @@ version (Windows)
     version = HasIPv6;
 
     alias SocketHandle = SOCKET;
+
+    enum IPV6_RECVPKTINFO = 49;
+    enum IPV6_PKTINFO = 50;
 }
 else version (Posix)
 {
@@ -28,7 +31,7 @@ else version (Posix)
     import core.sys.posix.poll;
     import core.sys.posix.unistd : close, gethostname;
     import urt.internal.os; // use ImportC to import system C headers...
-    import core.sys.posix.netinet.in_ : sockaddr_in6;
+    import core.sys.posix.netinet.in_ : in6_addr, sockaddr_in6;
 
     alias _bind = urt.internal.os.bind, _listen = urt.internal.os.listen, _connect = urt.internal.os.connect,
         _accept = urt.internal.os.accept, _send = urt.internal.os.send, _sendto = urt.internal.os.sendto,
@@ -116,12 +119,14 @@ enum SocketOption : ubyte
     multicast = first_ip_option,
     multicast_loopback,
     multicast_ttl,
+    ip_pktinfo,
 
     // IPv6 options
     first_ipv6_option,
+    ipv6_pktinfo = first_ipv6_option,
 
     // ICMP options
-    first_icmp_option = first_ipv6_option,
+    first_icmp_option,
 
     // ICMPv6 options
     first_icmpv6_option = first_icmp_option,
@@ -133,7 +138,6 @@ enum SocketOption : ubyte
     tcp_keep_cnt,
     tcp_keep_alive, // Apple: similar to KeepIdle
     tcp_no_delay,
-
 
     // UDP options
     first_udp_option,
@@ -195,6 +199,7 @@ Result create_socket(AddressFamily af, SocketType type, Protocol proto, out Sock
     socket.handle = .socket(s_addressFamily[af], s_socketType[type], s_protocol[proto]);
     if (socket == Socket.invalid)
         return socket_getlasterror();
+
     return Result.success;
 }
 
@@ -247,10 +252,10 @@ Result bind(Socket socket, ref const InetAddress address)
 {
     ubyte[512] buffer = void;
     size_t addrLen;
-    sockaddr* sockAddr = make_sockaddr(address, buffer, addrLen);
-    assert(sockAddr, "Invalid socket address");
+    sockaddr* sock_addr = make_sockaddr(address, buffer, addrLen);
+    assert(sock_addr, "Invalid socket address");
 
-    if (_bind(socket.handle, sockAddr, cast(int)addrLen) < 0)
+    if (_bind(socket.handle, sock_addr, cast(int)addrLen) < 0)
         return socket_getlasterror();
     return Result.success;
 }
@@ -266,15 +271,15 @@ Result connect(Socket socket, ref const InetAddress address)
 {
     ubyte[512] buffer = void;
     size_t addrLen;
-    sockaddr* sockAddr = make_sockaddr(address, buffer, addrLen);
-    assert(sockAddr, "Invalid socket address");
+    sockaddr* sock_addr = make_sockaddr(address, buffer, addrLen);
+    assert(sock_addr, "Invalid socket address");
 
-    if (_connect(socket.handle, sockAddr, cast(int)addrLen) < 0)
+    if (_connect(socket.handle, sock_addr, cast(int)addrLen) < 0)
         return socket_getlasterror();
     return Result.success;
 }
 
-Result accept(Socket socket, out Socket connection, InetAddress* connectingSocketAddress = null)
+Result accept(Socket socket, out Socket connection, InetAddress* remote_address = null, InetAddress* local_address = null)
 {
     char[sockaddr_storage.sizeof] buffer = void;
     sockaddr* addr = cast(sockaddr*)buffer.ptr;
@@ -283,15 +288,21 @@ Result accept(Socket socket, out Socket connection, InetAddress* connectingSocke
     connection.handle = _accept(socket.handle, addr, &size);
     if (connection == Socket.invalid)
         return socket_getlasterror();
-    else if (connectingSocketAddress)
-        *connectingSocketAddress = make_InetAddress(addr);
+    if (remote_address)
+        *remote_address = make_InetAddress(addr);
+    if (local_address)
+    {
+        if (getsockname(connection.handle, addr, &size) < 0)
+            return socket_getlasterror();
+        *local_address = make_InetAddress(addr);
+    }
     // platforms are inconsistent regarding whether accept inherits the listening socket's blocking mode
     // for consistentency, we always set blocking on the accepted socket
     connection.set_socket_option(SocketOption.non_blocking, false);
     return Result.success;
 }
 
-Result send(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, size_t* bytesSent = null)
+Result send(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, size_t* bytes_sent = null)
 {
     Result r = Result.success;
 
@@ -301,43 +312,43 @@ Result send(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none
         r = socket_getlasterror();
         sent = 0;
     }
-    if (bytesSent)
-        *bytesSent = sent;
+    if (bytes_sent)
+        *bytes_sent = sent;
     return r;
 }
 
-Result sendto(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, const InetAddress* address = null, size_t* bytesSent = null)
+Result sendto(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, const InetAddress* address = null, size_t* bytes_sent = null)
 {
     ubyte[sockaddr_storage.sizeof] tmp = void;
     size_t addrLen;
-    sockaddr* sockAddr = null;
+    sockaddr* sock_addr = null;
     if (address)
     {
-        sockAddr = make_sockaddr(*address, tmp, addrLen);
-        assert(sockAddr, "Invalid socket address");
+        sock_addr = make_sockaddr(*address, tmp, addrLen);
+        assert(sock_addr, "Invalid socket address");
     }
 
     Result r = Result.success;
-    ptrdiff_t sent = _sendto(socket.handle, message.ptr, cast(int)message.length, map_message_flags(flags), sockAddr, cast(int)addrLen);
+    ptrdiff_t sent = _sendto(socket.handle, message.ptr, cast(int)message.length, map_message_flags(flags), sock_addr, cast(int)addrLen);
     if (sent < 0)
     {
         r = socket_getlasterror();
         sent = 0;
     }
-    if (bytesSent)
-        *bytesSent = sent;
+    if (bytes_sent)
+        *bytes_sent = sent;
     return r;
 }
 
-Result recv(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, size_t* bytesReceived)
+Result recv(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, size_t* bytes_received)
 {
     Result r = Result.success;
     ptrdiff_t bytes = _recv(socket.handle, buffer.ptr, cast(int)buffer.length, map_message_flags(flags));
     if (bytes > 0)
-        *bytesReceived = bytes;
+        *bytes_received = bytes;
     else
     {
-        *bytesReceived = 0;
+        *bytes_received = 0;
         if (bytes == 0)
         {
             // if we request 0 bytes, we receive 0 bytes, and it doesn't imply end-of-stream
@@ -362,30 +373,89 @@ Result recv(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, size_t
     return r;
 }
 
-Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, InetAddress* senderAddress = null, size_t* bytesReceived)
+Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, InetAddress* sender_address = null, size_t* bytes_received, InetAddress* local_address = null)
 {
-    char[sockaddr_storage.sizeof] addrBuffer = void;
-    sockaddr* addr = cast(sockaddr*)addrBuffer.ptr;
-    socklen_t size = addrBuffer.sizeof;
+    char[sockaddr_storage.sizeof] addr_buffer = void;
+    sockaddr* addr = cast(sockaddr*)addr_buffer.ptr;
 
-    Result r = Result.success;
-    ptrdiff_t bytes = _recvfrom(socket.handle, buffer.ptr, cast(int)buffer.length, map_message_flags(flags), addr, &size);
-    if (bytes >= 0)
-        *bytesReceived = bytes;
+    if (local_address)
+    {
+        version (Windows)
+        {
+            assert(WSARecvMsg, "WSARecvMsg not available!");
+
+            void[1500] ctrl = void; // HUGE BUFFER!
+
+            WSABUF msg_buf;
+            msg_buf.buf = cast(char*)buffer.ptr;
+            msg_buf.len = cast(uint)buffer.length;
+
+            WSAMSG msg;
+            msg.name = addr;
+            msg.namelen = addr_buffer.sizeof;
+            msg.lpBuffers = &msg_buf;
+            msg.dwBufferCount = 1;
+            msg.Control.buf = cast(char*)ctrl.ptr;
+            msg.Control.len = cast(uint)ctrl.length;
+            msg.dwFlags = 0;
+            uint bytes;
+            int r = WSARecvMsg(socket.handle, &msg, &bytes, null, null);
+            if (r == 0)
+                *bytes_received = bytes;
+            else
+            {
+                *bytes_received = 0;
+                goto fail;
+            }
+
+            // parse the control messages
+            *local_address = InetAddress();
+            for (WSACMSGHDR* c = WSA_CMSG_FIRSTHDR(&msg); c != null; c = WSA_CMSG_NXTHDR(&msg, c))
+            {
+                if (c.cmsg_level == IPPROTO_IP && c.cmsg_type == IP_PKTINFO)
+                {
+                    IN_PKTINFO* pk = cast(IN_PKTINFO*)WSA_CMSG_DATA(c);
+                    *local_address = InetAddress(make_IPAddr(pk.ipi_addr), 0); // TODO: be nice to populate the listening port...
+                    // pk.ipi_ifindex   = receiving interface index
+                }
+                if (c.cmsg_level == IPPROTO_IPV6 && c.cmsg_type == IPV6_PKTINFO)
+                {
+                    IN6_PKTINFO* pk6 = cast(IN6_PKTINFO*)WSA_CMSG_DATA(c);
+                    *local_address = InetAddress(make_IPv6Addr(pk6.ipi6_addr), 0); // TODO: be nice to populate the listening port...
+                    // pk6.ipi6_ifindex = receiving interface index
+                }
+            }
+        }
+        else
+        {
+            assert(false, "TODO: call recvmsg and all that...");
+        }
+    }
     else
     {
-        *bytesReceived = 0;
-
-        Result error = socket_getlasterror();
-        SocketResult sockRes = socket_result(error);
-        if (sockRes != SocketResult.no_buffer && // buffers full
-            sockRes != SocketResult.connection_refused && // posix error
-            sockRes != SocketResult.connection_reset) // !!! windows may report this error, but it appears to mean something different on posix
-            r = error;
+        socklen_t size = addr_buffer.sizeof;
+        ptrdiff_t bytes = _recvfrom(socket.handle, buffer.ptr, cast(int)buffer.length, map_message_flags(flags), addr, &size);
+        if (bytes >= 0)
+            *bytes_received = bytes;
+        else
+        {
+            *bytes_received = 0;
+            goto fail;
+        }
     }
-    if (r && senderAddress)
-        *senderAddress = make_InetAddress(addr);
-    return r;
+
+    if (sender_address)
+        *sender_address = make_InetAddress(addr);
+    return Result.success;
+
+fail:
+    Result error = socket_getlasterror();
+    SocketResult sockRes = socket_result(error);
+    if (sockRes != SocketResult.no_buffer && // buffers full
+        sockRes != SocketResult.connection_refused && // posix error
+        sockRes != SocketResult.connection_reset) // !!! windows may report this error, but it appears to mean something different on posix
+        return error;
+    return Result.success;
 }
 
 Result set_socket_option(Socket socket, SocketOption option, const(void)* optval, size_t optlen)
@@ -393,9 +463,9 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
     Result r = Result.success;
 
     // check the option appears to be the proper datatype
-    const OptInfo* optInfo = &s_socketOptions[option];
-    assert(optInfo.rt_type != OptType.unsupported, "Socket option is unsupported on this platform!");
-    assert(optlen == s_optTypeRtSize[optInfo.rt_type], "Socket option has incorrect payload size!");
+    const OptInfo* opt_info = &s_socketOptions[option];
+    assert(opt_info.rt_type != OptType.unsupported, "Socket option is unsupported on this platform!");
+    assert(optlen == s_optTypeRtSize[opt_info.rt_type], "Socket option has incorrect payload size!");
 
     // special case for non-blocking
     // this is not strictly a 'socket option', but this rather simplifies our API
@@ -423,7 +493,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
 //        LockGuard!SharedMutex lock(s_noSignalMut);
 //        s_noSignal.InsertOrAssign(socket.handle, *cast(const(bool)*)optval);
 //
-//        if (optInfo.platform_type == OptType.unsupported)
+//        if (opt_info.platform_type == OptType.unsupported)
 //            return r;
 //    }
 
@@ -436,15 +506,15 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
     const(void)* arg = optval;
     int itmp = void;
     linger ling = void;
-    if (optInfo.rt_type != optInfo.platform_type)
+    if (opt_info.rt_type != opt_info.platform_type)
     {
-        switch (optInfo.rt_type)
+        switch (opt_info.rt_type)
         {
             // TODO: there are more converstions necessary as options/platforms are added
             case OptType.bool_:
             {
                 const bool value = *cast(const(bool)*)optval;
-                switch (optInfo.platform_type)
+                switch (opt_info.platform_type)
                 {
                     case OptType.int_:
                         itmp = value ? 1 : 0;
@@ -457,7 +527,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
             case OptType.duration:
             {
                 const Duration value = *cast(const(Duration)*)optval;
-                switch (optInfo.platform_type)
+                switch (opt_info.platform_type)
                 {
                     case OptType.seconds:
                         itmp = cast(int)value.as!"seconds";
@@ -482,53 +552,53 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
     }
 
     // set the option
-    r.systemCode = setsockopt(socket.handle, s_sockOptLevel[level], optInfo.option, cast(const(char)*)arg, s_optTypePlatformSize[optInfo.platform_type]);
+    r.systemCode = setsockopt(socket.handle, s_sockOptLevel[level], opt_info.option, cast(const(char)*)arg, s_optTypePlatformSize[opt_info.platform_type]);
 
     return r;
 }
 
 Result set_socket_option(Socket socket, SocketOption option, bool value)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.bool_, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.bool_, "Incorrect value type for option");
     return set_socket_option(socket, option, &value, bool.sizeof);
 }
 
 Result set_socket_option(Socket socket, SocketOption option, int value)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.int_, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.int_, "Incorrect value type for option");
     return set_socket_option(socket, option, &value, int.sizeof);
 }
 
 Result set_socket_option(Socket socket, SocketOption option, Duration value)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.duration, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.duration, "Incorrect value type for option");
     return set_socket_option(socket, option, &value, Duration.sizeof);
 }
 
 Result set_socket_option(Socket socket, SocketOption option, IPAddr value)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.inet_addr, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.inet_addr, "Incorrect value type for option");
     return set_socket_option(socket, option, &value, IPAddr.sizeof);
 }
 
 Result set_socket_option(Socket socket, SocketOption option, ref MulticastGroup value)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.multicast_group, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.multicast_group, "Incorrect value type for option");
     return set_socket_option(socket, option, &value, MulticastGroup.sizeof);
 }
 
@@ -537,9 +607,9 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
     Result r = Result.success;
 
     // check the option appears to be the proper datatype
-    const OptInfo* optInfo = &s_socketOptions[option];
-    assert(optInfo.rt_type != OptType.unsupported, "Socket option is unsupported on this platform!");
-    assert(outputlen == s_optTypeRtSize[optInfo.rt_type], "Socket option has incorrect payload size!");
+    const OptInfo* opt_info = &s_socketOptions[option];
+    assert(opt_info.rt_type != OptType.unsupported, "Socket option is unsupported on this platform!");
+    assert(outputlen == s_optTypeRtSize[opt_info.rt_type], "Socket option has incorrect payload size!");
 
     assert(option != SocketOption.non_blocking, "Socket option NonBlocking cannot be get");
 
@@ -552,9 +622,9 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
     void* arg = output;
     int itmp = 0;
     linger ling = { 0, 0 };
-    if (optInfo.rt_type != optInfo.platform_type)
+    if (opt_info.rt_type != opt_info.platform_type)
     {
-        switch (optInfo.platform_type)
+        switch (opt_info.platform_type)
         {
             case OptType.int_:
             case OptType.seconds:
@@ -573,19 +643,19 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
         }
     }
 
-    socklen_t writtenLen = s_optTypePlatformSize[optInfo.platform_type];
+    socklen_t writtenLen = s_optTypePlatformSize[opt_info.platform_type];
     // get the option
-    r.systemCode = getsockopt(socket.handle, s_sockOptLevel[level], optInfo.option, cast(char*)arg, &writtenLen);
+    r.systemCode = getsockopt(socket.handle, s_sockOptLevel[level], opt_info.option, cast(char*)arg, &writtenLen);
 
-    if (optInfo.rt_type != optInfo.platform_type)
+    if (opt_info.rt_type != opt_info.platform_type)
     {
-        switch (optInfo.rt_type)
+        switch (opt_info.rt_type)
         {
             // TODO: there are more converstions necessary as options/platforms are added
             case OptType.bool_:
             {
                 bool* value = cast(bool*)output;
-                switch (optInfo.platform_type)
+                switch (opt_info.platform_type)
                 {
                     case OptType.int_:
                         *value = !!itmp;
@@ -597,7 +667,7 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
             case OptType.duration:
             {
                 Duration* value = cast(Duration*)output;
-                switch (optInfo.platform_type)
+                switch (opt_info.platform_type)
                 {
                     case OptType.seconds:
                         *value = seconds(itmp);
@@ -617,10 +687,10 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
         }
     }
 
-    assert(optInfo.rt_type != OptType.inet_addr, "TODO: uncomment this block... for some reason, this block causes DMD to do a bad codegen!");
+    assert(opt_info.rt_type != OptType.inet_addr, "TODO: uncomment this block... for some reason, this block causes DMD to do a bad codegen!");
 /+
     // Options expected in network-byte order
-    switch (optInfo.rt_type)
+    switch (opt_info.rt_type)
     {
         case OptType.INAddress:
         {
@@ -637,37 +707,37 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
 
 Result get_socket_option(Socket socket, SocketOption option, out bool output)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.bool_, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.bool_, "Incorrect value type for option");
     return get_socket_option(socket, option, &output, bool.sizeof);
 }
 
 Result get_socket_option(Socket socket, SocketOption option, out int output)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.int_, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.int_, "Incorrect value type for option");
     return get_socket_option(socket, option, &output, int.sizeof);
 }
 
 Result get_socket_option(Socket socket, SocketOption option, out Duration output)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.duration, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.duration, "Incorrect value type for option");
     return get_socket_option(socket, option, &output, Duration.sizeof);
 }
 
 Result get_socket_option(Socket socket, SocketOption option, out IPAddr output)
 {
-    const OptInfo* optInfo = &s_socketOptions[option];
-    if (optInfo.rt_type == OptType.unsupported)
+    const OptInfo* opt_info = &s_socketOptions[option];
+    if (opt_info.rt_type == OptType.unsupported)
         return InternalResult.unsupported;
-    assert(optInfo.rt_type == OptType.inet_addr, "Incorrect value type for option");
+    assert(opt_info.rt_type == OptType.inet_addr, "Incorrect value type for option");
     return get_socket_option(socket, option, &output, IPAddr.sizeof);
 }
 
@@ -978,7 +1048,7 @@ SocketResult socket_result(Result result)
 
 sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_t addrLen)
 {
-    sockaddr* sockAddr = cast(sockaddr*)buffer.ptr;
+    sockaddr* sock_addr = cast(sockaddr*)buffer.ptr;
 
     switch (address.family)
     {
@@ -988,7 +1058,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
             if (buffer.length < sockaddr_in.sizeof)
                 return null;
 
-            sockaddr_in* ain = cast(sockaddr_in*)sockAddr;
+            sockaddr_in* ain = cast(sockaddr_in*)sock_addr;
             memzero(ain, sockaddr_in.sizeof);
             ain.sin_family = s_addressFamily[AddressFamily.IPv4];
             version (Windows)
@@ -1013,7 +1083,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                 if (buffer.length < sockaddr_in6.sizeof)
                     return null;
 
-                sockaddr_in6* ain6 = cast(sockaddr_in6*)sockAddr;
+                sockaddr_in6* ain6 = cast(sockaddr_in6*)sock_addr;
                 memzero(ain6, sockaddr_in6.sizeof);
                 ain6.sin6_family = s_addressFamily[AddressFamily.IPv6];
                 storeBigEndian(&ain6.sin6_port, cast(ushort)address._a.ipv6.port);
@@ -1041,7 +1111,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 //                if (buffer.length < sockaddr_un.sizeof)
 //                    return null;
 //
-//                sockaddr_un* aun = cast(sockaddr_un*)sockAddr;
+//                sockaddr_un* aun = cast(sockaddr_un*)sock_addr;
 //                memzero(aun, sockaddr_un.sizeof);
 //                aun.sun_family = s_addressFamily[AddressFamily.Unix];
 //
@@ -1053,7 +1123,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
         }
         default:
         {
-            sockAddr = null;
+            sock_addr = null;
             addrLen = 0;
 
             assert(false, "Unsupported address family");
@@ -1061,52 +1131,33 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
         }
     }
 
-    return sockAddr;
+    return sock_addr;
 }
 
-InetAddress make_InetAddress(const(sockaddr)* sockAddress)
+InetAddress make_InetAddress(const(sockaddr)* sock_address)
 {
     InetAddress addr;
-    addr.family = map_address_family(sockAddress.sa_family);
+    addr.family = map_address_family(sock_address.sa_family);
     switch (addr.family)
     {
         case AddressFamily.IPv4:
         {
-            const sockaddr_in* ain = cast(const(sockaddr_in)*)sockAddress;
+            const sockaddr_in* ain = cast(const(sockaddr_in)*)sock_address;
 
             addr._a.ipv4.port = loadBigEndian(&ain.sin_port);
-            version (Windows)
-            {
-                addr._a.ipv4.addr.b[0] = ain.sin_addr.S_un.S_un_b.s_b1;
-                addr._a.ipv4.addr.b[1] = ain.sin_addr.S_un.S_un_b.s_b2;
-                addr._a.ipv4.addr.b[2] = ain.sin_addr.S_un.S_un_b.s_b3;
-                addr._a.ipv4.addr.b[3] = ain.sin_addr.S_un.S_un_b.s_b4;
-            }
-            else version (Posix)
-                addr._a.ipv4.addr.address = ain.sin_addr.s_addr;
-            else
-                assert(false, "Not implemented!");
+            addr._a.ipv4.addr = make_IPAddr(ain.sin_addr);
             break;
         }
         case AddressFamily.IPv6:
         {
             version (HasIPv6)
             {
-                const sockaddr_in6* ain6 = cast(const(sockaddr_in6)*)sockAddress;
+                const sockaddr_in6* ain6 = cast(const(sockaddr_in6)*)sock_address;
 
                 addr._a.ipv6.port = loadBigEndian(&ain6.sin6_port);
                 addr._a.ipv6.flowInfo = loadBigEndian(cast(const(uint)*)&ain6.sin6_flowinfo);
                 addr._a.ipv6.scopeId = loadBigEndian(cast(const(uint)*)&ain6.sin6_scope_id);
-
-                for (int a = 0; a < 8; ++a)
-                {
-                    version (Windows)
-                        addr._a.ipv6.addr.s[a] = loadBigEndian(&ain6.sin6_addr.in6_u.u6_addr16[a]);
-                    else version (Posix)
-                        addr._a.ipv6.addr.s[a] = loadBigEndian(cast(const(ushort)*)ain6.sin6_addr.s6_addr + a);
-                    else
-                        assert(false, "Not implemented!");
-                }
+                addr._a.ipv6.addr = make_IPv6Addr(ain6.sin6_addr);
             }
             else
                 assert(false, "Platform does not support IPv6!");
@@ -1116,7 +1167,7 @@ InetAddress make_InetAddress(const(sockaddr)* sockAddress)
         {
 //            version (HasUnixSocket)
 //            {
-//                const sockaddr_un* aun = cast(const(sockaddr_un)*)sockAddress;
+//                const sockaddr_un* aun = cast(const(sockaddr_un)*)sock_address;
 //
 //                memcpy(addr.un.path, aun.sun_path, UNIX_PATH_LEN);
 //                if (UNIX_PATH_LEN < UnixPathLen)
@@ -1134,6 +1185,37 @@ InetAddress make_InetAddress(const(sockaddr)* sockAddress)
     return addr;
 }
 
+IPAddr make_IPAddr(ref const in_addr in4)
+{
+    IPAddr addr;
+    version (Windows)
+    {
+        addr.b[0] = in4.S_un.S_un_b.s_b1;
+        addr.b[1] = in4.S_un.S_un_b.s_b2;
+        addr.b[2] = in4.S_un.S_un_b.s_b3;
+        addr.b[3] = in4.S_un.S_un_b.s_b4;
+    }
+    else version (Posix)
+        addr.address = in4.s_addr;
+    else
+        assert(false, "Not implemented!");
+    return addr;
+}
+
+IPv6Addr make_IPv6Addr(ref const in6_addr in6)
+{
+    IPv6Addr addr;
+    for (int a = 0; a < 8; ++a)
+    {
+        version (Windows)
+            addr.s[a] = loadBigEndian(&in6.in6_u.u6_addr16[a]);
+        else version (Posix)
+            addr.s[a] = loadBigEndian(cast(const(ushort)*)in6.s6_addr + a);
+        else
+            assert(false, "Not implemented!");
+    }
+    return addr;
+}
 
 private:
 
@@ -1277,6 +1359,8 @@ version (Windows) // BS_NETWORK_WINDOWS_VERSION >= _WIN32_WINNT_VISTA
         OptInfo( IP_ADD_MEMBERSHIP, OptType.multicast_group, OptType.multicast_group ),
         OptInfo( IP_MULTICAST_LOOP, OptType.bool_, OptType.int_ ),
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
+        OptInfo( IP_PKTINFO, OptType.bool_, OptType.int_ ),
+        OptInfo( IPV6_RECVPKTINFO, OptType.bool_, OptType.int_ ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
@@ -1299,6 +1383,8 @@ else version (linux) // BS_NETWORK_WINDOWS_VERSION >= _WIN32_WINNT_VISTA
         OptInfo( IP_ADD_MEMBERSHIP, OptType.multicast_group, OptType.multicast_group ),
         OptInfo( IP_MULTICAST_LOOP, OptType.bool_, OptType.int_ ),
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
+        OptInfo( IP_PKTINFO, OptType.bool_, OptType.int_ ),
+        OptInfo( IPV6_RECVPKTINFO, OptType.bool_, OptType.int_ ),
         OptInfo( TCP_KEEPIDLE, OptType.duration, OptType.seconds ),
         OptInfo( TCP_KEEPINTVL, OptType.duration, OptType.seconds ),
         OptInfo( TCP_KEEPCNT, OptType.int_, OptType.int_ ),
@@ -1321,6 +1407,8 @@ else version (Darwin)
         OptInfo( IP_ADD_MEMBERSHIP, OptType.multicast_group, OptType.multicast_group ),
         OptInfo( IP_MULTICAST_LOOP, OptType.bool_, OptType.int_ ),
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
+        OptInfo( IP_PKTINFO, OptType.bool_, OptType.int_ ),
+        OptInfo( IPV6_RECVPKTINFO, OptType.bool_, OptType.int_ ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
@@ -1379,6 +1467,28 @@ version (Windows)
         WSADATA wsaData;
         int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
         // what if this fails???
+
+        // this is truly the worst thing I ever wrote!!
+        enum SIO_GET_EXTENSION_FUNCTION_POINTER = 0xC8000006;
+        struct GUID { uint Data1; ushort Data2, Data3; ubyte[8] Data4; }
+        __gshared immutable GUID WSAID_WSARECVMSG = GUID(0xF689D7C8, 0x6F1F, 0x436B, [0x8A,0x53,0xE5,0x4F,0xE3,0x51,0xC3,0x22]);
+
+        Socket dummy;
+        uint bytes = 0;
+        if (!create_socket(AddressFamily.IPv4, SocketType.datagram, Protocol.udp, dummy))
+            goto FAIL;
+        if (WSAIoctl(dummy.handle, SIO_GET_EXTENSION_FUNCTION_POINTER, cast(void*)&WSAID_WSARECVMSG, cast(uint)GUID.sizeof,
+                     &WSARecvMsg, cast(uint)WSARecvMsgFn.sizeof, &bytes, null, null) != 0)
+            goto FAIL;
+        assert(bytes == WSARecvMsgFn.sizeof);
+        dummy.close();
+        if (!WSARecvMsg)
+            goto FAIL;
+        return;
+
+    FAIL:
+        import urt.log;
+        writeWarning("Failed to get WSARecvMsg function pointer - recvfrom() won't be able to report the dst address");
     }
 
     pragma(crt_destructor)
@@ -1397,43 +1507,78 @@ version (Windows)
 {
     // stuff that's missing from the windows headers...
 
-    enum: int {
+    enum : int
+    {
         AI_NUMERICSERV = 0x0008,
         AI_ALL = 0x0100,
         AI_V4MAPPED = 0x0800,
         AI_FQDN = 0x4000,
     }
 
-    struct pollfd
-    {
-        SOCKET  fd;         // Socket handle
-        SHORT   events;     // Requested events to monitor
-        SHORT   revents;    // Returned events indicating status
-    }
-    alias WSAPOLLFD = pollfd;
-    alias PWSAPOLLFD = pollfd*;
-    alias LPWSAPOLLFD = pollfd*;
-
-    enum: short {
-        POLLRDNORM = 0x0100,
-        POLLRDBAND = 0x0200,
-        POLLIN = (POLLRDNORM | POLLRDBAND),
-        POLLPRI = 0x0400,
-
-        POLLWRNORM = 0x0010,
-        POLLOUT = (POLLWRNORM),
-        POLLWRBAND = 0x0020,
-
-        POLLERR = 0x0001,
-        POLLHUP = 0x0002,
-        POLLNVAL = 0x0004
-    }
-
-    extern(Windows) int WSAPoll(LPWSAPOLLFD fdArray, uint fds, int timeout);
-
     struct ip_mreq
     {
         in_addr imr_multiaddr;
         in_addr imr_interface;
     }
+
+    struct WSAMSG
+    {
+        LPSOCKADDR name;
+        int        namelen;
+        LPWSABUF   lpBuffers;
+        uint       dwBufferCount;
+        WSABUF     Control;
+        uint       dwFlags;
+    }
+    alias LPWSAMSG = WSAMSG*;
+
+    struct WSABUF
+    {
+        uint len;
+        char* buf;
+    }
+    alias LPWSABUF = WSABUF*;
+
+    alias WSARecvMsgFn = extern(Windows) int function(SOCKET s, LPWSAMSG lpMsg, uint* lpdwNumberOfBytesRecvd, LPWSAOVERLAPPED lpOverlapped, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+    __gshared WSARecvMsgFn WSARecvMsg;
+
+    struct IN_PKTINFO
+    {
+        in_addr ipi_addr;
+        uint ipi_ifindex;
+    }
+    struct IN6_PKTINFO
+    {
+        in6_addr ipi6_addr;
+        uint ipi6_ifindex;
+    }
+
+    struct WSACMSGHDR
+    {
+        size_t cmsg_len;
+        int    cmsg_level;
+        int    cmsg_type;
+    }
+    alias LPWSACMSGHDR = WSACMSGHDR*;
+
+    LPWSACMSGHDR WSA_CMSG_FIRSTHDR(LPWSAMSG msg)
+        => msg.Control.len >= WSACMSGHDR.sizeof ? cast(LPWSACMSGHDR)msg.Control.buf : null;
+
+    LPWSACMSGHDR WSA_CMSG_NXTHDR(LPWSAMSG msg, LPWSACMSGHDR cmsg)
+    {
+        if (!cmsg)
+            return WSA_CMSG_FIRSTHDR(msg);
+        if (cast(ubyte*)cmsg + WSA_CMSGHDR_ALIGN(cmsg.cmsg_len) + WSACMSGHDR.sizeof > cast(ubyte*)msg.Control.buf + msg.Control.len)
+            return null;
+        return cast(LPWSACMSGHDR)(cast(ubyte*)cmsg + WSA_CMSGHDR_ALIGN(cmsg.cmsg_len));
+    }
+
+    void* WSA_CMSG_DATA(LPWSACMSGHDR cmsg)
+        => cast(ubyte*)cmsg + WSA_CMSGDATA_ALIGN(WSACMSGHDR.sizeof);
+
+    size_t WSA_CMSGHDR_ALIGN(size_t length)
+        => (length + WSACMSGHDR.alignof-1) & ~(WSACMSGHDR.alignof-1);
+
+    size_t WSA_CMSGDATA_ALIGN(size_t length)
+        => (length + size_t.alignof-1) & ~(size_t.alignof-1);
 }

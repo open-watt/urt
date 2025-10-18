@@ -35,7 +35,7 @@ enum WellKnownPort : ushort
 }
 
 enum IPAddr IPAddrLit(string addr) = () { IPAddr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an IPv4 address"); return a; }();
-//enum IPv6Addr IPv6AddrLit(string addr) = () { IPv6Addr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an IPv6 address"); return a; }();
+enum IPv6Addr IPv6AddrLit(string addr) = () { IPv6Addr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an IPv6 address"); return a; }();
 
 struct IPAddr
 {
@@ -313,9 +313,45 @@ nothrow @nogc:
 
     ptrdiff_t fromString(const(char)[] str)
     {
-        ushort[8] t;
-        size_t offset = 0;
-        assert(false);
+        ushort[8][2] t = void;
+        ubyte[2] count;
+        int part = 0;
+
+        size_t offset = 0, len;
+        while (offset < str.length)
+        {
+            if (offset < str.length - 1 && str[offset] == ':' && str[offset + 1] == ':')
+            {
+                if (part != 0)
+                    return -1;
+                part = 1;
+                offset += 2;
+                if (offset == str.length)
+                    break;
+            }
+            else if (count[part] > 0)
+            {
+                if (str[offset] != ':')
+                    break;
+                if (++offset == str.length)
+                    return -1;
+            }
+            if (str[offset] == ':')
+                return -1;
+            ulong i = str[offset..$].parse_int(&len, 16);
+            if (len == 0)
+                break;
+            if (i > ushort.max || count[0] + count[1] == 8)
+                return -1;
+            t[part][count[part]++] = cast(ushort)i;
+            offset += len;
+        }
+        if (part == 0 && count[0] != 8)
+            return -1;
+
+        s[0 .. count[0]] = t[0][0 .. count[0]];
+        s[count[0] .. 8 - count[1]] = 0;
+        s[8 - count[1] .. 8] = t[1][0 .. count[1]];
         return offset;
     }
 
@@ -498,7 +534,7 @@ nothrow @nogc:
             return -1;
         size_t t;
         ulong plen = s[taken..$].parse_int(&t);
-        if (t == 0 || plen > 32)
+        if (t == 0 || plen > 128)
             return -1;
         addr = a;
         prefixLen = cast(ubyte)plen;
@@ -679,7 +715,7 @@ nothrow @nogc:
         {
             size_t t;
             ulong p = s[++taken..$].parse_int(&t);
-            if (t == 0 || p > 0xFFFF)
+            if (t == 0 || p > ushort.max)
                 return -1;
             taken += t;
             port = cast(ushort)p;
@@ -739,6 +775,9 @@ unittest
     IPSubnet subnet;
     assert(subnet.fromString("192.168.0.0/24") == 14 && subnet == IPSubnet(IPAddr(192, 168, 0, 0), 24));
     assert(subnet.fromString("0.0.0.0/0") == 9 && subnet == IPSubnet(IPAddr(0, 0, 0, 0), 0));
+    assert(subnet.fromString("1.2.3.4") == -1);
+    assert(subnet.fromString("1.2.3.4/33") == -1);
+    assert(subnet.fromString("1.2.3.4/a") == -1);
 
     assert(~IPv6Addr(0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFF0, 0, 0, 0) == IPv6Addr(0, 0, 0, 0, 0xF, 0xFFFF, 0xFFFF, 0xFFFF));
     assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) & IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFF00, 0, 1, 0, 0, 0, 0, 2));
@@ -755,17 +794,40 @@ unittest
     assert(tmp[0 .. IPv6Addr(0, 0, 0, 0, 0, 0, 0, 1).toString(tmp, null, null)] == "::1");
     assert(tmp[0 .. IPv6Addr(0, 0, 0, 0, 0, 0, 0, 0).toString(tmp, null, null)] == "::");
 
-//    IPv6Addr addr6;
-//    assert(addr6.fromString("::2") == 3 && addr6 == IPv6Addr(0, 0, 0, 0, 0, 0, 0, 2));
-//    assert(addr6.fromString("1::2") == 3 && addr6 == IPv6Addr(1, 0, 0, 0, 0, 0, 0, 2));
-//    assert(addr6.fromString("2001:db8::1/24") == 14 && addr6 == IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+    IPv6Addr addr6;
+    assert(addr6.fromString("::") == 2 && addr6.s[] == [0,0,0,0,0,0,0,0]);
+    assert(addr6.fromString("1::") == 3 && addr6.s[] == [1,0,0,0,0,0,0,0]);
+    assert(addr6.fromString("::2") == 3 && addr6.s[] == [0,0,0,0,0,0,0,2]);
+    assert(addr6.fromString("1::2") == 4 && addr6.s[] == [1,0,0,0,0,0,0,2]);
+    assert(addr6.fromString("1:FFFF::2") == 9 && addr6.s[] == [1,0xFFFF,0,0,0,0,0,2]);
+    assert(addr6.fromString("1:2:3:4:5:6:7:8") == 15 && addr6.s[] == [1,2,3,4,5,6,7,8]);
+    assert(addr6.fromString("1:2:3:4") == -1);
+    assert(addr6.fromString("1:2:3:4:5:6:7:8:9") == -1);
+    assert(addr6.fromString("1:2:3:4:5:6:7:8:") == -1);
+    assert(addr6.fromString("10000::2") == -1);
+    assert(addr6.fromString(":2") == -1);
+    assert(addr6.fromString("2:") == -1);
+    assert(addr6.fromString(":2:") == -1);
+    assert(addr6.fromString(":2::") == -1);
+    assert(addr6.fromString(":2::1") == -1);
+    assert(addr6.fromString("::2:") == -1);
+    assert(addr6.fromString("1::2:") == -1);
+    assert(addr6.fromString("1:::2") == -1);
+    assert(addr6.fromString("::G") == 2 && addr6 == IPv6Addr(0, 0, 0, 0, 0, 0, 0, 0));
+    assert(addr6.fromString("1::2.3") == 4 && addr6 == IPv6Addr(1, 0, 0, 0, 0, 0, 0, 2));
+    assert(addr6.fromString("1::2 4") == 4 && addr6 == IPv6Addr(1, 0, 0, 0, 0, 0, 0, 2));
+    assert(addr6.fromString("2001:db8::1/24") == 11 && addr6 == IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+
 
     assert(tmp[0 .. IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24).toString(tmp, null, null)] == "2001:db8::1/24");
     assert(tmp[0 .. IPv6Subnet(IPv6Addr(), 0).toString(tmp, null, null)] == "::/0");
 
-//    IPv6Subnet subnet6;
-//    assert(subnet6.fromString("2001:db8::1/24") == 14 && subnet6 == IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24));
-//    assert(subnet6.fromString("::/0") == 4 && subnet6 == IPv6Subnet(IPv6Addr(), 0));
+    IPv6Subnet subnet6;
+    assert(subnet6.fromString("2001:db8::1/24") == 14 && subnet6 == IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24));
+    assert(subnet6.fromString("::/0") == 4 && subnet6 == IPv6Subnet(IPv6Addr(), 0));
+    assert(subnet6.fromString("1::2") == -1);
+    assert(subnet6.fromString("1::2/129") == -1);
+    assert(subnet6.fromString("1::2/a") == -1);
 
     assert(tmp[0 .. InetAddress(IPAddr(192, 168, 0, 1), 12345).toString(tmp, null, null)] == "192.168.0.1:12345");
     assert(tmp[0 .. InetAddress(IPAddr(10, 0, 0, 0), 21).toString(tmp, null, null)] == "10.0.0.0:21");
@@ -777,8 +839,10 @@ unittest
     assert(address.fromString("192.168.0.1:21") == 14 && address == InetAddress(IPAddr(192, 168, 0, 1), 21));
     assert(address.fromString("10.0.0.1:12345") == 14 && address == InetAddress(IPAddr(10, 0, 0, 1), 12345));
 
-//    assert(address.fromString("[2001:db8:0:1::1]:12345") == 14 && address == InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1), 12345));
-//    assert(address.fromString("[::]:21") == 14 && address == InetAddress(IPv6Addr(), 21));
+    assert(address.fromString("[2001:db8:0:1::1]:12345") == 23 && address == InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1), 12345));
+    assert(address.fromString("[::]:21") == 7 && address == InetAddress(IPv6Addr(), 21));
+    assert(address.fromString("[::]:a") == -1);
+    assert(address.fromString("[::]:65536") == -1);
 
     // IPAddr sorting tests
     {

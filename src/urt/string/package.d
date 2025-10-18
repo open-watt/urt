@@ -1,58 +1,218 @@
 module urt.string;
 
+import urt.string.uni;
+import urt.traits : is_some_char;
+
 public import urt.string.ascii;
 public import urt.string.string;
 public import urt.string.tailstring;
 
 // seful string operations defined elsewhere
 public import urt.array : empty, popFront, popBack, takeFront, takeBack;
-public import urt.mem : strlen;
+public import urt.mem : strlen, wcslen;
 public import urt.mem.temp : tstringz, twstringz;
 
 nothrow @nogc:
 
 
-ptrdiff_t cmp(const(char)[] a, const(char)[] b) pure
+ptrdiff_t cmp(bool case_insensitive = false, T, U)(const(T)[] a, const(U)[] b) pure
 {
-    if (a.length != b.length)
-        return a.length - b.length;
-    for (size_t i = 0; i < a.length; ++i)
+    static if (case_insensitive)
+        return uni_compare_i(a, b);
+    else
     {
-        ptrdiff_t diff = a[i] - b[i];
-        if (diff)
-            return diff;
+        static if (is(T == U))
+        {
+            if (a.length != b.length)
+                return a.length - b.length;
+        }
+        return uni_compare(a, b);
     }
-    return 0;
 }
 
-ptrdiff_t icmp(const(char)[] a, const(char)[] b) pure
-{
-    if (a.length != b.length)
-        return a.length - b.length;
-    for (size_t i = 0; i < a.length; ++i)
-    {
-        ptrdiff_t diff = to_lower(a[i]) - to_lower(b[i]);
-        if (diff)
-            return diff;
-    }
-    return 0;
-}
+ptrdiff_t icmp(T, U)(const(T)[] a, const(U)[] b) pure
+    => cmp!true(a, b);
+
+bool eq(const(char)[] a, const(char)[] b) pure
+    => cmp(a, b) == 0;
 
 bool ieq(const(char)[] a, const(char)[] b) pure
-    => icmp(a, b) == 0;
+    => cmp!true(a, b) == 0;
+
+size_t findFirst(bool case_insensitive = false, T, U)(const(T)[] s, const U c)
+    if (is_some_char!T && is_some_char!U)
+{
+    static if (is(U == char))
+        assert(c <= 0x7F, "Invalid UTF character");
+    else static if (is(U == wchar))
+        assert(c < 0xD800 || c >= 0xE000, "Invalid UTF character");
+
+    // TODO: what if `c` is 'ß'? do we find "ss" in case-insensitive mode?
+    //       and if `c` is 's', do we match 'ß'?
+
+    static if (case_insensitive)
+        const U lc = cast(U)c.uni_case_fold();
+    else
+        alias lc = c;
+
+    size_t i = 0;
+    while (i < s.length)
+    {
+        static if (U.sizeof <= T.sizeof)
+        {
+            enum l = 1;
+            dchar d = s[i];
+        }
+        else
+        {
+            size_t l;
+            dchar d = next_dchar(s[i..$], l);
+        }
+        static if (case_insensitive)
+        {
+            static if (is(U == char))
+            {
+                // only fold the ascii characters, since lc is known to be ascii
+                if (uint(d - 'A') < 26)
+                    d |= 0x20;
+            }
+            else
+                d = d.uni_case_fold();
+        }
+        if (d == lc)
+            break;
+        i += l;
+    }
+    return i;
+}
+
+size_t find_first_i(T, U)(const(T)[] s, U c)
+    if (is_some_char!T && is_some_char!U)
+    => findFirst!true(s, c);
+
+size_t findLast(bool case_insensitive = false, T, U)(const(T)[] s, const U c)
+    if (is_some_char!T && is_some_char!U)
+{
+    static assert(case_insensitive == false, "TODO");
+
+    static if (is(U == char))
+        assert(c <= 0x7F, "Invalid unicode character");
+    else static if (is(U == wchar))
+        assert(c >= 0xD800 && c < 0xE000, "Invalid unicode character");
+
+    ptrdiff_t last = s.length-1;
+    while (last >= 0)
+    {
+        static if (U.sizeof <= T.sizeof)
+        {
+            if (s[last] == c)
+                return cast(size_t)last;
+        }
+        else
+        {
+            // this is tricky, because we need to seek backwards to the start of surrogate sequences
+            assert(false, "TODO");
+        }
+    }
+    return s.length;
+}
+
+size_t find_last_i(T, U)(const(T)[] s, U c)
+    if (is_some_char!T && is_some_char!U)
+    => findLast!true(s, c);
+
+size_t findFirst(bool case_insensitive = false, T, U)(const(T)[] s, const(U)[] t)
+    if (is_some_char!T && is_some_char!U)
+{
+    if (t.length == 0)
+        return 0;
+
+    // fast-path for one-length tokens
+    size_t l = t.uni_seq_len();
+    if (l == t.length)
+    {
+        dchar c = t.next_dchar(l);
+        if (c < 0x80)
+            return findFirst!case_insensitive(s, cast(char)c);
+        if (c < 0x10000)
+            return findFirst!case_insensitive(s, cast(wchar)c);
+        return findFirst!case_insensitive(s, c);
+    }
+
+    size_t offset = 0;
+    while (offset < s.length)
+    {
+
+        static if (case_insensitive)
+            int c = uni_compare_i(s[offset .. $], t);
+        else
+            int c = uni_compare(s[offset .. $], t);
+        if (c == int.max || c == 0)
+            return offset;
+        if (c == int.min)
+            return s.length;
+        offset += s[offset .. $].uni_seq_len();
+    }
+    return s.length;
+}
+
+size_t find_first_i(T, U)(const(T)[] s, const(U)[] t)
+    if (is_some_char!T && is_some_char!U)
+    => findFirst!true(s, t);
+
+size_t findLast(bool case_insensitive = false, T, U)(const(T)[] s, const(U)[] t)
+    if (is_some_char!T && is_some_char!U)
+{
+    // this is tricky, because we need to seek backwards to the start of surrogate sequences
+    assert(false, "TODO");
+}
+
+size_t find_last_i(T, U)(const(T)[] s, const(U)[] t)
+    if (is_some_char!T && is_some_char!U)
+    => findLast!true(s, t);
+
+bool contains(bool case_insensitive = false, T, U)(const(T)[] s, U c, size_t *offset = null)
+    if (is_some_char!T && is_some_char!U)
+{
+    size_t i = findFirst!case_insensitive(s, c);
+    if (i == s.length)
+        return false;
+    if (offset)
+        *offset = i;
+    return true;
+}
+
+bool contains(bool case_insensitive = false, T, U)(const(T)[] s, const(U)[] t, size_t *offset = null)
+    if (is_some_char!T && is_some_char!U)
+{
+    size_t i = findFirst!case_insensitive(s, t);
+    if (i == s.length)
+        return false;
+    if (offset)
+        *offset = i;
+    return true;
+}
+
+bool contains_i(T, U)(const(T)[] s, U c, size_t *offset = null)
+    if (is_some_char!T && is_some_char!U)
+    => contains!true(s, c, offset);
+
+bool contains_i(T, U)(const(T)[] s, const(U)[] t, size_t *offset = null)
+    if (is_some_char!T && is_some_char!U)
+    => contains!true(s, t, offset);
 
 bool startsWith(const(char)[] s, const(char)[] prefix) pure
 {
     if (s.length < prefix.length)
         return false;
-    return s[0 .. prefix.length] == prefix[];
+    return cmp(s[0 .. prefix.length], prefix) == 0;
 }
 
 bool endsWith(const(char)[] s, const(char)[] suffix) pure
 {
     if (s.length < suffix.length)
         return false;
-    return s[$ - suffix.length .. $] == suffix[];
+    return cmp(s[$ - suffix.length .. $], suffix) == 0;
 }
 
 inout(char)[] trim(bool Front = true, bool Back = true)(inout(char)[] s) pure
@@ -304,4 +464,32 @@ bool wildcardMatch(const(char)[] wildcard, const(char)[] value) pure
             return false;
     }
     return wildcard.length == value.length;
+}
+
+
+unittest
+{
+    // test findFirst
+    assert("hello".findFirst('e') == 1);
+    assert("hello".findFirst('a') == 5);
+    assert("hello".findFirst("e") == 1);
+    assert("hello".findFirst("ll") == 2);
+    assert("hello".findFirst("lo") == 3);
+    assert("hello".findFirst("la") == 5);
+    assert("hello".findFirst("low") == 5);
+    assert("héllo".findFirst('é') == 1);
+    assert("héllo"w.findFirst('é') == 1);
+    assert("héllo".findFirst("éll") == 1);
+    assert("héllo".findFirst('a') == 6);
+    assert("héllo".findFirst("la") == 6);
+    assert("hello".find_first_i('E') == 1);
+    assert("HELLO".find_first_i("e") == 1);
+    assert("hello".find_first_i("LL") == 2);
+    assert("héllo".find_first_i('É') == 1);
+    assert("HÉLLO".find_first_i("é") == 1);
+    assert("HÉLLO".find_first_i("éll") == 1);
+
+    assert("HÉLLO".contains('É'));
+    assert(!"HÉLLO".contains('A'));
+    assert("HÉLLO".contains_i("éll"));
 }

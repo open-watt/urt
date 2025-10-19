@@ -11,11 +11,11 @@ nothrow @nogc:
 
 enum AddressFamily : byte
 {
-    Unknown = -1,
-    Unspecified = 0,
-    Unix,
-    IPv4,
-    IPv6,
+    unknown = -1,
+    unspecified = 0,
+    unix,
+    ipv4,
+    ipv6,
 }
 
 enum WellKnownPort : ushort
@@ -34,8 +34,8 @@ enum WellKnownPort : ushort
     MDNS    = 5353,
 }
 
-enum IPAddr IPAddrLit(string addr) = () { IPAddr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an IPv4 address"); return a; }();
-enum IPv6Addr IPv6AddrLit(string addr) = () { IPv6Addr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an IPv6 address"); return a; }();
+enum IPAddr IPAddrLit(string addr) = () { IPAddr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an ipv4 address"); return a; }();
+enum IPv6Addr IPv6AddrLit(string addr) = () { IPv6Addr a; size_t taken = a.fromString(addr); assert(taken == addr.length, "Not an ipv6 address"); return a; }();
 
 struct IPAddr
 {
@@ -56,13 +56,13 @@ nothrow @nogc:
         this.b = b;
     }
 
-    bool isMulticast() const pure
+    bool is_multicast() const pure
         => (b[0] & 0xF0) == 224;
-    bool isLoopback() const pure
+    bool is_loopback() const pure
         => b[0] == 127;
-    bool isLinkLocal() const pure
+    bool is_link_local() const pure
         => (b[0] == 169 && b[1] == 254);
-    bool isPrivate() const pure
+    bool is_private() const pure
         => (b[0] == 192 && b[1] == 168) || b[0] == 10 || (b[0] == 172 && (b[1] & 0xF) == 16);
 
     bool opCast(T : bool)() const pure
@@ -114,10 +114,10 @@ nothrow @nogc:
             return fnv1a(b[]);
     }
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
     {
-        char[15] stackBuffer = void;
-        char[] tmp = buffer.length < stackBuffer.sizeof ? stackBuffer : buffer;
+        char[15] stack_buffer = void;
+        char[] tmp = buffer.length < stack_buffer.sizeof ? stack_buffer : buffer;
         size_t offset = 0;
         for (int i = 0; i < 4; i++)
         {
@@ -126,7 +126,7 @@ nothrow @nogc:
             offset += b[i].format_int(tmp[offset..$]);
         }
 
-        if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
+        if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
         {
             if (buffer.length < offset)
                 return -1;
@@ -190,13 +190,13 @@ nothrow @nogc:
         this.s = s;
     }
 
-    bool isGlobal() const pure
+    bool is_global() const pure
         => (s[0] & 0xE000) == 0x2000;
-    bool isLinkLocal() const pure
+    bool is_link_local() const pure
         => (s[0] & 0xFFC0) == 0xFE80;
-    bool isMulticast() const pure
+    bool is_multicast() const pure
         => (s[0] & 0xFF00) == 0xFF00;
-    bool isUniqueLocal() const pure
+    bool is_unique_local() const pure
         => (s[0] & 0xFE00) == 0xFC00;
 
     bool opCast(T : bool)() const pure
@@ -228,7 +228,7 @@ nothrow @nogc:
         return r;
     }
 
-    IPv6Addr opBinary(string op)(const IPv6Addr rhs) pure
+    IPv6Addr opBinary(string op)(const IPv6Addr rhs) const pure
         if (op == "&" || op == "|" || op == "^")
     {
         IPv6Addr t;
@@ -253,12 +253,12 @@ nothrow @nogc:
             return fnv1a(cast(ubyte[])s[]);
     }
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
     {
         import urt.string.ascii;
 
         // find consecutive zeroes...
-        int skipFrom = 0;
+        int skip_from = 0;
         int[8] z;
         for (int i = 0; i < 8; i++)
         {
@@ -269,15 +269,15 @@ nothrow @nogc:
                     if (z[j] != 0)
                     {
                         ++z[j];
-                        if (z[j] > z[skipFrom])
-                            skipFrom = j;
+                        if (z[j] > z[skip_from])
+                            skip_from = j;
                     }
                     else
                         break;
                 }
                 z[i] = 1;
-                if (z[i] > z[skipFrom])
-                    skipFrom = i;
+                if (z[i] > z[skip_from])
+                    skip_from = i;
             }
         }
 
@@ -288,11 +288,11 @@ nothrow @nogc:
         {
             if (i > 0)
                 tmp[offset++] = ':';
-            if (z[skipFrom] > 1 && i == skipFrom)
+            if (z[skip_from] > 1 && i == skip_from)
             {
                 if (i == 0)
                     tmp[offset++] = ':';
-                i += z[skipFrom];
+                i += z[skip_from];
                 if (i == 8)
                     tmp[offset++] = ':';
                 continue;
@@ -365,25 +365,25 @@ nothrow @nogc:
     auto __debugExpanded() => s[];
 }
 
-struct IPSubnet
+struct IPNetworkAddress
 {
 nothrow @nogc:
 
-    enum multicast = IPSubnet(IPAddr(224, 0, 0, 0), 4);
-    enum loopback  = IPSubnet(IPAddr(127, 0, 0, 0), 8);
-    enum linkLocal = IPSubnet(IPAddr(169, 254, 0, 0), 16);
-    enum privateA  = IPSubnet(IPAddr(10, 0, 0, 0), 8);
-    enum privateB  = IPSubnet(IPAddr(172, 16, 0, 0), 12);
-    enum privateC  = IPSubnet(IPAddr(192, 168, 0, 0), 16);
+    enum multicast = IPNetworkAddress(IPAddr(224, 0, 0, 0), 4);
+    enum loopback  = IPNetworkAddress(IPAddr(127, 0, 0, 0), 8);
+    enum linklocal = IPNetworkAddress(IPAddr(169, 254, 0, 0), 16);
+    enum private_a = IPNetworkAddress(IPAddr(10, 0, 0, 0), 8);
+    enum private_b = IPNetworkAddress(IPAddr(172, 16, 0, 0), 12);
+    enum private_c = IPNetworkAddress(IPAddr(192, 168, 0, 0), 16);
     // TODO: ya know, this is gonna align to 4-bytes anyway...
     //       we could store the actual mask in the native endian, and then clz to recover the prefix len in one opcode
 
     IPAddr addr;
     IPAddr mask;
 
-    ubyte prefixLen() @property const pure
+    ubyte prefix_len() @property const pure
         => clz(~loadBigEndian(&mask.address));
-    void prefixLen(ubyte len) @property pure
+    void prefix_len(ubyte len) @property pure
     {
         if (len == 0)
             mask.address = 0;
@@ -391,36 +391,36 @@ nothrow @nogc:
             storeBigEndian(&mask.address, 0xFFFFFFFF << (32 - len));
     }
 
-    this(IPAddr addr, ubyte prefixLen)
+    this(IPAddr addr, ubyte prefix_len)
     {
         this.addr = addr;
-        this.prefixLen = prefixLen;
+        this.prefix_len = prefix_len;
     }
 
-    IPAddr netMask() const pure
+    IPAddr net_mask() const pure
         => mask;
 
     bool contains(IPAddr ip) const pure
-        => (ip & netMask()) == addr;
+        => (ip & mask) == get_network();
 
-    IPAddr getNetwork(IPAddr ip) const pure
-        => ip & mask;
-    IPAddr getLocal(IPAddr ip) const pure
-        => ip & ~mask;
+    IPAddr get_network() const pure
+        => addr & mask;
+    IPAddr get_local() const pure
+        => addr & ~mask;
 
     size_t toHash() const pure
-        => addr.toHash() ^ prefixLen;
+        => addr.toHash() ^ prefix_len;
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
     {
-        char[18] stackBuffer = void;
-        char[] tmp = buffer.length < stackBuffer.sizeof ? stackBuffer : buffer;
+        char[18] stack_buffer = void;
+        char[] tmp = buffer.length < stack_buffer.sizeof ? stack_buffer : buffer;
 
         size_t offset = addr.toString(tmp, null, null);
         tmp[offset++] = '/';
-        offset += prefixLen.format_int(tmp[offset..$]);
+        offset += prefix_len.format_int(tmp[offset..$]);
 
-        if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
+        if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
         {
             if (buffer.length < offset)
                 return -1;
@@ -440,7 +440,7 @@ nothrow @nogc:
         if (t == 0 || plen > 32)
             return -1;
         addr = a;
-        prefixLen = cast(ubyte)plen;
+        prefix_len = cast(ubyte)plen;
         return taken + t;
     }
 
@@ -453,32 +453,32 @@ nothrow @nogc:
     }
 }
 
-struct IPv6Subnet
+struct IPv6NetworkAddress
 {
 nothrow @nogc:
 
-    enum global      = IPv6Subnet(IPv6Addr(0x2000, 0, 0, 0, 0, 0, 0, 0), 3);
-    enum linkLocal   = IPv6Subnet(IPv6Addr(0xFE80, 0, 0, 0, 0, 0, 0, 0), 10);
-    enum multicast   = IPv6Subnet(IPv6Addr(0xFF00, 0, 0, 0, 0, 0, 0, 0), 8);
-    enum uniqueLocal = IPv6Subnet(IPv6Addr(0xFC00, 0, 0, 0, 0, 0, 0, 0), 7);
+    enum global      = IPv6NetworkAddress(IPv6Addr(0x2000, 0, 0, 0, 0, 0, 0, 0), 3);
+    enum linklocal   = IPv6NetworkAddress(IPv6Addr(0xFE80, 0, 0, 0, 0, 0, 0, 0), 10);
+    enum multicast   = IPv6NetworkAddress(IPv6Addr(0xFF00, 0, 0, 0, 0, 0, 0, 0), 8);
+    enum uniquelocal = IPv6NetworkAddress(IPv6Addr(0xFC00, 0, 0, 0, 0, 0, 0, 0), 7);
 
     IPv6Addr addr;
-    ubyte prefixLen;
+    ubyte prefix_len;
 
-    this(IPv6Addr addr, ubyte prefixLen)
+    this(IPv6Addr addr, ubyte prefix_len)
     {
         this.addr = addr;
-        this.prefixLen = prefixLen;
+        this.prefix_len = prefix_len;
     }
 
-    IPv6Addr netMask() const pure
+    IPv6Addr net_mask() const pure
     {
         IPv6Addr r;
-        int i, j = prefixLen / 16;
+        int i, j = prefix_len / 16;
         while (i < j) r.s[i++] = 0xFFFF;
         if (j < 8)
         {
-            r.s[i++] = cast(ushort)(0xFFFF << (16 - (prefixLen % 16)));
+            r.s[i++] = cast(ushort)(0xFFFF << (16 - (prefix_len % 16)));
             while (i < 8) r.s[i++] = 0;
         }
         return r;
@@ -486,38 +486,38 @@ nothrow @nogc:
 
     bool contains(IPv6Addr ip) const pure
     {
-        uint n = prefixLen / 16;
+        uint n = prefix_len / 16;
         uint i = 0;
         for (; i < n; ++i)
             if (ip.s[i] != addr.s[i])
                 return false;
-        if (prefixLen % 16)
+        if (prefix_len % 16)
         {
-            uint s = 16 - (prefixLen % 16);
+            uint s = 16 - (prefix_len % 16);
             if (ip.s[i] >> s != addr.s[i] >> s)
                 return false;
         }
         return true;
     }
 
-    IPv6Addr getNetwork(IPv6Addr ip) const pure
-        => ip & netMask();
-    IPv6Addr getLocal(IPv6Addr ip) const pure
-        => ip & ~netMask();
+    IPv6Addr get_network() const pure
+        => addr & net_mask();
+    IPv6Addr get_local() const pure
+        => addr & ~net_mask();
 
     size_t toHash() const pure
-        => addr.toHash() ^ prefixLen;
+        => addr.toHash() ^ prefix_len;
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
     {
-        char[42] stackBuffer = void;
-        char[] tmp = buffer.length < stackBuffer.sizeof ? stackBuffer : buffer;
+        char[42] stack_buffer = void;
+        char[] tmp = buffer.length < stack_buffer.sizeof ? stack_buffer : buffer;
 
         size_t offset = addr.toString(tmp, null, null);
         tmp[offset++] = '/';
-        offset += prefixLen.format_int(tmp[offset..$]);
+        offset += prefix_len.format_int(tmp[offset..$]);
 
-        if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
+        if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
         {
             if (buffer.length < offset)
                 return -1;
@@ -537,7 +537,7 @@ nothrow @nogc:
         if (t == 0 || plen > 128)
             return -1;
         addr = a;
-        prefixLen = cast(ubyte)plen;
+        prefix_len = cast(ubyte)plen;
         return taken + t;
     }
 
@@ -569,7 +569,7 @@ nothrow @nogc:
     {
         IPv6Addr addr;
         ushort port;
-        uint flowInfo;
+        uint flow_info;
         uint scopeId;
     }
     struct Addr
@@ -583,19 +583,25 @@ nothrow @nogc:
 
     this(IPAddr addr, ushort port)
     {
-        family = AddressFamily.IPv4;
+        family = AddressFamily.ipv4;
         this._a.ipv4.addr = addr;
         this._a.ipv4.port = port;
     }
 
-    this(IPv6Addr addr, ushort port, int flowInfo = 0, uint scopeId = 0)
+    this(IPv6Addr addr, ushort port, int flow_info = 0, uint scopeId = 0)
     {
-        family = AddressFamily.IPv6;
+        family = AddressFamily.ipv6;
         this._a.ipv6.addr = addr;
         this._a.ipv6.port = port;
-        this._a.ipv6.flowInfo = flowInfo;
+        this._a.ipv6.flow_info = flow_info;
         this._a.ipv6.scopeId = scopeId;
     }
+
+    inout(IPv4)* as_ipv4() inout pure
+        => family == AddressFamily.ipv4 ? &_a.ipv4 : null;
+
+    inout(IPv6)* as_ipv6() inout pure
+        => family == AddressFamily.ipv6 ? &_a.ipv6 : null;
 
     bool opCast(T : bool)() const pure
         => family > AddressFamily.Unspecified;
@@ -606,9 +612,9 @@ nothrow @nogc:
             return false;
         switch (family)
         {
-            case AddressFamily.IPv4:
+            case AddressFamily.ipv4:
                 return _a.ipv4 == rhs._a.ipv4;
-            case AddressFamily.IPv6:
+            case AddressFamily.ipv6:
                 return _a.ipv6 == rhs._a.ipv6;
             default:
                 return true;
@@ -621,18 +627,18 @@ nothrow @nogc:
             return family < rhs.family ? -1 : 1;
         switch (family)
         {
-            case AddressFamily.IPv4:
+            case AddressFamily.ipv4:
                 int c = _a.ipv4.addr.opCmp(rhs._a.ipv4.addr);
                 return c != 0 ? c : _a.ipv4.port - rhs._a.ipv4.port;
-            case AddressFamily.IPv6:
+            case AddressFamily.ipv6:
                 int c = _a.ipv6.addr.opCmp(rhs._a.ipv6.addr);
                 if (c != 0)
                     return c;
                 if (_a.ipv6.port == rhs._a.ipv6.port)
                 {
-                    if (_a.ipv6.flowInfo == rhs._a.ipv6.flowInfo)
+                    if (_a.ipv6.flow_info == rhs._a.ipv6.flow_info)
                         return _a.ipv6.scopeId - rhs._a.ipv6.scopeId;
-                    return _a.ipv6.flowInfo - rhs._a.ipv6.flowInfo;
+                    return _a.ipv6.flow_info - rhs._a.ipv6.flow_info;
                 }
                 return _a.ipv6.port - rhs._a.ipv6.port;
             default:
@@ -643,19 +649,19 @@ nothrow @nogc:
 
     size_t toHash() const pure
     {
-        if (family == AddressFamily.IPv4)
+        if (family == AddressFamily.ipv4)
             return _a.ipv4.addr.toHash() ^ _a.ipv4.port;
         else
             return _a.ipv6.addr.toHash() ^ _a.ipv6.port;
     }
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
     {
-        char[47] stackBuffer = void;
-        char[] tmp = buffer.length < stackBuffer.sizeof ? stackBuffer : buffer;
+        char[47] stack_buffer = void;
+        char[] tmp = buffer.length < stack_buffer.sizeof ? stack_buffer : buffer;
 
         size_t offset = void;
-        if (family == AddressFamily.IPv4)
+        if (family == AddressFamily.ipv4)
         {
             offset = _a.ipv4.addr.toString(tmp, null, null);
             tmp[offset++] = ':';
@@ -670,7 +676,7 @@ nothrow @nogc:
             offset += _a.ipv6.port.format_int(tmp[offset..$]);
         }
 
-        if (buffer.ptr && tmp.ptr == stackBuffer.ptr)
+        if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
         {
             if (buffer.length < offset)
                 return -1;
@@ -689,10 +695,10 @@ nothrow @nogc:
 
         // take address
         if (s.length >= 4 && (s[1] == '.' || s[2] == '.' || s[3] == '.'))
-            af = AddressFamily.IPv4;
+            af = AddressFamily.ipv4;
         else
-            af = AddressFamily.IPv6;
-        if (af == AddressFamily.IPv4)
+            af = AddressFamily.ipv6;
+        if (af == AddressFamily.ipv4)
         {
             taken = a4.fromString(s);
             if (taken < 0)
@@ -723,7 +729,7 @@ nothrow @nogc:
 
         // success! store results..
         family = af;
-        if (af == AddressFamily.IPv4)
+        if (af == AddressFamily.ipv4)
         {
             _a.ipv4.addr = a4;
             _a.ipv4.port = port;
@@ -732,7 +738,7 @@ nothrow @nogc:
         {
             _a.ipv6.addr = a6;
             _a.ipv6.port = port;
-            _a.ipv6.flowInfo = 0;
+            _a.ipv6.flow_info = 0;
             _a.ipv6.scopeId = 0;
         }
         return taken;
@@ -756,9 +762,9 @@ unittest
     assert((IPAddr(255, 255, 248, 0) & IPAddr(255, 0, 255, 255)) == IPAddr(255, 0, 248, 0));
     assert((IPAddr(255, 255, 248, 0) | IPAddr(255, 0, 255, 255)) == IPAddr(255, 255, 255, 255));
     assert((IPAddr(255, 255, 248, 0) ^ IPAddr(255, 0, 255, 255)) == IPAddr(0, 255, 7, 255));
-    assert(IPSubnet(IPAddr(), 21).netMask() == IPAddr(0xFF, 0xFF, 0xF8, 0));
-    assert(IPSubnet(IPAddr(192, 168, 0, 0), 24).getNetwork(IPAddr(192, 168, 0, 10)) == IPAddr(192, 168, 0, 0));
-    assert(IPSubnet(IPAddr(192, 168, 0, 0), 24).getLocal(IPAddr(192, 168, 0, 10)) == IPAddr(0, 0, 0, 10));
+    assert(IPNetworkAddress(IPAddr(), 21).net_mask() == IPAddr(0xFF, 0xFF, 0xF8, 0));
+    assert(IPNetworkAddress(IPAddr(192, 168, 0, 10), 24).get_network() == IPAddr(192, 168, 0, 0));
+    assert(IPNetworkAddress(IPAddr(192, 168, 0, 10), 24).get_local() == IPAddr(0, 0, 0, 10));
 
     assert(tmp[0 .. IPAddr(192, 168, 0, 1).toString(tmp, null, null)] == "192.168.0.1");
     assert(tmp[0 .. IPAddr(0, 0, 0, 0).toString(tmp, null, null)] == "0.0.0.0");
@@ -769,12 +775,12 @@ unittest
     addr |= IPAddr(1, 2, 3, 4);
     assert(addr == IPAddr(1, 2, 3, 4));
 
-    assert(tmp[0 .. IPSubnet(IPAddr(192, 168, 0, 0), 24).toString(tmp, null, null)] == "192.168.0.0/24");
-    assert(tmp[0 .. IPSubnet(IPAddr(0, 0, 0, 0), 0).toString(tmp, null, null)] == "0.0.0.0/0");
+    assert(tmp[0 .. IPNetworkAddress(IPAddr(192, 168, 0, 0), 24).toString(tmp, null, null)] == "192.168.0.0/24");
+    assert(tmp[0 .. IPNetworkAddress(IPAddr(0, 0, 0, 0), 0).toString(tmp, null, null)] == "0.0.0.0/0");
 
-    IPSubnet subnet;
-    assert(subnet.fromString("192.168.0.0/24") == 14 && subnet == IPSubnet(IPAddr(192, 168, 0, 0), 24));
-    assert(subnet.fromString("0.0.0.0/0") == 9 && subnet == IPSubnet(IPAddr(0, 0, 0, 0), 0));
+    IPNetworkAddress subnet;
+    assert(subnet.fromString("192.168.0.0/24") == 14 && subnet == IPNetworkAddress(IPAddr(192, 168, 0, 0), 24));
+    assert(subnet.fromString("0.0.0.0/0") == 9 && subnet == IPNetworkAddress(IPAddr(0, 0, 0, 0), 0));
     assert(subnet.fromString("1.2.3.4") == -1);
     assert(subnet.fromString("1.2.3.4/33") == -1);
     assert(subnet.fromString("1.2.3.4/a") == -1);
@@ -783,10 +789,10 @@ unittest
     assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) & IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFF00, 0, 1, 0, 0, 0, 0, 2));
     assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) | IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFFFF, 0, 3, 2, 3, 4, 5, 6));
     assert((IPv6Addr(0xFFFF, 0, 1, 2, 3, 4, 5, 6) ^ IPv6Addr(0xFF00, 0, 3, 0, 0, 0, 0, 2)) == IPv6Addr(0xFF, 0, 2, 2, 3, 4, 5, 4));
-    assert(IPv6Subnet(IPv6Addr(), 21).netMask() == IPv6Addr(0xFFFF, 0xF800, 0, 0, 0, 0, 0, 0));
-    assert(IPv6Subnet(IPv6Addr.any, 64).getNetwork(IPv6Addr.loopback) == IPv6Addr.any);
-    assert(IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).getNetwork(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1)) == IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0));
-    assert(IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).getLocal(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1)) == IPv6Addr(0, 0, 0, 1, 0, 0, 0, 1));
+    assert(IPv6NetworkAddress(IPv6Addr(), 21).net_mask() == IPv6Addr(0xFFFF, 0xF800, 0, 0, 0, 0, 0, 0));
+    assert(IPv6NetworkAddress(IPv6Addr.loopback, 64).get_network() == IPv6Addr.any);
+    assert(IPv6NetworkAddress(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1), 32).get_network() == IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0));
+    assert(IPv6NetworkAddress(IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1), 32).get_local() == IPv6Addr(0, 0, 0, 1, 0, 0, 0, 1));
 
     assert(tmp[0 .. IPv6Addr(0x2001, 0xdb8, 0, 1, 0, 0, 0, 1).toString(tmp, null, null)] == "2001:db8:0:1::1");
     assert(tmp[0 .. IPv6Addr(0x2001, 0xdb8, 0, 0, 1, 0, 0, 1).toString(tmp, null, null)] == "2001:db8::1:0:0:1");
@@ -819,12 +825,12 @@ unittest
     assert(addr6.fromString("2001:db8::1/24") == 11 && addr6 == IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
 
 
-    assert(tmp[0 .. IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24).toString(tmp, null, null)] == "2001:db8::1/24");
-    assert(tmp[0 .. IPv6Subnet(IPv6Addr(), 0).toString(tmp, null, null)] == "::/0");
+    assert(tmp[0 .. IPv6NetworkAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24).toString(tmp, null, null)] == "2001:db8::1/24");
+    assert(tmp[0 .. IPv6NetworkAddress(IPv6Addr(), 0).toString(tmp, null, null)] == "::/0");
 
-    IPv6Subnet subnet6;
-    assert(subnet6.fromString("2001:db8::1/24") == 14 && subnet6 == IPv6Subnet(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24));
-    assert(subnet6.fromString("::/0") == 4 && subnet6 == IPv6Subnet(IPv6Addr(), 0));
+    IPv6NetworkAddress subnet6;
+    assert(subnet6.fromString("2001:db8::1/24") == 14 && subnet6 == IPv6NetworkAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 24));
+    assert(subnet6.fromString("::/0") == 4 && subnet6 == IPv6NetworkAddress(IPv6Addr(), 0));
     assert(subnet6.fromString("1::2") == -1);
     assert(subnet6.fromString("1::2/129") == -1);
     assert(subnet6.fromString("1::2/a") == -1);
@@ -895,13 +901,13 @@ unittest
     // InetAddress sorting tests
     {
         InetAddress[10] expected = [
-            // IPv4 sorted first
+            // ipv4 sorted first
             InetAddress(IPAddr(10, 0, 0, 1), 80),
             InetAddress(IPAddr(127, 0, 0, 1), 8080),
             InetAddress(IPAddr(192, 168, 1, 1), 80),
             InetAddress(IPAddr(192, 168, 1, 1), 443),
 
-            // IPv6 sorted next
+            // ipv6 sorted next
             InetAddress(IPv6Addr(1, 0, 0, 0, 0, 0, 0, 0), 1024),
             InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 80, 0, 0),
             InetAddress(IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 433, 1, 1),

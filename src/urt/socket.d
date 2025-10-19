@@ -194,7 +194,7 @@ private:
 Result create_socket(AddressFamily af, SocketType type, Protocol proto, out Socket socket)
 {
     version (HasUnixSocket) {} else
-        assert(af != AddressFamily.Unix, "Unix sockets not supported on this platform!");
+        assert(af != AddressFamily.unix, "Unix sockets not supported on this platform!");
 
     socket.handle = .socket(s_addressFamily[af], s_socketType[type], s_protocol[proto]);
     if (socket == Socket.invalid)
@@ -500,7 +500,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
     // determine the option 'level'
     OptLevel level = get_optlevel(option);
     version (HasIPv6) {} else
-        assert(level != OptLevel.IPv6 && level != OptLevel.ICMPv6, "Platform does not support IPv6!");
+        assert(level != OptLevel.ipv6 && level != OptLevel.ICMPv6, "Platform does not support IPv6!");
 
     // platforms don't all agree on option data formats!
     const(void)* arg = optval;
@@ -1052,7 +1052,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 
     switch (address.family)
     {
-        case AddressFamily.IPv4:
+        case AddressFamily.ipv4:
         {
             addrLen = sockaddr_in.sizeof;
             if (buffer.length < sockaddr_in.sizeof)
@@ -1060,7 +1060,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 
             sockaddr_in* ain = cast(sockaddr_in*)sock_addr;
             memzero(ain, sockaddr_in.sizeof);
-            ain.sin_family = s_addressFamily[AddressFamily.IPv4];
+            ain.sin_family = s_addressFamily[AddressFamily.ipv4];
             version (Windows)
             {
                 ain.sin_addr.S_un.S_un_b.s_b1 = address._a.ipv4.addr.b[0];
@@ -1075,7 +1075,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
             storeBigEndian(&ain.sin_port, ushort(address._a.ipv4.port));
             break;
         }
-        case AddressFamily.IPv6:
+        case AddressFamily.ipv6:
         {
             version (HasIPv6)
             {
@@ -1085,9 +1085,9 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 
                 sockaddr_in6* ain6 = cast(sockaddr_in6*)sock_addr;
                 memzero(ain6, sockaddr_in6.sizeof);
-                ain6.sin6_family = s_addressFamily[AddressFamily.IPv6];
+                ain6.sin6_family = s_addressFamily[AddressFamily.ipv6];
                 storeBigEndian(&ain6.sin6_port, cast(ushort)address._a.ipv6.port);
-                storeBigEndian(cast(uint*)&ain6.sin6_flowinfo, address._a.ipv6.flowInfo);
+                storeBigEndian(cast(uint*)&ain6.sin6_flowinfo, address._a.ipv6.flow_info);
                 storeBigEndian(cast(uint*)&ain6.sin6_scope_id, address._a.ipv6.scopeId);
                 for (int a = 0; a < 8; ++a)
                 {
@@ -1103,7 +1103,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                 assert(false, "Platform does not support IPv6!");
             break;
         }
-        case AddressFamily.Unix:
+        case AddressFamily.unix:
         {
 //            version (HasUnixSocket)
 //            {
@@ -1113,7 +1113,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 //
 //                sockaddr_un* aun = cast(sockaddr_un*)sock_addr;
 //                memzero(aun, sockaddr_un.sizeof);
-//                aun.sun_family = s_addressFamily[AddressFamily.Unix];
+//                aun.sun_family = s_addressFamily[AddressFamily.unix];
 //
 //                memcpy(aun.sun_path, address.un.path, UNIX_PATH_LEN);
 //                break;
@@ -1140,7 +1140,7 @@ InetAddress make_InetAddress(const(sockaddr)* sock_address)
     addr.family = map_address_family(sock_address.sa_family);
     switch (addr.family)
     {
-        case AddressFamily.IPv4:
+        case AddressFamily.ipv4:
         {
             const sockaddr_in* ain = cast(const(sockaddr_in)*)sock_address;
 
@@ -1148,14 +1148,14 @@ InetAddress make_InetAddress(const(sockaddr)* sock_address)
             addr._a.ipv4.addr = make_IPAddr(ain.sin_addr);
             break;
         }
-        case AddressFamily.IPv6:
+        case AddressFamily.ipv6:
         {
             version (HasIPv6)
             {
                 const sockaddr_in6* ain6 = cast(const(sockaddr_in6)*)sock_address;
 
                 addr._a.ipv6.port = loadBigEndian(&ain6.sin6_port);
-                addr._a.ipv6.flowInfo = loadBigEndian(cast(const(uint)*)&ain6.sin6_flowinfo);
+                addr._a.ipv6.flow_info = loadBigEndian(cast(const(uint)*)&ain6.sin6_flowinfo);
                 addr._a.ipv6.scopeId = loadBigEndian(cast(const(uint)*)&ain6.sin6_scope_id);
                 addr._a.ipv6.addr = make_IPv6Addr(ain6.sin6_addr);
             }
@@ -1163,7 +1163,7 @@ InetAddress make_InetAddress(const(sockaddr)* sock_address)
                 assert(false, "Platform does not support IPv6!");
             break;
         }
-        case AddressFamily.Unix:
+        case AddressFamily.unix:
         {
 //            version (HasUnixSocket)
 //            {
@@ -1267,15 +1267,15 @@ __gshared immutable ushort[AddressFamily.max+1] s_addressFamily = [
 AddressFamily map_address_family(int addressFamily)
 {
     if (addressFamily == AF_INET)
-        return AddressFamily.IPv4;
+        return AddressFamily.ipv4;
     else if (addressFamily == AF_INET6)
-        return AddressFamily.IPv6;
+        return AddressFamily.ipv6;
     else if (addressFamily == AF_UNIX)
-        return AddressFamily.Unix;
+        return AddressFamily.unix;
     else if (addressFamily == AF_UNSPEC)
-        return AddressFamily.Unspecified;
+        return AddressFamily.unspecified;
     assert(false, "Unsupported address family");
-    return AddressFamily.Unknown;
+    return AddressFamily.unknown;
 }
 
 __gshared immutable int[SocketType.max+1] s_socketType = [
@@ -1475,7 +1475,7 @@ version (Windows)
 
         Socket dummy;
         uint bytes = 0;
-        if (!create_socket(AddressFamily.IPv4, SocketType.datagram, Protocol.udp, dummy))
+        if (!create_socket(AddressFamily.ipv4, SocketType.datagram, Protocol.udp, dummy))
             goto FAIL;
         if (WSAIoctl(dummy.handle, SIO_GET_EXTENSION_FUNCTION_POINTER, cast(void*)&WSAID_WSARECVMSG, cast(uint)GUID.sizeof,
                      &WSARecvMsg, cast(uint)WSARecvMsgFn.sizeof, &bytes, null, null) != 0)

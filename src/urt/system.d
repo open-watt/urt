@@ -99,7 +99,7 @@ void set_system_idle_params(IdleParams params)
         enum EXECUTION_STATE ES_DISPLAY_REQUIRED = 0x00000002;
         enum EXECUTION_STATE ES_CONTINUOUS = 0x80000000;
 
-        SetThreadExecutionState(ES_CONTINUOUS | (params.SystemRequired ? ES_SYSTEM_REQUIRED : 0) | (params.DisplayRequired ? ES_DISPLAY_REQUIRED : 0));
+        SetThreadExecutionState(ES_CONTINUOUS | ((params & IdleParams.SystemRequired) ? ES_SYSTEM_REQUIRED : 0) | ((params & IdleParams.DisplayRequired) ? ES_DISPLAY_REQUIRED : 0));
     }
     else version (Posix)
     {

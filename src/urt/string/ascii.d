@@ -67,16 +67,20 @@ char to_upper(char c) pure
 
 char[] to_lower(const(char)[] str, char[] buffer) pure
 {
+    if (buffer.length < str.length)
+        return null;
     foreach (i; 0 .. str.length)
-        buffer[i] = to_lower(str[i]);
-    return buffer;
+        buffer[i] = str[i].to_lower;
+    return buffer[0..str.length];
 }
 
 char[] to_upper(const(char)[] str, char[] buffer) pure
 {
+    if (buffer.length < str.length)
+        return null;
     foreach (i; 0 .. str.length)
-        buffer[i] = to_upper(str[i]);
-    return buffer;
+        buffer[i] = str[i].to_upper;
+    return buffer[0..str.length];
 }
 
 char[] to_lower(char[] str) pure
@@ -88,3 +92,35 @@ char[] to_upper(char[] str) pure
 {
     return to_upper(str, str);
 }
+
+ptrdiff_t cmp(bool case_insensitive = false)(const(char)[] a, const(char)[] b) pure
+{
+    if (a.length != b.length)
+        return a.length - b.length;
+    static if (case_insensitive)
+    {
+        for (size_t i = 0; i < a.length; ++i)
+        {
+            char ca = a[i].to_lower;
+            char cb = b[i].to_lower;
+            if (ca != cb)
+                return ca - cb;
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < a.length; ++i)
+            if (a[i] != b[i])
+                return a[i] - b[i];
+    }
+    return 0;
+}
+
+ptrdiff_t icmp(const(char)[] a, const(char)[] b) pure
+    => cmp!true(a, b);
+
+bool eq(const(char)[] a, const(char)[] b) pure
+    => cmp(a, b) == 0;
+
+bool ieq(const(char)[] a, const(char)[] b) pure
+    => cmp!true(a, b) == 0;

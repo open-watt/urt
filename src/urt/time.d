@@ -107,14 +107,30 @@ pure nothrow @nogc:
         }
         else
         {
-            long ms = (ticks != 0 ? appTime(this) : Duration()).as!"msecs";
+            long ns = (ticks != 0 ? appTime(this) : Duration()).as!"nsecs";
             if (!buffer.ptr)
-                return 2 + timeToString(ms, null);
+                return 2 + timeToString(ns, null);
             if (buffer.length < 2)
                 return -1;
             buffer[0..2] = "T+";
-            ptrdiff_t len = timeToString(ms, buffer[2..$]);
+            ptrdiff_t len = timeToString(ns, buffer[2..$]);
             return len < 0 ? len : 2 + len;
+        }
+    }
+
+    ptrdiff_t fromString(const(char)[] s)
+    {
+        static if (clock == Clock.SystemTime)
+        {
+            DateTime dt;
+            ptrdiff_t len = dt.fromString(s);
+            if (len >= 0)
+                this = getSysTime(dt);
+            return len;
+        }
+        else
+        {
+            assert(false, "TODO: ???"); // what is the format we parse?
         }
     }
 
@@ -191,7 +207,98 @@ pure nothrow @nogc:
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
-        return timeToString(as!"msecs", buffer);
+        return timeToString(as!"nsecs", buffer);
+    }
+
+    ptrdiff_t fromString(const(char)[] s)
+    {
+        import urt.conv : parse_int;
+        import urt.string.ascii : is_alpha, ieq;
+
+        if (s.length == 0)
+            return -1;
+
+        size_t offset = 0;
+        long total_nsecs = 0;
+        ubyte last_unit = 8;
+
+        while (offset < s.length)
+        {
+            // Parse number
+            size_t len;
+            long value = s[offset..$].parse_int(&len);
+            if (len == 0)
+                return last_unit != 8 ? offset : -1;
+            offset += len;
+
+            if (offset >= s.length)
+                return -1;
+
+            // Parse unit
+            size_t unit_start = offset;
+            while (offset < s.length && s[offset].is_alpha)
+                offset++;
+
+            if (offset == unit_start)
+                return -1;
+
+            const(char)[] unit = s[unit_start..offset];
+
+            // Convert unit to nanoseconds and check for duplicates
+            ubyte this_unit;
+            if (unit.ieq("w"))
+            {
+                value *= 604_800_000_000_000;
+                this_unit = 7;
+            }
+            else if (unit.ieq("d"))
+            {
+                value *= 86_400_000_000_000;
+                this_unit = 6;
+            }
+            else if (unit.ieq("h"))
+            {
+                value *= 3_600_000_000_000;
+                this_unit = 5;
+            }
+            else if (unit.ieq("m"))
+            {
+                value *= 60_000_000_000;
+                this_unit = 4;
+            }
+            else if (unit.ieq("s"))
+            {
+                value *= 1_000_000_000;
+                this_unit = 3;
+            }
+            else if (unit.ieq("ms"))
+            {
+                value *= 1_000_000;
+                this_unit = 2;
+            }
+            else if (unit.ieq("us"))
+            {
+                value *= 1_000;
+                this_unit = 1;
+            }
+            else if (unit.ieq("ns"))
+                this_unit = 0;
+            else
+                return -1;
+
+            // Check for ordering, duplicates, and only one of ms/us/ns may be present
+            if (this_unit >= last_unit || (this_unit < 2 && last_unit < 3))
+                return -1;
+            last_unit = this_unit;
+
+            total_nsecs += value;
+        }
+
+        if (last_unit == 8)
+            return -1;
+
+        ticks = total_nsecs / nsecMultiplier;
+        return offset;
     }
 
     auto __debugOverview() const
@@ -290,15 +397,6 @@ pure nothrow @nogc:
         import urt.conv : format_int;
 
         size_t offset = 0;
-        uint y = year;
-        if (year <= 0)
-        {
-            if (buffer.length < 3)
-                return -1;
-            y = -year + 1;
-            buffer[0 .. 3] = "BC ";
-            offset += 3;
-        }
         ptrdiff_t len = year.format_int(buffer[offset..$]);
         if (len < 0 || len == buffer.length)
             return -1;
@@ -313,7 +411,7 @@ pure nothrow @nogc:
         if (len < 0 || len == buffer.length)
             return -1;
         offset += len;
-        buffer[offset++] = ' ';
+        buffer[offset++] = 'T';
         len = hour.format_int(buffer[offset..$], 10, 2, '0');
         if (len < 0 || len == buffer.length)
             return -1;
@@ -325,14 +423,148 @@ pure nothrow @nogc:
         offset += len;
         buffer[offset++] = ':';
         len = second.format_int(buffer[offset..$], 10, 2, '0');
-        if (len < 0 || len == buffer.length)
+        if (len < 0)
             return -1;
         offset += len;
-        buffer[offset++] = '.';
-        len = (ns / 1_000_000).format_int(buffer[offset..$], 10, 3, '0');
-        if (len < 0)
-            return len;
+        if (ns)
+        {
+            if (len == buffer.length)
+                return -1;
+            buffer[offset++] = '.';
+            uint nsecs = ns;
+            uint m = 0;
+            while (nsecs)
+            {
+                if (len == buffer.length)
+                    return -1;
+                int digit = nsecs / digit_multipliers[m];
+                buffer[offset++] = cast(char)('0' + digit);
+                nsecs -= digit * digit_multipliers[m++];
+            }
+        }
         return offset + len;
+    }
+
+    ptrdiff_t fromString(const(char)[] s)
+    {
+        import urt.conv : parse_int;
+        import urt.string.ascii : ieq, is_numeric, is_whitespace, to_lower;
+
+        if (s.length < 14)
+            return -1;
+        size_t offset = 0;
+
+        // parse year
+        if (s[0..2].ieq("bc"))
+        {
+            offset = 2;
+            if (s[2] == ' ')
+                ++offset;
+        }
+        if (s[offset] == '+')
+            return -1;
+        size_t len;
+        long value = s[offset..$].parse_int(&len);
+        if (len == 0)
+            return -1;
+        if (offset > 0)
+        {
+            if (value <= 0)
+                return -1; // no year 0, or negative years BC!
+            value = -value + 1;
+        }
+        if (value < short.min || value > short.max)
+            return -1;
+        year = cast(short)value;
+        offset += len;
+
+        if (s[offset] != '-' && s[offset] != '/')
+            return -1;
+
+        // parse month
+        value = s[++offset..$].parse_int(&len);
+        if (len == 0)
+        {
+            foreach (i; 0..12)
+            {
+                if (s[offset..offset+3].ieq(g_month_names[i]))
+                {
+                    value = i + 1;
+                    len = 3;
+                    goto got_month;
+                }
+            }
+            return -1;
+        got_month:
+        }
+        else if (value < 1 || value > 12)
+            return -1;
+        month = cast(Month)value;
+        offset += len;
+
+        if (s[offset] != '-' && s[offset] != '/')
+            return -1;
+
+        // parse day
+        value = s[++offset..$].parse_int(&len);
+        if (len == 0 || value < 1 || value > 31)
+            return -1;
+        day = cast(ubyte)value;
+        offset += len;
+
+        if (offset >= s.length || (s[offset] != 'T' && s[offset] != ' '))
+            return -1;
+
+        // parse hour
+        value = s[++offset..$].parse_int(&len);
+        if (len != 2 || value < 0 || value > 23)
+            return -1;
+        hour = cast(ubyte)value;
+        offset += len;
+
+        if (offset >= s.length || s[offset++] != ':')
+            return -1;
+
+        // parse minute
+        value = s[offset..$].parse_int(&len);
+        if (len != 2 || value < 0 || value > 59)
+            return -1;
+        minute = cast(ubyte)value;
+        offset += len;
+
+        if (offset >= s.length || s[offset++] != ':')
+            return -1;
+
+        // parse second
+        value = s[offset..$].parse_int(&len);
+        if (len != 2 || value < 0 || value > 59)
+            return -1;
+        second = cast(ubyte)value;
+        offset += len;
+
+        ns = 0;
+        if (offset < s.length && s[offset] == '.')
+        {
+            // parse fractions
+            ++offset;
+            uint multiplier = 100_000_000;
+            while (offset < s.length && multiplier > 0 && s[offset].is_numeric)
+            {
+                ns += (s[offset++] - '0') * multiplier;
+                multiplier /= 10;
+            }
+            if (multiplier == 100_000_000)
+                return -1; // no number after the dot
+        }
+
+        if (offset < s.length && s[offset].to_lower == 'z')
+        {
+            ++offset;
+            // TODO: UTC timezone designator...
+            assert(false, "TODO: we need to know our local timezone...");
+        }
+
+        return offset;
     }
 }
 
@@ -403,6 +635,10 @@ SysTime getSysTime()
     }
 }
 
+SysTime getSysTime(DateTime time) pure
+{
+    assert(false, "TODO: convert to SysTime...");
+}
 
 DateTime getDateTime()
 {
@@ -458,6 +694,9 @@ Duration abs(Duration d) pure
 private:
 
 immutable MonoTime startTime;
+
+__gshared immutable string[12] g_month_names = [ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" ];
+__gshared immutable uint[9] digit_multipliers = [ 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1 ];
 
 version (Windows)
 {
@@ -517,22 +756,38 @@ package(urt) void initClock()
         static assert(false, "TODO");
 }
 
-ptrdiff_t timeToString(long ms, char[] buffer) pure
+ptrdiff_t timeToString(long ns, char[] buffer) pure
 {
     import urt.conv : format_int;
 
-    long hr = ms / 3_600_000;
+    long hr = ns / 3_600_000_000_000;
 
     if (!buffer.ptr)
-        return hr.format_int(null, 10, 2, '0') + 10;
+    {
+        size_t tail = 6;
+        ns %= 1_000_000_000;
+        if (ns)
+        {
+            ++tail;
+            uint m = 0;
+            do
+            {
+                ++tail;
+                uint digit = cast(uint)(ns / digit_multipliers[m]);
+                ns -= digit * digit_multipliers[m++];
+            }
+            while (ns);
+        }
+        return hr.format_int(null, 10, 2, '0') + tail;
+    }
 
     ptrdiff_t len = hr.format_int(buffer, 10, 2, '0');
-    if (len < 0 || buffer.length < len + 10)
+    if (len < 0 || buffer.length < len + 6)
         return -1;
 
-    ubyte min = cast(ubyte)(ms / 60_000 % 60);
-    ubyte sec = cast(ubyte)(ms / 1000 % 60);
-    ms %= 1000;
+    ubyte min = cast(ubyte)(ns / 60_000_000_000 % 60);
+    ubyte sec = cast(ubyte)(ns / 1_000_000_000 % 60);
+    ns %= 1_000_000_000;
 
     buffer.ptr[len++] = ':';
     buffer.ptr[len++] = cast(char)('0' + (min / 10));
@@ -540,10 +795,21 @@ ptrdiff_t timeToString(long ms, char[] buffer) pure
     buffer.ptr[len++] = ':';
     buffer.ptr[len++] = cast(char)('0' + (sec / 10));
     buffer.ptr[len++] = cast(char)('0' + (sec % 10));
-    buffer.ptr[len++] = '.';
-    buffer.ptr[len++] = cast(char)('0' + (ms / 100));
-    buffer.ptr[len++] = cast(char)('0' + ((ms/10) % 10));
-    buffer.ptr[len++] = cast(char)('0' + (ms % 10));
+    if (ns)
+    {
+        if (buffer.length < len + 2)
+            return -1;
+        buffer.ptr[len++] = '.';
+        uint m = 0;
+        while (ns)
+        {
+            if (buffer.length < len + 1)
+                return -1;
+            uint digit = cast(uint)(ns / digit_multipliers[m]);
+            buffer.ptr[len++] = cast(char)('0' + digit);
+            ns -= digit * digit_multipliers[m++];
+        }
+    }
     return len;
 }
 
@@ -552,10 +818,55 @@ unittest
     import urt.mem.temp;
 
     assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "03:47:34.123");
-    assert(tconcat(msecs(3_600_000*-123))[] == "-123:00:00.000");
-
-    assert(getTime().toString(null, null, null) == 14);
+    assert(tconcat(msecs(3_600_000*-123))[] == "-123:00:00");
+    assert(MonoTime().toString(null, null, null) == 10);
     assert(tconcat(getTime())[0..2] == "T+");
+
+    // Test Duration.fromString with compound formats
+    Duration d;
+
+    // Simple single units
+    assert(d.fromString("5s") == 2 && d.as!"seconds" == 5);
+    assert(d.fromString("10m") == 3 && d.as!"minutes" == 10);
+
+    // Compound durations
+    assert(d.fromString("1h30m") == 5 && d.as!"minutes" == 90);
+    assert(d.fromString("5m30s") == 5 && d.as!"seconds" == 330);
+
+    // Duplicate units should fail
+    assert(d.fromString("30m30m") == -1);
+    assert(d.fromString("1h2h") == -1);
+    assert(d.fromString("5s10s") == -1);
+
+    // Out-of-order units should fail
+    assert(d.fromString("30s5m") == -1);  // s before m
+    assert(d.fromString("1m2h") == -1);   // m before h
+    assert(d.fromString("5s10ms5m") == -1);  // m after s
+    assert(d.fromString("5s10ms10ns") == -1);  // ms and ns (only one sub-second unit allowed)
+
+    // Improper units should fail
+    assert(d.fromString("30z") == -1);  // not a time denomination
+
+    // Correctly ordered units should work
+    assert(d.fromString("1d2h30m15s") == 10 && d.as!"seconds" == 86_400 + 7_200 + 1_800 + 15);
+
+    // Test DateTime.fromString
+    DateTime dt;
+    assert(dt.fromString("2024-06-15T12:34:56") == 19);
+    assert(dt.fromString("-100/06/15 12:34:56") == 19);
+    assert(dt.fromString("BC100-AUG-15 12:34:56.789") == 25);
+    assert(dt.fromString("BC 10000-AUG-15 12:34:56.789123456") == 34);
+    assert(dt.fromString("1-1-1 01:01:01") == 14);
+    assert(dt.fromString("1-1-1 01:01:01.") == -1);
+    assert(dt.fromString("2025-01-01") == -1);
+    assert(dt.fromString("2024-0-15 12:34:56") == -1);
+    assert(dt.fromString("2024-13-15 12:34:56") == -1);
+    assert(dt.fromString("2024-1-0 12:34:56") == -1);
+    assert(dt.fromString("2024-1-32 12:34:56") == -1);
+    assert(dt.fromString("2024-1-1 24:34:56") == -1);
+    assert(dt.fromString("2024-1-1 01:60:56") == -1);
+    assert(dt.fromString("2024-1-1 01:01:60") == -1);
+    assert(dt.fromString("10000-1-1 1:01:01") == -1);
 }
 
 

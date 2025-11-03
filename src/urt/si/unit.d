@@ -66,6 +66,7 @@ enum CubicMetre = Metre^^3;
 enum Litre = ScaledUnit(CubicMetre, -3);
 enum Gram = ScaledUnit(Kilogram, -3);
 enum Milligram = ScaledUnit(Kilogram, -6);
+enum Nanosecond = ScaledUnit(Second, -9);
 enum Hertz = Cycle / Second;
 //enum Kilohertz = TODO: ONOES! Our system can't encode kilohertz! This is disaster!!
 enum Newton = Kilogram * Metre / Second^^2;

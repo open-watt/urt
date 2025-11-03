@@ -8,7 +8,8 @@ import urt.lifetime;
 import urt.map;
 import urt.mem.allocator;
 import urt.si.quantity;
-import urt.si.unit : ScaledUnit;
+import urt.si.unit : ScaledUnit, Second, Nanosecond;
+import urt.time : Duration, dur;
 import urt.traits;
 
 nothrow @nogc:
@@ -20,7 +21,8 @@ enum ValidUserType(T) = (is(T == struct) || is(T == class)) &&
                         !is(T == VariantKVP) &&
                         !is(T == Array!U, U) &&
                         !is(T : const(char)[]) &&
-                        !is(T == Quantity!(T, U), T, alias U);
+                        !is(T == Quantity!(T, U), T, alias U) &&
+                        !is(T == Duration);
 
 
 alias VariantKVP = KVP!(const(char)[], Variant);
@@ -168,6 +170,13 @@ nothrow @nogc:
             flags |= Flags.IsQuantity;
             count = q.unit.pack;
         }
+    }
+
+    this(Duration dur)
+    {
+        this(dur.as!"nsecs");
+        flags |= Flags.IsQuantity;
+        count = Nanosecond.pack;
     }
 
     this(const(char)[] s) // TODO: (S)(S s)
@@ -567,6 +576,8 @@ nothrow @nogc:
         => (flags & Flags.DoubleFlag) != 0;
     bool isQuantity() const pure
         => (flags & Flags.IsQuantity) != 0;
+    bool isDuration() const pure
+        => isQuantity && (count & 0xFFFFFF) == Second.pack;
     bool isString() const pure
         => (flags & Flags.IsString) != 0;
     bool isArray() const pure
@@ -707,6 +718,35 @@ nothrow @nogc:
         return r;
     }
 
+    Duration asDuration() const pure @property
+    {
+        assert(isDuration);
+        alias Nanoseconds = Quantity!(long, Nanosecond);
+        Nanoseconds ns;
+        if (size_t.sizeof < 8 && isFloat) // TODO: better way to detect if double is NOT supported in hardware?
+        {
+            Quantity!float q;
+            q.value = asFloat;
+            q.unit.pack = count;
+            ns = cast(Nanoseconds)q;
+        }
+        else if (isDouble)
+        {
+            Quantity!double q;
+            q.value = asDouble;
+            q.unit.pack = count;
+            ns = cast(Nanoseconds)q;
+        }
+        else
+        {
+            Quantity!long q;
+            q.value = asLong;
+            q.unit.pack = count;
+            ns = q;
+        }
+        return ns.value.dur!"nsecs";
+    }
+
     const(char)[] asString() const pure
     {
         if (isNull)
@@ -803,6 +843,10 @@ nothrow @nogc:
         else static if (is(T == Quantity!(U, _U), U, ScaledUnit _U))
         {
             return asQuantity!U();
+        }
+        else static if (is(T == Duration))
+        {
+            return asDuration;
         }
         else static if (is(T : const(char)[]))
         {

@@ -394,55 +394,65 @@ pure nothrow @nogc:
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
-        import urt.conv : format_int;
+        import urt.conv : format_int, format_uint;
+
+        ptrdiff_t len;
+        if (!buffer.ptr)
+        {
+            len = 15; // all the fixed chars
+            len += year.format_int(null);
+            if (ns)
+            {
+                ++len; // the dot
+                uint nsecs = ns;
+                uint m = 0;
+                while (nsecs)
+                {
+                    ++len;
+                    uint digit = nsecs / digit_multipliers[m];
+                    nsecs -= digit * digit_multipliers[m++];
+                }
+            }
+            return len;
+        }
 
         size_t offset = 0;
-        ptrdiff_t len = year.format_int(buffer[offset..$]);
+        len = year.format_int(buffer[offset..$]);
         if (len < 0 || len == buffer.length)
             return -1;
         offset += len;
         buffer[offset++] = '-';
-        len = month.format_int(buffer[offset..$]);
-        if (len < 0 || len == buffer.length)
-            return -1;
-        offset += len;
+        buffer[offset++] = '0' + (month / 10);
+        buffer[offset++] = '0' + (month % 10);
         buffer[offset++] = '-';
-        len = day.format_int(buffer[offset..$]);
-        if (len < 0 || len == buffer.length)
-            return -1;
-        offset += len;
+        buffer[offset++] = '0' + (day / 10);
+        buffer[offset++] = '0' + (day % 10);
         buffer[offset++] = 'T';
-        len = hour.format_int(buffer[offset..$], 10, 2, '0');
-        if (len < 0 || len == buffer.length)
-            return -1;
-        offset += len;
+        buffer[offset++] = '0' + (hour / 10);
+        buffer[offset++] = '0' + (hour % 10);
         buffer[offset++] = ':';
-        len = minute.format_int(buffer[offset..$], 10, 2, '0');
-        if (len < 0 || len == buffer.length)
-            return -1;
-        offset += len;
+        buffer[offset++] = '0' + (minute / 10);
+        buffer[offset++] = '0' + (minute % 10);
         buffer[offset++] = ':';
-        len = second.format_int(buffer[offset..$], 10, 2, '0');
-        if (len < 0)
-            return -1;
-        offset += len;
+        buffer[offset++] = '0' + (second / 10);
+        buffer[offset++] = '0' + (second % 10);
         if (ns)
         {
-            if (len == buffer.length)
+            if (offset == buffer.length)
                 return -1;
             buffer[offset++] = '.';
             uint nsecs = ns;
             uint m = 0;
             while (nsecs)
             {
-                if (len == buffer.length)
+                if (offset == buffer.length)
                     return -1;
                 int digit = nsecs / digit_multipliers[m];
                 buffer[offset++] = cast(char)('0' + digit);
                 nsecs -= digit * digit_multipliers[m++];
             }
         }
-        return offset + len;
+        return offset;
     }
 
     ptrdiff_t fromString(const(char)[] s)

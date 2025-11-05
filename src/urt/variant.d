@@ -937,7 +937,7 @@ nothrow @nogc:
 
             case Variant.Type.Number:
                 if (isQuantity())
-                    return asQuantity().toString(buffer);//, format, formatArgs);
+                    return asQuantity().toString(buffer, format, formatArgs);
 
                 if (isDouble())
                     return asDouble().format_float(buffer);

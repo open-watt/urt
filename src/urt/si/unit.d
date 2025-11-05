@@ -108,8 +108,8 @@ nothrow:
     // debug/ctfe helper
     string toString() pure
     {
-        char[32] t;
-        ptrdiff_t l = toString(t);
+        char[32] t = void;
+        ptrdiff_t l = toString(t, null, null);
         if (l < 0)
             return "Invalid unit"; // OR JUST COULDN'T STRINGIFY!
         return t[0..l].idup;
@@ -244,7 +244,8 @@ nothrow:
         this = this.opBinary!op(rh);
     }
 
-    ptrdiff_t toString(char[] buffer) const pure
+    import urt.string.format : FormatArg;
+    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const pure
     {
         assert(false, "TODO");
     }
@@ -361,8 +362,8 @@ nothrow:
     // debug/ctfe helper
     string toString() pure
     {
-        char[32] t;
-        ptrdiff_t l = toString(t);
+        char[32] t = void;
+        ptrdiff_t l = toString(t, null, null);
         if (l < 0)
             return "Invalid unit"; // OR JUST COULDN'T STRINGIFY!
         return t[0..l].idup;
@@ -706,7 +707,8 @@ nothrow:
         return len;
     }
 
-    ptrdiff_t toString(char[] buffer) const pure
+    import urt.string.format : FormatArg;
+    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const pure
     {
         if (!unit.pack)
         {

@@ -291,7 +291,8 @@ nothrow @nogc:
         return r;
     }
 
-    ptrdiff_t toString(char[] buffer) const
+    import urt.string.format : FormatArg;
+    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const
     {
         import urt.conv : format_float;
 
@@ -338,7 +339,7 @@ nothrow @nogc:
 
         if (u.pack)
         {
-            ptrdiff_t l2 = u.toString(buffer[l .. $]);
+            ptrdiff_t l2 = u.toString(buffer[l .. $], null, null);
             if (l2 < 0)
                 return l2;
             l += l2;

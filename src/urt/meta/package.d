@@ -130,13 +130,6 @@ template INTERLEAVE_SEPARATOR(alias sep, Args...)
 }
 
 
-template enum_keys(E)
-{
-    static assert(is_enum!E, "enum_keys only works with enums!");
-    __gshared immutable string[enum_strings.length] enum_keys = [ enum_strings ];
-    private alias enum_strings = __traits(allMembers, E);
-}
-
 const(E)* enum_from_key(E)(const(char)[] key)
     if (is_enum!E)
     => MakeEnumInfo!E.value_for(key);
@@ -145,52 +138,65 @@ const(char)[] enum_key_from_value(E)(EnumType!E value)
     if (is_enum!E)
     => MakeEnumInfo!E.key_for(value);
 
+const(char)[] enum_key_by_decl_index(E)(size_t value)
+    if (is_enum!E)
+    => MakeEnumInfo!E.key_by_decl_index(value);
+
 struct VoidEnumInfo
 {
     import urt.algorithm : binary_search;
     import urt.string;
+nothrow @nogc:
 
     // keys and values are sorted for binary search
-    const String[] keys;
-    const void[] values;
-    uint stride;
+    const String* keys;
+    const void* values;
+    ubyte count;
+    ushort stride;
     uint type_hash;
 
     const(char)[] key_for(const void* value, int function(const void* a, const void* b) pure nothrow @nogc pred) const pure
     {
-        size_t i = binary_search(values, stride, value, pred);
-        if (i < values.length)
+        size_t i = binary_search(values[0 .. count*stride], stride, value, pred);
+        if (i < count)
             return keys[_v2k_lookup[i]][];
         return null;
     }
 
     const(char)[] key_for(const void* value, int delegate(const void* a, const void* b) pure nothrow @nogc pred) const pure
     {
-        size_t i = binary_search(values, stride, value, pred);
-        if (i < values.length)
+        size_t i = binary_search(values[0 .. count*stride], stride, value, pred);
+        if (i < count)
             return keys[_v2k_lookup[i]][];
         return null;
     }
 
+    const(char)[] key_by_decl_index(size_t i) const pure
+    {
+        assert(i < count, "Declaration index out of range");
+        return keys[_decl_lookup[i]][];
+    }
+
     const(void)* value_for(const(char)[] key) const pure
     {
-        size_t i = binary_search(keys, key);
-        if (i == keys.length)
+        size_t i = binary_search(keys[0 .. count], key);
+        if (i == count)
             return null;
         i = _k2v_lookup[i];
-        return &values[i*stride];
+        return values + i*stride;
     }
 
     bool contains(const(char)[] key) const pure
     {
-        size_t i = binary_search(keys, key);
-        return i < keys.length;
+        size_t i = binary_search(keys[0 .. count], key);
+        return i < count;
     }
 
 private:
     // these tables map between indices of keys and values
-    const ubyte[] _k2v_lookup;
-    const ubyte[] _v2k_lookup;
+    const ubyte* _k2v_lookup;
+    const ubyte* _v2k_lookup;
+    const ubyte* _decl_lookup;
 }
 
 template EnumInfo(E)
@@ -205,6 +211,7 @@ template EnumInfo(E)
         {
             import urt.algorithm : binary_search;
             import urt.string;
+        nothrow @nogc:
 
             static assert (EnumInfo.sizeof == EnumInfo.sizeof, "Template EnumInfo must not add any members!");
 
@@ -214,9 +221,10 @@ template EnumInfo(E)
                 static assert(false, E.string ~ " is not an enum type!");
 
             // keys and values are sorted for binary search
-            const String[] keys;
-            const UE[] values;
-            uint stride = E.sizeof;
+            const String* keys;
+            const UE* values;
+            const ubyte count = __traits(allMembers, E).length;
+            const ushort stride = E.sizeof;
             uint type_hash;
 
             ref inout(VoidEnumInfo) make_void() inout
@@ -224,40 +232,43 @@ template EnumInfo(E)
 
             const(char)[] key_for(V value) const pure
             {
-                size_t i = binary_search(values, value);
-                if (i < values.length)
+                size_t i = binary_search(values[0 .. count], value);
+                if (i < count)
                     return keys[_v2k_lookup[i]][];
                 return null;
             }
 
+            const(char)[] key_by_decl_index(size_t i) const pure
+                => make_void().key_by_decl_index(i);
+
             const(UE)* value_for(const(char)[] key) const pure
             {
-                size_t i = binary_search(keys, key);
-                if (i == keys.length)
+                size_t i = binary_search(keys[0 .. count], key);
+                if (i == count)
                     return null;
-                return &values[_k2v_lookup[i]];
+                return values + _k2v_lookup[i];
             }
 
             bool contains(const(char)[] key) const pure
-            {
-                size_t i = binary_search(keys, key);
-                return i < keys.length;
-            }
+                => make_void().contains(key);
 
         private:
             // these tables map between indices of keys and values
-            const ubyte[] _k2v_lookup;
-            const ubyte[] _v2k_lookup;
+            const ubyte* _k2v_lookup;
+            const ubyte* _v2k_lookup;
+            const ubyte* _decl_lookup;
         }
 
         // sanity check the typed one matches the untyped one
         static assert(EnumInfo.sizeof == VoidEnumInfo.sizeof);
         static assert(EnumInfo.keys.offsetof == VoidEnumInfo.keys.offsetof);
         static assert(EnumInfo.values.offsetof == VoidEnumInfo.values.offsetof);
+        static assert(EnumInfo.count.offsetof == VoidEnumInfo.count.offsetof);
         static assert(EnumInfo.stride.offsetof == VoidEnumInfo.stride.offsetof);
         static assert(EnumInfo.type_hash.offsetof == VoidEnumInfo.type_hash.offsetof);
         static assert(EnumInfo._k2v_lookup.offsetof == VoidEnumInfo._k2v_lookup.offsetof);
         static assert(EnumInfo._v2k_lookup.offsetof == VoidEnumInfo._v2k_lookup.offsetof);
+        static assert(EnumInfo._decl_lookup.offsetof == VoidEnumInfo._decl_lookup.offsetof);
     }
 }
 
@@ -267,13 +278,18 @@ template MakeEnumInfo(E)
 {
     alias UE = Unqual!E;
 
-    __gshared immutable MakeEnumInfo = EnumInfo!UE(
-        _keys[],
-        _values[],
+    enum ubyte NumItems = __traits(allMembers, E).length;
+    static assert(NumItems <= ubyte.max, "Too many enum items!");
+
+    __gshared immutable MakeEnumInfo = immutable(EnumInfo!UE)(
+        _keys.ptr,
+        _values.ptr,
+        NumItems,
         E.sizeof,
         0,
-        _k2v_lookup[],
-        _v2k_lookup[],
+        _lookup.ptr,
+        _lookup.ptr + NumItems,
+        _lookup.ptr + NumItems*2
     );
 
 private:
@@ -281,16 +297,14 @@ private:
     import urt.string;
     import urt.string.uni : uni_compare;
 
-    enum NumItems = __traits(allMembers, E).length;
-    static assert(NumItems <= ubyte.max, "Too many enum items!");
-
     // keys and values are sorted for binary search
     __gshared immutable String[NumItems] _keys = [ STATIC_MAP!(GetKey, iota) ];
     __gshared immutable UE[NumItems] _values = [ STATIC_MAP!(GetValue, iota) ];
 
     // these tables map between indices of keys and values
-    __gshared immutable ubyte[NumItems] _k2v_lookup = [ STATIC_MAP!(GetKeyRedirect, iota) ];
-    __gshared immutable ubyte[NumItems] _v2k_lookup = [ STATIC_MAP!(GetValRedirect, iota) ];
+    __gshared immutable ubyte[NumItems * 3] _lookup = [ STATIC_MAP!(GetKeyRedirect, iota),
+                                                        STATIC_MAP!(GetValRedirect, iota),
+                                                        STATIC_MAP!(GetKeyOrig, iota) ];
 
     // a whole bunch of nonsense to build the tables...
     struct KI
@@ -317,6 +331,7 @@ private:
     enum GetValue(size_t i) = by_value[i].v;
     enum GetKeyRedirect(size_t i) = inv_val[by_key[i].i];
     enum GetValRedirect(size_t i) = inv_key[by_value[i].i];
+    enum GetKeyOrig(size_t i) = inv_key[i];
 }
 
 

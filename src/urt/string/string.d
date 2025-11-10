@@ -57,11 +57,10 @@ template StringLit(const(char)[] lit, bool zeroTerminate = true)
         return buffer;
     }();
     pragma(aligned, 2)
-    private __gshared literal = LiteralData;
+    private __gshared immutable literal = LiteralData;
 
-    enum String StringLit = String(literal.ptr + 2, false);
+    enum StringLit = immutable(String)(literal.ptr + 2, false);
 }
-
 
 String makeString(const(char)[] s) nothrow
 {
@@ -187,7 +186,17 @@ nothrow @nogc:
 
     // TODO: I made this return ushort, but normally length() returns size_t
     ushort length() const pure
-        => ptr ? ((cast(ushort*)ptr)[-1] & 0x7FFF) : 0;
+    {
+        if (__ctfe)
+        {
+            version (LittleEndian)
+                return ptr ? cast(ushort)(ptr[-2] | (ptr[-1] << 8)) & 0x7FFF : 0;
+            else
+                return ptr ? cast(ushort)((ptr[-1] | (ptr[-2] << 8)) & 0x7FFF) : 0;
+        }
+        else
+            return ptr ? ((cast(ushort*)ptr)[-1] & 0x7FFF) : 0;
+    }
 
     bool opCast(T : bool)() const pure
         => ptr != null && ((cast(ushort*)ptr)[-1] & 0x7FFF) != 0;

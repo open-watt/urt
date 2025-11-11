@@ -60,9 +60,12 @@ auto compare(T, U)(auto ref T a, auto ref U b)
 size_t binary_search(Pred)(const void[] arr, size_t stride, const void* value, auto ref Pred pred)
     if (is_some_function!Pred && is(ReturnType!Pred == int) && is(Parameters!Pred == AliasSeq!(const void*, const void*)))
 {
+    debug assert(arr.length % stride == 0, "array length must be a multiple of stride");
+    const count = arr.length / stride;
+
     const void* p = arr.ptr;
     size_t low = 0;
-    size_t high = arr.length;
+    size_t high = count;
     while (low < high)
     {
         size_t mid = low + (high - low) / 2;
@@ -74,11 +77,11 @@ size_t binary_search(Pred)(const void[] arr, size_t stride, const void* value, a
         else
             high = mid;
     }
-    if (low == arr.length)
-        return arr.length;
+    if (low == count)
+        return count;
     if (pred(p + low*stride, value) == 0)
         return low;
-    return arr.length;
+    return count;
 }
 
 size_t binary_search(alias pred = void, T, Cmp...)(T[] arr, auto ref Cmp cmp_args)

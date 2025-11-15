@@ -506,7 +506,7 @@ nothrow:
                 // TODO: FIX THIS!!
                 // this is copying the child node into the parent node because there is no parent pointer
                 // DO: add parent pointer, then fix up the parent's child pointer to the child, and do away with this pointless copy!
-                *_pRoot = (*temp).move; // Copy the contents of the non-empty child
+                move(*temp, *_pRoot); // Copy the contents of the non-empty child
             }
 
             Allocator.instance.freeT(temp);

@@ -53,7 +53,7 @@ void writeLogf(T...)(Level level, const(char)[] format, ref T things)
     if (level > logLevel)
         return;
 
-    const(char)[] message = tformat("{0}: {@-2}", levelNames[level], things, format);
+    const(char)[] message = tformat("{-2}: {@-1}", things, levelNames[level], format);
 
     for (size_t i = 0; i < g_log_sink_count; i++)
         g_log_sinks[i](level, message);

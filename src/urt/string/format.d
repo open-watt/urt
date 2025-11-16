@@ -344,9 +344,9 @@ struct DefFormat(T)
             }
 
             static if (is(T == long))
-                size_t len = format_int(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ', show_sign);
+                ptrdiff_t len = format_int(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ', show_sign);
             else
-                size_t len = format_uint(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ');
+                ptrdiff_t len = format_uint(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ');
 
             if (to_lower && len > 0)
             {
@@ -473,6 +473,8 @@ struct DefFormat(T)
             }
 
             char[] hex = toHexString(cast(ubyte[])value, buffer, grp1, grp2);
+            if (!hex.ptr)
+                return -1;
             return hex.length;
         }
         else static if (is(T : const U[], U))
@@ -861,6 +863,8 @@ ptrdiff_t parseFormat(ref const(char)[] format, ref char[] buffer, const(FormatA
         if (bytes < 0)
             return -2;
         char[] t = formatImpl(buffer, indirectFormat.ptr[0 .. bytes], args);
+        if (!t.ptr)
+            return -1;
         len = t.length;
     }
     else

@@ -697,6 +697,16 @@ ulong unixTimeNs(SysTime t) pure
         static assert(false, "TODO");
 }
 
+SysTime from_unix_time_ns(ulong ns) pure
+{
+    version (Windows)
+        return SysTime(ns / 100UL + 116444736000000000UL);
+    else version (Posix)
+        return SysTime(ns);
+    else
+        static assert(false, "TODO");
+}
+
 Duration abs(Duration d) pure
     => Duration(d.ticks < 0 ? -d.ticks : d.ticks);
 

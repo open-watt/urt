@@ -15,6 +15,14 @@ public import urt.mem.temp : tstringz, twstringz;
 nothrow @nogc:
 
 
+size_t strlen_s(const(char)[] s) pure
+{
+    size_t len = 0;
+    while (len < s.length && s[len] != '\0')
+        ++len;
+    return len;
+}
+
 ptrdiff_t cmp(bool case_insensitive = false, T, U)(const(T)[] a, const(U)[] b) pure
 {
     static if (case_insensitive)

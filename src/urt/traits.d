@@ -10,7 +10,7 @@ enum bool is_boolean(T) = __traits(isUnsigned, T) && is(T : bool);
 enum bool is_unsigned_int(T) = is(Unqual!T == ubyte) || is(Unqual!T == ushort) || is(Unqual!T == uint) || is(Unqual!T == ulong);
 enum bool is_signed_int(T) = is(Unqual!T == byte) || is(Unqual!T == short) || is(Unqual!T == int) || is(Unqual!T == long);
 enum bool is_some_int(T) = is_unsigned_int!T || is_signed_int!T;
-enum bool is_unsigned_integral(T) = is(Unqual!T == bool) || is_unsigned_int!T || is_some_char!T;
+enum bool is_unsigned_integral(T) = is_boolean!T || is_unsigned_int!T || is_some_char!T;
 enum bool is_signed_integral(T) = is_signed_int!T;
 enum bool is_integral(T) = is_unsigned_integral!T || is_signed_integral!T;
 enum bool is_some_float(T) = is(Unqual!T == float) || is(Unqual!T == double) || is(Unqual!T == real);

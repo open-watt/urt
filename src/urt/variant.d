@@ -194,13 +194,29 @@ nothrow @nogc:
         count = cast(uint)s.length;
     }
 
+    this(T)(T[] buffer)
+        if (is(Unqual!T == void))
+    {
+        if (buffer.length < embed.length)
+        {
+            flags = Flags.ShortBuffer;
+            embed[0 .. buffer.length] = cast(char[])buffer[];
+            embed[$-1] = cast(ubyte)buffer.length;
+            return;
+        }
+        flags = Flags.Buffer;
+        value.s = cast(char*)buffer.ptr;
+        count = cast(uint)buffer.length;
+    }
+
     this(Variant[] a)
     {
         flags = Flags.Array;
         nodeArray = a[];
     }
+
     this(T)(T[] a)
-        if (!is(T == Variant) && !is(T == VariantKVP) && !is(T : dchar))
+        if (!is(T == Variant) && !is(T == VariantKVP) && !is(T : dchar) && !is(Unqual!T == void))
     {
         flags = Flags.Array;
         nodeArray.reserve(a.length);
@@ -387,7 +403,7 @@ nothrow @nogc:
             case Type.Null:
                 if (b.type == Type.Null)
                     return 0;
-                else if ((b.type == Type.String || b.type == Type.Array || b.type == Type.Map) && b.empty())
+                else if ((b.type == Type.Buffer || b.type == Type.Array || b.type == Type.Map) && b.empty())
                     return 0;
                 r = -1; // sort null before other things...
                 break;
@@ -469,13 +485,13 @@ nothrow @nogc:
                     r = -1; // sort numbers before other things...
                 break;
 
-            case Type.String:
-                if (b.type != Type.String)
+            case Type.Buffer:
+                if (b.type != Type.Buffer)
                 {
                     r = -1;
                     break;
                 }
-                r = compare(a.asString(), b.asString());
+                r = compare(cast(const(char)[])a.asBuffer(), cast(const(char)[])b.asBuffer());
                 break;
 
             case Type.Array:
@@ -578,6 +594,8 @@ nothrow @nogc:
         => (flags & Flags.IsQuantity) != 0;
     bool isDuration() const pure
         => isQuantity && (count & 0xFFFFFF) == Second.pack;
+    bool isBuffer() const pure
+        => type == Type.Buffer;
     bool isString() const pure
         => (flags & Flags.IsString) != 0;
     bool isArray() const pure
@@ -745,6 +763,16 @@ nothrow @nogc:
             ns = q;
         }
         return ns.value.dur!"nsecs";
+    }
+
+    const(void)[] asBuffer() const pure
+    {
+        if (isNull)
+            return null;
+        assert(isBuffer);
+        if (flags & Flags.Embedded)
+            return embed[0 .. embed[$-1]];
+        return value.s[0 .. count];
     }
 
     const(char)[] asString() const pure
@@ -949,17 +977,25 @@ nothrow @nogc:
                     return asUlong().format_uint(buffer);
                 return asLong().format_int(buffer);
 
-            case Variant.Type.String:
-                const char[] s = asString();
-                if (buffer.ptr)
+            case Variant.Type.Buffer:
+                if (isString)
                 {
-                    // TODO: should we write out quotes?
-                    // a string of a number won't be distinguishable from a number without quotes...
-                    if (buffer.length < s.length)
-                        return -1;
-                    buffer[0 .. s.length] = s[];
+                    const char[] s = asString();
+                    if (buffer.ptr)
+                    {
+                        // TODO: should we write out quotes?
+                        // a string of a number won't be distinguishable from a number without quotes...
+                        if (buffer.length < s.length)
+                            return -1;
+                        buffer[0 .. s.length] = s[];
+                    }
+                    return s.length;
                 }
-                return s.length;
+                else
+                {
+                    import urt.string.format : formatValue;
+                    return formatValue(asBuffer(), buffer, format, formatArgs);
+                }
 
             case Variant.Type.Map:
             case Variant.Type.Array:
@@ -1165,7 +1201,7 @@ package:
         True        = 1,
         False       = 2,
         Number      = 3,
-        String      = 4,
+        Buffer      = 4,
         Array       = 5,
         Map         = 6,
         User        = 7
@@ -1182,8 +1218,10 @@ package:
         NumberUint64    = cast(Flags)Type.Number | Flags.IsNumber | Flags.Uint64Flag,
         NumberFloat     = cast(Flags)Type.Number | Flags.IsNumber | Flags.FloatFlag | Flags.DoubleFlag,
         NumberDouble    = cast(Flags)Type.Number | Flags.IsNumber | Flags.DoubleFlag,
-        String          = cast(Flags)Type.String | Flags.IsString,
-        ShortString     = cast(Flags)Type.String | Flags.IsString | Flags.Embedded,
+        Buffer          = cast(Flags)Type.Buffer,
+        ShortBuffer     = cast(Flags)Type.Buffer | Flags.Embedded,
+        String          = cast(Flags)Type.Buffer | Flags.IsString,
+        ShortString     = cast(Flags)Type.Buffer | Flags.IsString | Flags.Embedded,
         Array           = cast(Flags)Type.Array | Flags.NeedDestruction,
         Map             = cast(Flags)Type.Map | Flags.NeedDestruction,
         User            = cast(Flags)Type.User,

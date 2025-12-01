@@ -100,17 +100,24 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
                 return -1;
             return written;
 
-        case Variant.Type.String:
-            const char[] s = val.asString();
-            if (buffer.ptr)
+        case Variant.Type.Buffer:
+            if (val.isString)
             {
-                if (buffer.length < s.length + 2)
-                    return -1;
-                buffer[0] = '"';
-                buffer[1 .. 1 + s.length] = s[];
-                buffer[1 + s.length] = '"';
+                const char[] s = val.asString();
+                if (buffer.ptr)
+                {
+                    if (buffer.length < s.length + 2)
+                        return -1;
+                    buffer[0] = '"';
+                    buffer[1 .. 1 + s.length] = s[];
+                    buffer[1 + s.length] = '"';
+                }
+                return s.length + 2;
             }
-            return s.length + 2;
+            else
+            {
+                assert(false, "TODO: how are binary buffers represented in json?");
+            }
 
         case Variant.Type.Number:
             import urt.conv;

@@ -1,5 +1,6 @@
 module urt.lifetime;
 
+import urt.internal.lifetime : emplaceRef; // TODO: DESTROY THIS!
 
 T* emplace(T)(T* chunk) @safe pure
 {
@@ -77,12 +78,6 @@ T* emplace(T, Args...)(void[] chunk, auto ref Args args)
     emplaceRef!(T, Unqual!T)(*cast(Unqual!T*) chunk.ptr, forward!args);
     return cast(T*) chunk.ptr;
 }
-
-
-// HACK: we should port this to our lib...
-static import core.internal.lifetime;
-alias emplaceRef = core.internal.lifetime.emplaceRef;
-
 
 /+
 void copyEmplace(S, T)(ref S source, ref T target) @system
@@ -269,7 +264,7 @@ private void moveEmplaceImpl(T)(scope ref T target, return scope ref T source) @
 
         static if (hasElaborateAssign!T || !isAssignable!T)
         {
-            import core.stdc.string : memcpy;
+            import urt.mem : memcpy;
             () @trusted { memcpy(&target, &source, T.sizeof); }();
         }
         else
@@ -327,20 +322,11 @@ void moveEmplace(T)(ref T source, ref T target) @system @nogc
 
 
 
-//debug = PRINTF;
-
-debug(PRINTF)
-{
-    import core.stdc.stdio;
-}
-
 /// Implementation of `_d_delstruct` and `_d_delstructTrace`
 template _d_delstructImpl(T)
 {
     private void _d_delstructImpure(ref T p)
     {
-        debug(PRINTF) printf("_d_delstruct(%p)\n", p);
-
         destroy(*p);
         p = null;
     }
@@ -478,27 +464,11 @@ T _d_newclassT(T)() @trusted
             attr |= BlkAttr.NO_SCAN;
 
         p = GC.malloc(init.length, attr, typeid(T));
-        debug(PRINTF) printf(" p = %p\n", p);
-    }
-
-    debug(PRINTF)
-    {
-        printf("p = %p\n", p);
-        printf("init.ptr = %p, len = %llu\n", init.ptr, cast(ulong)init.length);
-        printf("vptr = %p\n", *cast(void**) init);
-        printf("vtbl[0] = %p\n", (*cast(void***) init)[0]);
-        printf("vtbl[1] = %p\n", (*cast(void***) init)[1]);
-        printf("init[0] = %x\n", (cast(uint*) init)[0]);
-        printf("init[1] = %x\n", (cast(uint*) init)[1]);
-        printf("init[2] = %x\n", (cast(uint*) init)[2]);
-        printf("init[3] = %x\n", (cast(uint*) init)[3]);
-        printf("init[4] = %x\n", (cast(uint*) init)[4]);
     }
 
     // initialize it
     p[0 .. init.length] = init[];
 
-    debug(PRINTF) printf("initialization done\n");
     return cast(T) p;
 }
 

@@ -1,7 +1,6 @@
 module urt.math;
 
 import urt.intrinsic;
-import core.stdc.stdio; // For writeDebugf
 
 // for arch where using FPU for int<->float conversions is preferred
 //version = PreferFPUIntConv;

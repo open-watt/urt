@@ -104,15 +104,77 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             if (val.isString)
             {
                 const char[] s = val.asString();
-                if (buffer.ptr)
+
+                if (!buffer.ptr)
                 {
-                    if (buffer.length < s.length + 2)
-                        return -1;
-                    buffer[0] = '"';
-                    buffer[1 .. 1 + s.length] = s[];
-                    buffer[1 + s.length] = '"';
+                    size_t len = 0;
+                    foreach (c; s)
+                    {
+                        if (c < 0x20)
+                        {
+                            if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
+                                len += 2;
+                            else
+                                len += 6;
+                        }
+                        else if (c == '"' || c == '\\')
+                            len += 2;
+                        else
+                            len += 1;
+                    }
+                    return len + 2;
                 }
-                return s.length + 2;
+
+                if (buffer.length < s.length + 2)
+                    return -1;
+
+                buffer[0] = '"';
+                // escape strings
+                size_t offset = 1;
+                foreach (c; s)
+                {
+                    char sub = void;
+                    if (c < 0x20)
+                    {
+                        if (c == '\n')
+                            sub = 'n';
+                        else if (c == '\r')
+                            sub = 'r';
+                        else if (c == '\t')
+                            sub = 't';
+                        else if (c == '\b')
+                            sub = 'b';
+                        else if (c == '\f')
+                            sub = 'f';
+                        else
+                        {
+                            if (buffer.length < offset + 7)
+                                return -1;
+                            buffer[offset .. offset + 4] = "\\u00";
+                            offset += 4;
+                            buffer[offset++] = hex_digits[c >> 4];
+                            buffer[offset++] = hex_digits[c & 0xF];
+                            continue;
+                        }
+                    }
+                    else if (c == '"' || c == '\\')
+                        sub = c;
+                    else
+                    {
+                        if (buffer.length < offset + 2)
+                            return -1;
+                        buffer[offset++] = c;
+                        continue;
+                    }
+
+                    // write escape sequence
+                    if (buffer.length < offset + 3)
+                        return -1;
+                    buffer[offset++] = '\\';
+                    buffer[offset++] = sub;
+                }
+                buffer[offset++] = '"';
+                return offset;
             }
             else
             {

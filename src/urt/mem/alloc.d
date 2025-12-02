@@ -137,6 +137,25 @@ size_t memsize(void* ptr) nothrow @nogc
         assert(false, "Unsupported platform");
 }
 
+ubyte[] ctfe_alloc(size_t n) pure
+{
+    if (!__ctfe)
+    {
+        assert(0, "CTFE only");
+    }
+    else
+    {
+        static ubyte[] alloc(size_t x) nothrow pure
+        {
+            if (__ctfe) // Needed to prevent _d_newarray from appearing in compiled prorgam.
+                return new ubyte[x];
+            else
+                assert(0);
+        }
+        return (cast(ubyte[] function(size_t) @nogc nothrow pure) &alloc)(n);
+    }
+}
+
 
 unittest
 {
@@ -147,6 +166,7 @@ unittest
     free_aligned(mem);
 }
 
+private:
 
 version (Windows)
 {

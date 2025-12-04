@@ -344,11 +344,12 @@ nothrow @nogc:
         return nodeArray.pushBack();
     }
 
-    bool opEquals(T)(ref const Variant rhs) const pure
+    bool opEquals(ref const Variant rhs) const pure
     {
         return opCmp(rhs) == 0;
     }
     bool opEquals(T)(auto ref const T rhs) const
+        if (!is(T == Variant))
     {
         // TODO: handle short-cut array/map comparisons?
         static if (is(T == typeof(null)))
@@ -536,6 +537,7 @@ nothrow @nogc:
         return invert ? -r : r;
     }
     int opCmp(T)(auto ref const T rhs) const
+        if (!is(T == Variant))
     {
         // TODO: handle short-cut string, array, map comparisons
         static if (is(T == typeof(null)))
@@ -854,7 +856,7 @@ nothrow @nogc:
                     return asUlong();
                 else
                 {
-                    uint u = asInt();
+                    uint u = asUint();
                     static if (!is(T == uint))
                         assert(u <= T.max, "Value out of range for " ~ T.stringof);
                     return cast(T)u;
@@ -916,6 +918,16 @@ nothrow @nogc:
                 return value.n + i + 1;
         }
         return null;
+    }
+
+    void set_unit(ScaledUnit unit)
+    {
+        assert(isNumber());
+        count = unit.pack;
+        if (count != 0)
+            flags |= Flags.IsQuantity;
+        else
+            flags &= ~Flags.IsQuantity;
     }
 
     // TODO: this seems to interfere with UFCS a lot...

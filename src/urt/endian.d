@@ -96,7 +96,7 @@ T endianToNative(T, bool little)(ref const ubyte[T.sizeof] bytes)
         static assert(!is(U == class) && !is(U == interface) && !is(U == V*, V), T.stringof ~ " is not POD");
 
         static if (U.sizeof == 1)
-            r = *cast(T*)&bytes;
+            return *cast(T*)&bytes;
         else
         {
             T r;
@@ -261,7 +261,7 @@ ubyte[T.sizeof] nativeToLittleEndian(T)(auto ref const T data)
 
 // load/store from/to memory
 void storeBigEndian(T)(T* target, const T val)
-    if (is_some_int!T || is(T == float))
+    if (is_some_int!T || is(T == float) || is(T == double))
 {
     version (BigEndian)
         *target = val;
@@ -269,7 +269,7 @@ void storeBigEndian(T)(T* target, const T val)
         *target = byte_reverse(val);
 }
 void storeLittleEndian(T)(T* target, const T val)
-    if (is_some_int!T || is(T == float))
+    if (is_some_int!T || is(T == float) || is(T == double))
 {
     version (LittleEndian)
         *target = val;
@@ -277,7 +277,7 @@ void storeLittleEndian(T)(T* target, const T val)
         *target = byte_reverse(val);
 }
 T loadBigEndian(T)(const(T)* src)
-    if (is_some_int!T || is(T == float))
+    if (is_some_int!T || is(T == float) || is(T == double))
 {
     version (BigEndian)
         return *src;
@@ -285,7 +285,7 @@ T loadBigEndian(T)(const(T)* src)
         return byte_reverse(*src);
 }
 T loadLittleEndian(T)(const(T)* src)
-    if (is_some_int!T || is(T == float))
+    if (is_some_int!T || is(T == float) || is(T == double))
 {
     version (LittleEndian)
         return *src;

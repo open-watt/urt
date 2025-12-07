@@ -232,30 +232,32 @@ version (SmallSize)
     {
         void* p = arr.ptr;
         size_t length = arr.length / element_size;
-        if (length > 1)
+        if (length <= 1)
+            return;
+
+        size_t pivot_index = length / 2;
+        size_t last = length - 1;
+        swap(p + pivot_index*element_size, p + last*element_size);
+
+        void* pivot = p + last*element_size;
+
+        size_t partition = 0;
+        for (size_t k = 0; k < last; ++k)
         {
-            size_t pivotIndex = length / 2;
-            void* pivot = p + pivotIndex*element_size;
-
-            size_t i = 0;
-            size_t j = length - 1;
-
-            while (i <= j)
+            void* elem = p + k*element_size;
+            if (compare(elem, pivot) < 0)
             {
-                while (compare(p + i*element_size, pivot) < 0) i++;
-                while (compare(p + j*element_size, pivot) > 0) j--;
-                if (i <= j)
-                {
-                    swap(p + i*element_size, p + j*element_size);
-                    i++;
-                    j--;
-                }
+                if (k != partition)
+                    swap(elem, p + partition*element_size);
+                ++partition;
             }
-
-            if (j > 0)
-                qsort(p[0 .. (j + 1)*element_size], element_size, compare, swap);
-            if (i < length)
-                qsort(p[i*element_size .. length*element_size], element_size, compare, swap);
         }
+
+        swap(p + partition*element_size, p + last*element_size);
+
+        if (partition > 1)
+            qsort(p[0 .. partition*element_size], element_size, compare, swap);
+        if (partition + 1 < length)
+            qsort(p[(partition + 1)*element_size .. length*element_size], element_size, compare, swap);
     }
 }

@@ -132,11 +132,23 @@ done:
     return value;
 }
 
+long parse_int_with_base(const(char)[] str, size_t* bytes_taken = null) pure
+{
+    const(char)* p = str.ptr;
+    int base = str.parse_base_prefix();
+    if (base == 10)
+        return str.parse_int(bytes_taken);
+    ulong i = str.parse_uint(bytes_taken, base);
+    if (bytes_taken && *bytes_taken != 0)
+        *bytes_taken += str.ptr - p;
+    return i;
+}
+
 ulong parse_uint_with_base(const(char)[] str, size_t* bytes_taken = null) pure
 {
     const(char)* p = str.ptr;
-    int base = parse_base_prefix(str);
-    ulong i = parse_uint(str, bytes_taken, base);
+    int base = str.parse_base_prefix();
+    ulong i = str.parse_uint(bytes_taken, base);
     if (bytes_taken && *bytes_taken != 0)
         *bytes_taken += str.ptr - p;
     return i;

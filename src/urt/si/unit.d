@@ -32,6 +32,9 @@ nothrow @nogc:
 //
 
 
+enum ScaledUnit unit(const(char)[] desc) = () { ScaledUnit r; float f; ptrdiff_t e = r.parseUnit(desc, f); assert(e > 0, "Invalid unit"); assert(f == 1, "Unit requires pre-scale"); return r; }();
+
+
 // base units
 enum Metre = Unit(UnitType.Length);
 enum Kilogram = Unit(UnitType.Mass);

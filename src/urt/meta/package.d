@@ -99,6 +99,18 @@ template STATIC_MAP(alias fun, args...)
         STATIC_MAP = AliasSeq!(STATIC_MAP, fun!arg);
 }
 
+template STATIC_UNROLL(alias array)
+{
+    static if (is(typeof(array) : T[], T))
+    {
+        alias STATIC_UNROLL = AliasSeq!();
+        static foreach (i; 0 .. array.length)
+            STATIC_UNROLL = AliasSeq!(STATIC_UNROLL, array[i]);
+    }
+    else
+        static assert(false, "STATIC_UNROLL requires an array");
+}
+
 template STATIC_FILTER(alias filter, args...)
 {
     alias STATIC_FILTER = AliasSeq!();

@@ -23,7 +23,7 @@ struct TailString(T)
         else
         {
             const(char)* thisptr = cast(const(char)*)&this;
-            const(char)* sptr = s.ptr - (s.ptr[-1] < 128 ? 1 : 2);
+            const(char)* sptr = s.ptr - 2;
             assert(sptr > thisptr && sptr - thisptr <= offset.max, "!!");
             offset = cast(ubyte)(sptr - thisptr);
         }
@@ -39,7 +39,7 @@ struct TailString(T)
         if (offset == 0)
             return null;
         const(char)* ptr = (cast(const(char)*)&this) + offset;
-        return ptr[0] < 128 ? ptr + 1 : ptr + 2;
+        return ptr + 2;
     }
 
     size_t length() const nothrow @nogc
@@ -64,7 +64,7 @@ struct TailString(T)
         else
         {
             const(char)* thisptr = cast(const(char)*)&this;
-            const(char)* sptr = s.ptr - (s.ptr[-1] < 128 ? 1 : 2);
+            const(char)* sptr = s.ptr - 2;
             assert(sptr > thisptr && sptr - thisptr <= offset.max, "!!");
             offset = cast(ubyte)(sptr - thisptr);
         }

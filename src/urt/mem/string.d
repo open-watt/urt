@@ -11,11 +11,6 @@ shared static this()
 }
 
 
-struct StringCache
-{
-}
-
-
 struct CacheString
 {
 nothrow @nogc:

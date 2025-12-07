@@ -32,6 +32,47 @@ struct StringAllocator
     void delegate(char* s) nothrow @nogc free;
 }
 
+struct StringCacheBuilder
+{
+nothrow @nogc:
+    this(char[] buffer) pure
+    {
+        assert(buffer.length <= ushort.max, "Buffer too long");
+        this._buffer = buffer;
+        this._offset = 0;
+    }
+
+    ushort add_string(const(char)[] s) pure
+    {
+        assert(s.length <= MaxStringLen, "String too long");
+        if (__ctfe)
+        {
+            version (LittleEndian)
+            {
+                _buffer[_offset + 0] = cast(char)(s.length & 0xFF);
+                _buffer[_offset + 1] = cast(char)(s.length >> 8);
+            }
+            else
+            {
+                _buffer[_offset + 0] = cast(char)(s.length >> 8);
+                _buffer[_offset + 1] = cast(char)(s.length & 0xFF);
+            }
+        }
+        else
+            *cast(ushort*)(_buffer.ptr + _offset) = cast(ushort)s.length;
+
+        ushort result = cast(ushort)(_offset + 2);
+        _buffer[result .. result + s.length] = s[];
+        _offset = cast(ushort)(result + s.length);
+        if (_offset & 1)
+            _buffer[_offset++] = '\0';
+        return result;
+    }
+
+private:
+    char[] _buffer;
+    ushort _offset;
+}
 
 //enum String StringLit(string s) = s.makeString;
 template StringLit(const(char)[] lit, bool zeroTerminate = true)
@@ -116,6 +157,46 @@ String makeString(const(char)[] s, char[] buffer) nothrow @nogc
     return String(writeString(buffer.ptr + 2, s), false);
 }
 
+char* writeString(char* buffer, const(char)[] str) pure nothrow @nogc
+{
+    // TODO: assume the calling code has confirmed the length is within spec
+    if (__ctfe)
+    {
+        version (LittleEndian)
+        {
+            buffer[-2] = cast(char)(str.length & 0xFF);
+            buffer[-1] = cast(char)(str.length >> 8);
+        }
+        else
+        {
+            buffer[-2] = cast(char)(str.length >> 8);
+            buffer[-1] = cast(char)(str.length & 0xFF);
+        }
+    }
+    else
+        (cast(ushort*)buffer)[-1] = cast(ushort)str.length;
+    buffer[0 .. str.length] = str[];
+    return buffer;
+}
+
+String as_string(const(char)* s) nothrow @nogc
+    => String(s, false);
+
+inout(char)[] as_dstring(inout(char)* s) pure nothrow @nogc
+{
+    debug assert(s !is null);
+
+    if (__ctfe)
+    {
+        version (LittleEndian)
+            ushort len = cast(ushort)(s[-2] | (s[-1] << 8));
+        else
+            ushort len = cast(ushort)(s[-1] | (s[-2] << 8));
+        return s[0 .. len];
+    }
+    else
+        return s[0 .. (cast(ushort*)s)[-1]];
+}
 
 struct String
 {
@@ -940,14 +1021,6 @@ private:
 
 __gshared StringAllocator[4] stringAllocators;
 static assert(stringAllocators.length <= 4, "Only 2 bits reserved to store allocator index");
-
-char* writeString(char* buffer, const(char)[] str) pure nothrow @nogc
-{
-    // TODO: assume the calling code has confirmed the length is within spec
-    (cast(ushort*)buffer)[-1] = cast(ushort)str.length;
-    buffer[0 .. str.length] = str[];
-    return buffer;
-}
 
 package(urt) void initStringAllocators()
 {

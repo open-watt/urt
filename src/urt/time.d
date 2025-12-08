@@ -391,6 +391,23 @@ pure nothrow @nogc:
         this = mixin("this " ~ op ~ " rhs;");
     }
 
+    int opCmp(DateTime dt) const
+    {
+        int r = year - dt.year;
+        if (r != 0) return r;
+        r = month - dt.month;
+        if (r != 0) return r;
+        r = day - dt.day;
+        if (r != 0) return r;
+        r = hour - dt.hour;
+        if (r != 0) return r;
+        r = minute - dt.minute;
+        if (r != 0) return r;
+        r = second - dt.second;
+        if (r != 0) return r;
+        return ns - dt.ns;
+    }
+
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
@@ -416,11 +433,10 @@ pure nothrow @nogc:
             return len;
         }
 
-        size_t offset = 0;
-        len = year.format_int(buffer[offset..$]);
-        if (len < 0 || len == buffer.length)
+        len = year.format_int(buffer[]);
+        if (len < 0 || len + 15 > buffer.length)
             return -1;
-        offset += len;
+        size_t offset = len;
         buffer[offset++] = '-';
         buffer[offset++] = '0' + (month / 10);
         buffer[offset++] = '0' + (month % 10);

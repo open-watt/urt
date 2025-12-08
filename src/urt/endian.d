@@ -100,8 +100,8 @@ T endianToNative(T, bool little)(ref const ubyte[T.sizeof] bytes)
         else
         {
             T r;
-            for (size_t i = 0, j = 0; i < N; ++i, j += T.sizeof)
-                r[i] = endianToNative!(U, little)(bytes.ptr[j .. j + T.sizeof][0 .. T.sizeof]);
+            for (size_t i = 0, j = 0; i < N; ++i, j += U.sizeof)
+                r[i] = endianToNative!(U, little)(bytes.ptr[j .. j + U.sizeof][0 .. U.sizeof]);
             return r;
         }
     }

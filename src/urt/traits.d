@@ -222,6 +222,8 @@ enum is_primitive(T) = is_integral!T || is_some_float!T || (is_enum!T && is_prim
                       is(T == P*, P) || is(T == S[], S) || (is(T == A[N], A, size_t N) && is_primitive!A) ||
                       is(T == R function(Args), R, Args...) || is(T == R delegate(Args), R, Args...));
 
+enum is_trivial(T) = __traits(isPOD, T);
+
 enum is_default_constructible(T) = is_primitive!T || (is(T == struct) && __traits(compiles, { T t; }));
 
 enum is_constructible(T, Args...) = (is_primitive!T && (Args.length == 0 || (Args.length == 1 && is(Args[0] : T)))) ||

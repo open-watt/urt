@@ -72,7 +72,7 @@ nothrow @nogc:
             value = adjustScale(b);
         }
     }
-    
+
     void opAssign()(T value) pure
     {
         static if (Dynamic)

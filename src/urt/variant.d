@@ -1018,9 +1018,9 @@ nothrow @nogc:
 
             case Variant.Type.User:
                 if (flags & Flags.Embedded)
-                    return find_type_details(alloc).stringify(cast(void*)embed.ptr, buffer, true);
+                    return find_type_details(alloc).stringify(cast(void*)embed.ptr, buffer, true, format, formatArgs);
                 else
-                    return g_type_details[alloc].stringify(cast(void*)ptr, buffer, true);
+                    return g_type_details[alloc].stringify(cast(void*)ptr, buffer, true, format, formatArgs);
         }
     }
 
@@ -1091,7 +1091,7 @@ nothrow @nogc:
         {
             ref immutable TypeDetails td = get_type_details(i);
             debug assert(td.alignment <= 64 && td.size <= buffer.sizeof, "Buffer is too small for user type!");
-            ptrdiff_t taken = td.stringify(td.embedded ? embed.ptr : buffer.ptr, cast(char[])s, false);
+            ptrdiff_t taken = td.stringify(td.embedded ? embed.ptr : buffer.ptr, cast(char[])s, false, null, null);
             if (taken > 0)
             {
                 flags = Flags.User;
@@ -1283,6 +1283,7 @@ unittest
 private:
 
 import urt.hash : fnv1a;
+import urt.string.format : formatValue, FormatArg;
 
 static assert(Variant.sizeof == 16);
 static assert(Variant.Type.max <= Variant.Flags.TypeMask);
@@ -1342,7 +1343,7 @@ struct TypeDetails
     bool embedded;
     void function(void* src, void* dst, bool move) nothrow @nogc copy_emplace;
     void function(void* val) nothrow @nogc destroy;
-    ptrdiff_t function(void* val, char[] buffer, bool format) nothrow @nogc stringify;
+    ptrdiff_t function(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc stringify;
     int function(const void* a, const void* b, int type) pure nothrow @nogc cmp;
 }
 __gshared TypeDetails[8] g_type_details;
@@ -1405,7 +1406,7 @@ public template TypeDetailsFor(T)
     else
         enum move_emplace = null;
 
-    static if (!is(T == class) && is(typeof(destroy!(false, T))))
+    static if (!is_trivial!T && is(typeof(destroy!(false, T))))
     {
         static void destroy_impl(void* val) nothrow @nogc
         {
@@ -1416,13 +1417,12 @@ public template TypeDetailsFor(T)
     else
         enum destroy_fun = null;
 
-    static ptrdiff_t stringify(void* val, char[] buffer, bool format) nothrow @nogc
+    static ptrdiff_t stringify(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc
     {
-        import urt.string.format : toString;
-        if (format)
+        if (do_format)
         {
-            static if (is(typeof(toString!T)))
-                return toString(*cast(const T*)val, buffer);
+            static if (__traits(compiles, { formatValue(*cast(const T*)val, buffer, format_spec, format_args); }))
+                return formatValue(*cast(const T*)val, buffer, format_spec, format_args);
             else
                 return -1;
         }

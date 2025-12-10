@@ -841,6 +841,11 @@ ptrdiff_t timeToString(long ns, char[] buffer) pure
         {
             if (buffer.length < len + 1)
                 return -1;
+            debug
+            {
+                import urt.mem.temp;
+                assert(m < 9, tconcat("how is this possible? ns == ", ns, "... buffer is: \"", buffer[0..len], "\""));
+            }
             uint digit = cast(uint)(ns / digit_multipliers[m]);
             buffer.ptr[len++] = cast(char)('0' + digit);
             ns -= digit * digit_multipliers[m++];

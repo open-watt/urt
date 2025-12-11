@@ -796,23 +796,24 @@ ptrdiff_t timeToString(long ns, char[] buffer) pure
 {
     import urt.conv : format_int;
 
-    long hr = ns / 3_600_000_000_000;
+    int hr = cast(int)(ns / 3_600_000_000_000);
+    ns = ns < 0 ? -ns % 3_600_000_000_000 : ns % 3_600_000_000_000;
+    uint remainder = cast(uint)(ns % 1_000_000_000);
 
     if (!buffer.ptr)
     {
         size_t tail = 6;
-        ns %= 1_000_000_000;
-        if (ns)
+        if (remainder)
         {
             ++tail;
             uint m = 0;
             do
             {
                 ++tail;
-                uint digit = cast(uint)(ns / digit_multipliers[m]);
-                ns -= digit * digit_multipliers[m++];
+                uint digit = cast(uint)(remainder / digit_multipliers[m]);
+                remainder -= digit * digit_multipliers[m++];
             }
-            while (ns);
+            while (remainder);
         }
         return hr.format_int(null, 10, 2, '0') + tail;
     }
@@ -821,9 +822,9 @@ ptrdiff_t timeToString(long ns, char[] buffer) pure
     if (len < 0 || buffer.length < len + 6)
         return -1;
 
-    ubyte min = cast(ubyte)(ns / 60_000_000_000 % 60);
-    ubyte sec = cast(ubyte)(ns / 1_000_000_000 % 60);
-    ns %= 1_000_000_000;
+    uint min_sec = cast(uint)(ns / 1_000_000_000);
+    uint min = min_sec / 60;
+    uint sec = min_sec % 60;
 
     buffer.ptr[len++] = ':';
     buffer.ptr[len++] = cast(char)('0' + (min / 10));
@@ -831,19 +832,20 @@ ptrdiff_t timeToString(long ns, char[] buffer) pure
     buffer.ptr[len++] = ':';
     buffer.ptr[len++] = cast(char)('0' + (sec / 10));
     buffer.ptr[len++] = cast(char)('0' + (sec % 10));
-    if (ns)
+    if (remainder)
     {
         if (buffer.length < len + 2)
             return -1;
         buffer.ptr[len++] = '.';
-        uint m = 0;
-        while (ns)
+        uint i = 0;
+        while (remainder)
         {
-            if (buffer.length < len + 1)
+            if (buffer.length <= len)
                 return -1;
-            uint digit = cast(uint)(ns / digit_multipliers[m]);
+            uint m = digit_multipliers[i++];
+            uint digit = cast(uint)(remainder / m);
             buffer.ptr[len++] = cast(char)('0' + digit);
-            ns -= digit * digit_multipliers[m++];
+            remainder -= digit * m;
         }
     }
     return len;
@@ -855,6 +857,7 @@ unittest
 
     assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "03:47:34.123");
     assert(tconcat(msecs(3_600_000*-123))[] == "-123:00:00");
+    assert(tconcat(usecs(3_600_000_000*-123 + 1))[] == "-122:59:59.999999");
     assert(MonoTime().toString(null, null, null) == 10);
     assert(tconcat(getTime())[0..2] == "T+");
 

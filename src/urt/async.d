@@ -79,7 +79,7 @@ void asyncUpdate()
             if (!t.event.ready())
                 continue;
         }
-        t.resume();
+        t.call.fibre.resume();
     }
 }
 

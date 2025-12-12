@@ -251,7 +251,10 @@ template EnumInfo(E)
             // keys and values are sorted for binary search
             union {
                 VoidEnumInfo _base;
-                const UE* _values; // shadows the _values in _base with a typed version
+                struct {
+                    ubyte[VoidEnumInfo._values.offsetof] _pad;
+                    const UE* _values; // shadows the _values in _base with a typed version
+                }
             }
             alias _base this;
 

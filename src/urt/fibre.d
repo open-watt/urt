@@ -84,6 +84,8 @@ struct Fibre
                 }
                 catch (Throwable e)
                 {
+                    import urt.log;
+                    writeDebugf("fibre abort: {0}:{1} - {2}", e.file, e.line, e.msg);
                     abort();
                 }
 

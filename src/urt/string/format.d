@@ -120,6 +120,8 @@ struct FormatArg
     {
         static if (IsAggregate!T && is(typeof(&value.toString) : StringifyFunc))
             toString = &value.toString;
+        else static if (IsAggregate!T && is(typeof(&value.toString!()) : StringifyFunc))
+            toString = &value.toString!();
         else static if (IsAggregate!T && __traits(compiles, value.toString(buffer, "format", cast(FormatArg[])null) == 0))
         {
             // wrap in a delegate that adjusts for format + args...
@@ -151,22 +153,16 @@ struct FormatArg
     }
 
     ptrdiff_t getString(char[] buffer, const(char)[] format, const(FormatArg)[] args) const nothrow @nogc
-    {
-        return toString(buffer, format, args);
-    }
+        => toString(buffer, format, args);
+
     ptrdiff_t getLength(const(char)[] format, const(FormatArg)[] args) const nothrow @nogc
-    {
-        return toString(null, format, args);
-    }
+        => getString(null, format, args);
 
     bool canInt() const nothrow @nogc
-    {
-        return toInt != null;
-    }
+        => toInt != null;
+
     ptrdiff_t getInt() const nothrow @nogc
-    {
-        return toInt();
-    }
+        => toInt();
 
 private:
     // TODO: we could assert that the delegate pointers match, and only store it once...
@@ -569,6 +565,9 @@ struct DefFormat(T)
         }
         else static if (is(T == class))
         {
+            // HACK: class toString is not @nogc, so we'll just stringify the pointer for right now...
+            return defToString(cast(void*)value, buffer, format, formatArgs);
+/+
             try
             {
                 const(char)[] t = (cast()value).toString();
@@ -581,6 +580,7 @@ struct DefFormat(T)
             }
             catch (Exception)
                 return -1;
++/
         }
         else static if (is(T == const))
         {
@@ -631,6 +631,16 @@ struct DefFormat(T)
                 buffer[len] = ')';
             }
             return ++len;
+        }
+        else static if (is(T == function))
+        {
+            assert(false, "TODO");
+            return 0;
+        }
+        else static if (is(T == delegate))
+        {
+            assert(false, "TODO");
+            return 0;
         }
         else
             static assert(false, "Not implemented for type: ", T.stringof);

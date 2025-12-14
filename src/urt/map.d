@@ -300,6 +300,69 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     auto opIndex() const nothrow
         => Range!(IterateBy.KVP, true)(pRoot);
 
+    import urt.string.format : FormatArg, formatValue;
+    ptrdiff_t toString()(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
+    {
+        if (buffer.ptr is null)
+        {
+            // count the buffer size
+            size_t size = 2, comma = 0;
+            foreach (kvp; this)
+            {
+                size += comma;
+                comma = 1;
+                ptrdiff_t len = formatValue(kvp.key, buffer, format, formatArgs);
+                if (len < 0)
+                    return len;
+                size += len + 1;
+                len = formatValue(kvp.value, buffer, format, formatArgs);
+                if (len < 0)
+                    return len;
+                size += len;
+            }
+            return size;
+        }
+
+        if (buffer.length < 2)
+            return -1;
+        buffer[0] = '{';
+
+        size_t offset = 1;
+        bool add_comma = false;
+        foreach (kvp; this)
+        {
+            if (add_comma)
+            {
+                if (offset >= buffer.length)
+                    return -1;
+                buffer[offset++] = ',';
+            }
+            else
+                add_comma = true;
+            ptrdiff_t len = formatValue(kvp.key, buffer[offset .. $], format, formatArgs);
+            if (len < 0)
+                return len;
+            offset += len;
+            if (offset >= buffer.length)
+                return -1;
+            buffer[offset++] = ':';
+            len = formatValue(kvp.value, buffer[offset .. $], format, formatArgs);
+            if (len < 0)
+                return len;
+            offset += len;
+        }
+
+        if (offset >= buffer.length)
+            return -1;
+        buffer[offset++] = '}';
+        return offset;
+    }
+
+    ptrdiff_t fromString()(const(char)[] s)
+    {
+        assert(false, "TODO");
+    }
+
 private:
 nothrow:
     alias Node = AVLTreeNode!(K, V);

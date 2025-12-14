@@ -685,6 +685,20 @@ nothrow @nogc:
         _length = 0;
     }
 
+    import urt.string.format : FormatArg, formatValue;
+    ptrdiff_t toString()(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
+    {
+        static if (is(T == class) || is(T == interface))
+            assert(false, "TODO: class toString is not @nogc!");
+        else
+            return formatValue(ptr[0 .. _length], buffer, format, formatArgs);
+    }
+
+    ptrdiff_t fromString()(const(char)[] s)
+    {
+        assert(false, "TODO");
+    }
+
 private:
     T* ptr;
     uint _length;

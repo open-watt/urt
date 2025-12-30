@@ -559,9 +559,9 @@ nothrow @nogc:
         append(forward!things);
     }
 
-    this(Args...)(Format_T, auto ref Args args)
+    this(Args...)(Format_T, const(char)[] format, auto ref Args args)
     {
-        format(forward!args);
+        this.format(format, forward!args);
     }
 
     ~this()
@@ -690,9 +690,9 @@ nothrow @nogc:
         return this;
     }
 
-    ref MutableString!Embed appendFormat(Things...)(auto ref Things things)
+    ref MutableString!Embed appendFormat(Things...)(const(char)[] format, auto ref Things args)
     {
-        insertFormat(length(), forward!things);
+        insertFormat(length(), format, forward!args);
         return this;
     }
 
@@ -704,11 +704,11 @@ nothrow @nogc:
         return this;
     }
 
-    ref MutableString!Embed format(Args...)(auto ref Args args)
+    ref MutableString!Embed format(Args...)(const(char)[] format, auto ref Args args)
     {
         if (ptr)
             writeLength(0);
-        insertFormat(0, forward!args);
+        insertFormat(0, format, forward!args);
         return this;
     }
 
@@ -740,7 +740,7 @@ nothrow @nogc:
         return this;
     }
 
-    ref MutableString!Embed insertFormat(Things...)(size_t offset, auto ref Things things)
+    ref MutableString!Embed insertFormat(Things...)(size_t offset, const(char)[] format, auto ref Things args)
     {
         import urt.string.format : _format = format;
         import urt.util : max, next_power_of_2;
@@ -748,7 +748,7 @@ nothrow @nogc:
         char* oldPtr = ptr;
         size_t oldLen = length();
 
-        size_t insertLen = _format(null, things).length;
+        size_t insertLen = _format(null, format, args).length;
         size_t newLen = oldLen + insertLen;
         if (newLen == oldLen)
             return this;
@@ -757,7 +757,7 @@ nothrow @nogc:
         size_t oldAlloc = allocated();
         ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(max(16, cast(ushort)newLen + 4).next_power_of_2 - 4);
         memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
-        _format(ptr[offset .. offset + insertLen], forward!things);
+        _format(ptr[offset .. offset + insertLen], format, forward!args);
         writeLength(newLen);
 
         if (oldPtr && ptr != oldPtr)

@@ -208,8 +208,7 @@ pragma(inline, true) auto nativeToEndian(bool little, T)(T val)
 {
     import urt.meta : IntForWidth;
     alias U = IntForWidth!(T.sizeof*8);
-    U r = nativeToEndian!little(*cast(U*)&val);
-    return *cast(T*)&r;
+    return nativeToEndian!little(*cast(U*)&val);
 }
 
 ubyte[T.sizeof] nativeToEndian(bool little, T)(auto ref const T data)

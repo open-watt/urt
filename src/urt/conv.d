@@ -104,9 +104,7 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
             if (s == str.ptr)
                 goto done;
             ++s;
-            if (digits)
-                digits += zero_seq;
-            zero_seq = 0;
+            exp = zero_seq;
             goto parse_decimal;
         }
         else if (c == '0')
@@ -119,12 +117,13 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
         if (digit >= base)
             break;
 
-        for (uint i = 0; i <= zero_seq; ++i)
-            value = value * base;
-        value += digit;
-
         if (digits)
+        {
+            for (uint i = 0; i <= zero_seq; ++i)
+                value = value * base;
             digits += zero_seq;
+        }
+        value += digit;
         digits += 1;
         zero_seq = 0;
     }
@@ -148,22 +147,38 @@ parse_decimal:
         if (digit >= base)
             break;
 
-        for (uint i = 0; i <= zero_seq; ++i)
-            value = value * base;
-        value += digit;
-
         if (digits)
+        {
+            for (uint i = 0; i <= zero_seq; ++i)
+                value = value * base;
             digits += zero_seq;
+        }
+        value += digit;
         digits += 1;
         exp -= 1 + zero_seq;
         zero_seq = 0;
     }
+    if (!digits)
+        exp = 0; // didn't parse any digits; reset exp to 0
 
 done:
     exponent = exp;
     if (bytes_taken)
         *bytes_taken = s - str.ptr;
     return value;
+}
+
+unittest
+{
+    int e;
+    size_t taken;
+    assert("0001023000".parse_uint_with_exponent(e, &taken, 10) == 1023 && e == 3 && taken == 10);
+    assert("0.0012003000".parse_uint_with_exponent(e, &taken, 10) == 12003 && e == -7 && taken == 12);
+    assert("00010.23000".parse_uint_with_exponent(e, &taken, 10) == 1023 && e == -2 && taken == 11);
+    assert("00012300.0".parse_uint_with_exponent(e, &taken, 10) == 123 && e == 2 && taken == 10);
+    assert("00100.00230".parse_uint_with_exponent(e, &taken, 10) == 1000023 && e == -4 && taken == 11);
+    assert("0.0".parse_uint_with_exponent(e, &taken, 10) == 0 && e == 0 && taken == 3);
+    assert(".01".parse_uint_with_exponent(e, &taken, 10) == 0 && e == 0 && taken == 0);
 }
 
 ulong parse_uint_with_decimal(const(char)[] str, out ulong fixed_point_divisor, size_t* bytes_taken = null, int base = 10) pure

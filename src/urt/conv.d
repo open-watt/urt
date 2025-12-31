@@ -81,6 +81,91 @@ ulong parse_uint(const(char)[] str, size_t* bytes_taken = null, int base = 10) p
     return value;
 }
 
+ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10) pure
+{
+    import urt.util : ctz, is_power_of_2;
+
+    assert(base > 1 && base <= 36, "Invalid base");
+
+    const(char)* s = str.ptr;
+    const(char)* e = s + str.length;
+
+    ulong value = 0;
+    int exp = 0;
+    uint digits = 0;
+    uint zero_seq = 0;
+
+    for (; s < e; ++s)
+    {
+        char c = *s;
+
+        if (c == '.')
+        {
+            if (s == str.ptr)
+                goto done;
+            ++s;
+            if (digits)
+                digits += zero_seq;
+            zero_seq = 0;
+            goto parse_decimal;
+        }
+        else if (c == '0')
+        {
+            ++zero_seq;
+            continue;
+        }
+
+        uint digit = get_digit(c);
+        if (digit >= base)
+            break;
+
+        for (uint i = 0; i <= zero_seq; ++i)
+            value = value * base;
+        value += digit;
+
+        if (digits)
+            digits += zero_seq;
+        digits += 1;
+        zero_seq = 0;
+    }
+
+    // number has no decimal point, tail zeroes are positive exp
+    exp = digits ? zero_seq : 0;
+    goto done;
+
+parse_decimal:
+    for (; s < e; ++s)
+    {
+        char c = *s;
+
+        if (c == '0')
+        {
+            ++zero_seq;
+            continue;
+        }
+
+        uint digit = get_digit(c);
+        if (digit >= base)
+            break;
+
+        for (uint i = 0; i <= zero_seq; ++i)
+            value = value * base;
+        value += digit;
+
+        if (digits)
+            digits += zero_seq;
+        digits += 1;
+        exp -= 1 + zero_seq;
+        zero_seq = 0;
+    }
+
+done:
+    exponent = exp;
+    if (bytes_taken)
+        *bytes_taken = s - str.ptr;
+    return value;
+}
+
 ulong parse_uint_with_decimal(const(char)[] str, out ulong fixed_point_divisor, size_t* bytes_taken = null, int base = 10) pure
 {
     assert(base > 1 && base <= 36, "Invalid base");
@@ -99,6 +184,8 @@ ulong parse_uint_with_decimal(const(char)[] str, out ulong fixed_point_divisor, 
 
         if (c == '.')
         {
+            if (s == str.ptr)
+                goto done;
             ++s;
             goto parse_decimal;
         }

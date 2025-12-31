@@ -567,6 +567,8 @@ nothrow:
 
     ptrdiff_t parseUnit(const(char)[] s, out float preScale) pure
     {
+        import urt.conv : parse_uint_with_exponent;
+
         preScale = 1;
 
         if (s.length == 0)
@@ -599,41 +601,12 @@ nothrow:
             {
                 size_t offset = 0;
 
-                // parse the exponent
+                // parse the scale factor
                 int e = 0;
                 if (term[0].is_numeric)
                 {
-                    if (term[0] == '0')
-                    {
-                        if (term.length < 2 || term[1] != '.')
-                            return -1;
-                        e = 1;
-                        offset = 2;
-                        while (offset < term.length)
-                        {
-                            if (term[offset] == '1')
-                                break;
-                            if (term[offset] != '0')
-                                return -1;
-                            ++e;
-                            ++offset;
-                        }
-                        ++offset;
-                        e = -e;
-                    }
-                    else if (term[0] == '1')
-                    {
-                        offset = 1;
-                        while (offset < term.length)
-                        {
-                            if (term[offset] != '0')
-                                break;
-                            ++e;
-                            ++offset;
-                        }
-                    }
-                    else
-                        return -1;
+                    ulong sf = term.parse_uint_with_exponent(e, &offset);
+                    preScale *= sf;
                 }
 
                 if (offset == term.length)

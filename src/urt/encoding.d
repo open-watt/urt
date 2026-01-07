@@ -8,10 +8,10 @@ enum HexDecode(string str) =    () { ubyte[hex_decode_length(str.length)] r;    
 enum URLDecode(string str) =    () {  char[url_decode_length(str)] r;           size_t len = url_decode(str, r[]);    assert(len == r.sizeof, "Not a URL encoded string: " ~ str); return r; }();
 
 
-ptrdiff_t base64_encode_length(size_t source_length) pure
+size_t base64_encode_length(size_t source_length) pure
     => (source_length + 2) / 3 * 4;
 
-ptrdiff_t base64_encode_length(const void[] data) pure
+size_t base64_encode_length(const void[] data) pure
     => base64_encode_length(data.length);
 
 ptrdiff_t base64_encode(const void[] data, char[] result) pure
@@ -58,10 +58,10 @@ ptrdiff_t base64_encode(const void[] data, char[] result) pure
     return out_len;
 }
 
-ptrdiff_t base64_decode_length(size_t source_length) pure
+size_t base64_decode_length(size_t source_length) pure
     => source_length / 4 * 3;
 
-ptrdiff_t base64_decode_length(const char[] data) pure
+size_t base64_decode_length(const char[] data) pure
     => base64_decode_length(data.length);
 
 ptrdiff_t base64_decode(const char[] data, void[] result) pure
@@ -143,10 +143,10 @@ unittest
     assert(data[0..10] == decoded[0..10]);
 }
 
-ptrdiff_t hex_encode_length(size_t sourceLength) pure
+size_t hex_encode_length(size_t sourceLength) pure
     => sourceLength * 2;
 
-ptrdiff_t hex_encode_length(const void[] data) pure
+size_t hex_encode_length(const void[] data) pure
     => data.length * 2;
 
 ptrdiff_t hex_encode(const void[] data, char[] result) pure
@@ -157,10 +157,10 @@ ptrdiff_t hex_encode(const void[] data, char[] result) pure
     return toHexString(data, result).length;
 }
 
-ptrdiff_t hex_decode_length(size_t sourceLength) pure
+size_t hex_decode_length(size_t sourceLength) pure
     => sourceLength / 2;
 
-ptrdiff_t hex_decode_length(const char[] data) pure
+size_t hex_decode_length(const char[] data) pure
     => data.length / 2;
 
 ptrdiff_t hex_decode(const char[] data, void[] result) pure
@@ -212,7 +212,7 @@ unittest
 }
 
 
-ptrdiff_t url_encode_length(const char[] data) pure
+size_t url_encode_length(const char[] data) pure
 {
     import urt.string.ascii : is_url;
 
@@ -255,7 +255,7 @@ ptrdiff_t url_encode(const char[] data, char[] result) pure
     return j;
 }
 
-ptrdiff_t url_decode_length(const char[] data) pure
+size_t url_decode_length(const char[] data) pure
 {
     size_t len = 0;
     for (size_t i = 0; i < data.length;)

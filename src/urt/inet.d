@@ -114,7 +114,7 @@ nothrow @nogc:
             return fnv1a(b[]);
     }
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const pure
     {
         char[15] stack_buffer = void;
         char[] tmp = buffer.length < stack_buffer.sizeof ? stack_buffer : buffer;
@@ -123,7 +123,7 @@ nothrow @nogc:
         {
             if (i > 0)
                 tmp[offset++] = '.';
-            offset += b[i].format_int(tmp[offset..$]);
+            offset += b[i].format_uint(tmp[offset..$]);
         }
 
         if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
@@ -139,22 +139,22 @@ nothrow @nogc:
     {
         ubyte[4] t;
         size_t offset = 0, len;
-        ulong i = s[offset..$].parse_int(&len);
+        ulong i = s[offset..$].parse_uint(&len);
         offset += len;
         if (len == 0 || i > 255 || s.length < offset + 1 || s[offset++] != '.')
             return -1;
         t[0] = cast(ubyte)i;
-        i = s[offset..$].parse_int(&len);
+        i = s[offset..$].parse_uint(&len);
         offset += len;
         if (len == 0 || i > 255 || s.length < offset + 1 || s[offset++] != '.')
             return -1;
         t[1] = cast(ubyte)i;
-        i = s[offset..$].parse_int(&len);
+        i = s[offset..$].parse_uint(&len);
         offset += len;
         if (len == 0 || i > 255 || s.length < offset + 1 || s[offset++] != '.')
             return -1;
         t[2] = cast(ubyte)i;
-        i = s[offset..$].parse_int(&len);
+        i = s[offset..$].parse_uint(&len);
         offset += len;
         if (len == 0 || i > 255)
             return -1;
@@ -297,7 +297,7 @@ nothrow @nogc:
                     tmp[offset++] = ':';
                 continue;
             }
-            offset += s[i].format_int(tmp[offset..$], 16);
+            offset += s[i].format_uint(tmp[offset..$], 16);
             ++i;
         }
 
@@ -338,7 +338,7 @@ nothrow @nogc:
             }
             if (str[offset] == ':')
                 return -1;
-            ulong i = str[offset..$].parse_int(&len, 16);
+            ulong i = str[offset..$].parse_uint(&len, 16);
             if (len == 0)
                 break;
             if (i > ushort.max || count[0] + count[1] == 8)
@@ -418,7 +418,7 @@ nothrow @nogc:
 
         size_t offset = addr.toString(tmp, null, null);
         tmp[offset++] = '/';
-        offset += prefix_len.format_int(tmp[offset..$]);
+        offset += prefix_len.format_uint(tmp[offset..$]);
 
         if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
         {
@@ -436,7 +436,7 @@ nothrow @nogc:
         if (taken < 0 || s.length <= taken + 1 || s[taken++] != '/')
             return -1;
         size_t t;
-        ulong plen = s[taken..$].parse_int(&t);
+        ulong plen = s[taken..$].parse_uint(&t);
         if (t == 0 || plen > 32)
             return -1;
         addr = a;
@@ -515,7 +515,7 @@ nothrow @nogc:
 
         size_t offset = addr.toString(tmp, null, null);
         tmp[offset++] = '/';
-        offset += prefix_len.format_int(tmp[offset..$]);
+        offset += prefix_len.format_uint(tmp[offset..$]);
 
         if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
         {
@@ -533,7 +533,7 @@ nothrow @nogc:
         if (taken < 0 || s.length <= taken + 1 || s[taken++] != '/')
             return -1;
         size_t t;
-        ulong plen = s[taken..$].parse_int(&t);
+        ulong plen = s[taken..$].parse_uint(&t);
         if (t == 0 || plen > 128)
             return -1;
         addr = a;
@@ -665,7 +665,7 @@ nothrow @nogc:
         {
             offset = _a.ipv4.addr.toString(tmp, null, null);
             tmp[offset++] = ':';
-            offset += _a.ipv4.port.format_int(tmp[offset..$]);
+            offset += _a.ipv4.port.format_uint(tmp[offset..$]);
         }
         else
         {
@@ -673,7 +673,7 @@ nothrow @nogc:
             offset = 1 + _a.ipv6.addr.toString(tmp[1 .. $], null, null);
             tmp[offset++] = ']';
             tmp[offset++] = ':';
-            offset += _a.ipv6.port.format_int(tmp[offset..$]);
+            offset += _a.ipv6.port.format_uint(tmp[offset..$]);
         }
 
         if (buffer.ptr && tmp.ptr == stack_buffer.ptr)
@@ -720,7 +720,7 @@ nothrow @nogc:
         if (s.length > taken && s[taken] == ':')
         {
             size_t t;
-            ulong p = s[++taken..$].parse_int(&t);
+            ulong p = s[++taken..$].parse_uint(&t);
             if (t == 0 || p > ushort.max)
                 return -1;
             taken += t;

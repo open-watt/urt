@@ -7,28 +7,26 @@ import urt.util;
 
 public import urt.mem.temp : tformat, tconcat, tstring;
 
-
 nothrow @nogc:
 
 debug
 {
+    // format functions are not re-entrant!
     static bool InFormatFunction = false;
 }
 
 alias StringifyFunc = ptrdiff_t delegate(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc;
-alias IntifyFunc = ptrdiff_t delegate() nothrow @nogc;
 
 
-ptrdiff_t toString(T)(auto ref T value, char[] buffer)
+ptrdiff_t toString(T)(auto ref T value, char[] buffer, const(char)[] format = null, const(FormatArg)[] formatArgs = null)
 {
-    import urt.string.format : FormatArg;
-
     debug InFormatFunction = true;
-    FormatArg a = FormatArg(value);
-    ptrdiff_t r = a.getString(buffer, null, null);
+    ptrdiff_t r = get_to_string_func(value)(buffer, null, null);
     debug InFormatFunction = false;
     return r;
 }
+
+alias formatValue = toString; // TODO: remove me?
 
 char[] concat(Args...)(char[] buffer, auto ref Args args)
 {
@@ -83,11 +81,10 @@ char[] concat(Args...)(char[] buffer, auto ref Args args)
         // this implementation handles all the other kinds of things!
 
         debug if (!__ctfe) InFormatFunction = true;
-        FormatArg[Args.length] argFuncs;
-        // TODO: no need to collect int-ify functions in the arg set...
+        StringifyFunc[Args.length] arg_funcs = void;
         static foreach(i, arg; args)
-            argFuncs[i] = FormatArg(arg);
-        char[] r = concatImpl(buffer, argFuncs);
+            arg_funcs[i] = get_to_string_func(arg);
+        char[] r = concatImpl(buffer, arg_funcs);
         debug if (!__ctfe) InFormatFunction = false;
         return r;
     }
@@ -104,85 +101,145 @@ char[] format(Args...)(char[] buffer, const(char)[] fmt, ref Args args)
     return r;
 }
 
-ptrdiff_t formatValue(T)(auto ref T value, char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs)
-{
-    static if (is(typeof(&value.toString) : StringifyFunc))
-        return value.toString(buffer, format, formatArgs);
-    else
-        return value.defFormat.toString(buffer, format, formatArgs);
-}
-
 struct FormatArg
 {
-    enum IsAggregate(T) = is(T == struct) || is(T == class);
-
     private this(T)(ref T value) pure nothrow @nogc
     {
-        static if (IsAggregate!T && is(typeof(&value.toString) : StringifyFunc))
-            toString = &value.toString;
-        else static if (IsAggregate!T && is(typeof(&value.toString!()) : StringifyFunc))
-            toString = &value.toString!();
-        else static if (IsAggregate!T && __traits(compiles, value.toString(buffer, "format", cast(FormatArg[])null) == 0))
-        {
-            // wrap in a delegate that adjusts for format + args...
-            static assert(false);
-        }
-        else static if (IsAggregate!T && __traits(compiles, value.toString(buffer, "format") == 0))
-        {
-            // wrap in a delegate that adjusts for format...
-            static assert(false);
-        }
-        else static if (IsAggregate!T && __traits(compiles, value.toString(buffer) == 0))
-        {
-            // wrap in a delegate...
-            static assert(false);
-        }
-        else static if (IsAggregate!T && __traits(compiles, value.toString((const(char)[]){}) == 0))
-        {
-            // version with a sink function...
-            // wrap in a delegate that adjusts for format + args...
-            static assert(false);
-        }
-        else
-            toString = &defFormat(value).toString;
+        getString = get_to_string_func(value);
 
-        static if (is(typeof(&defFormat(value).toInt)))
-            toInt = &defFormat(value).toInt;
-        else
-            toInt = null;
+        static if (can_default_int!T)
+            _to_int_fun = &DefInt!T.to_int;
     }
 
-    ptrdiff_t getString(char[] buffer, const(char)[] format, const(FormatArg)[] args) const nothrow @nogc
-        => toString(buffer, format, args);
+    StringifyFunc getString;
 
     ptrdiff_t getLength(const(char)[] format, const(FormatArg)[] args) const nothrow @nogc
         => getString(null, format, args);
 
-    bool canInt() const nothrow @nogc
-        => toInt != null;
+    bool canInt() const pure nothrow @nogc
+        => _to_int_fun !is null;
 
-    ptrdiff_t getInt() const nothrow @nogc
-        => toInt();
+    ptrdiff_t getInt() const pure nothrow @nogc
+    {
+        ptrdiff_t delegate() pure nothrow @nogc to_int;
+        to_int.ptr = getString.ptr;
+        to_int.funcptr = _to_int_fun;
+        return to_int();
+    }
 
 private:
-    // TODO: we could assert that the delegate pointers match, and only store it once...
-    StringifyFunc toString;
-    IntifyFunc toInt;
+    // only store the function pointer, since 'this' will be common
+    ptrdiff_t function() pure nothrow @nogc _to_int_fun;
 }
 
 
 private:
 
-pragma(inline, true)
-DefFormat!T* defFormat(T)(ref const(T) value) pure nothrow @nogc
+alias StringifyFuncReduced = ptrdiff_t delegate(char[] buffer, const(char)[] format) nothrow @nogc;
+alias StringifyFuncReduced2 = ptrdiff_t delegate(char[] buffer) nothrow @nogc;
+
+enum can_default_int(T) = is_some_int!T || is(T == bool);
+
+template to_string_overload_index(T)
 {
-    return cast(DefFormat!T*)&value;
+    static if (!is(T == Unqual!T)) // minimise redundant instantiations
+        enum to_string_overload_index = to_string_overload_index!(Unqual!T);
+    else
+        enum to_string_overload_index = () {
+            static if (__traits(hasMember, T, "toString"))
+            {
+                // multiple passes so that we correctly preference the overload with more arguments...
+                static foreach (i, overload; __traits(getOverloads, T, "toString", true))
+                {
+                    static if (is(typeof(&overload) : typeof(StringifyFunc.funcptr)))
+                        return i;
+                    else static if (is(typeof(&overload!()) : typeof(StringifyFunc.funcptr)))
+                        return i;
+                }
+                static foreach (i, overload; __traits(getOverloads, T, "toString", true))
+                {
+                    static if (is(typeof(&overload) : typeof(StringifyFuncReduced.funcptr)))
+                        return i;
+                    else static if (is(typeof(&overload!()) : typeof(StringifyFuncReduced.funcptr)))
+                        return i;
+                }
+                static foreach (i, overload; __traits(getOverloads, T, "toString", true))
+                {
+                    static if (is(typeof(&overload) : typeof(StringifyFuncReduced2.funcptr)))
+                        return i;
+                    else static if (is(typeof(&overload!()) : typeof(StringifyFuncReduced2.funcptr)))
+                        return i;
+                }
+            }
+            return -1;
+        }();
+}
+
+StringifyFunc get_to_string_func(T)(ref T value)
+{
+    enum overload_index = to_string_overload_index!T;
+
+    static if (overload_index >= 0)
+    {
+        static if (is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]) : StringifyFunc))
+            return &__traits(getOverloads, value, "toString", true)[overload_index];
+
+        // TODO: if toString is a template, we need to instantiate it and then captuire the function pointer...
+
+        static if (is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]) : StringifyFuncReduced))// ||
+//                   is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]!()) : StringifyFuncReduced))
+        {
+            StringifyFunc d;
+            d.ptr = &value;
+            d.funcptr = &ToStringShim.shim1!T;
+            return d;
+        }
+
+        static if (is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]) : StringifyFuncReduced2))// ||
+//                   is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]!()) : StringifyFuncReduced2))
+        {
+            StringifyFunc d;
+            d.ptr = &value;
+            d.funcptr = &ToStringShim.shim2!T;
+            return d;
+        }
+
+        // TODO: do we want to support toString variants with sink instead of buffer?
+
+        return null;
+    }
+    else
+        return &(cast(DefFormat!T*)&value).toString;
+}
+
+struct ToStringShim
+{
+    ptrdiff_t shim1(T)(char[] buffer, const(char)[] format, const(FormatArg)[])
+    {
+        ref T _this = *cast(T*)&this;
+        return _this.toString(buffer, format);
+    }
+    ptrdiff_t shim2(T)(char[] buffer, const(char)[], const(FormatArg)[])
+    {
+        ref T _this = *cast(T*)&this;
+        return _this.toString(buffer);
+    }
+}
+
+struct DefInt(T)
+{
+    T value;
+
+    ptrdiff_t to_int() const pure nothrow @nogc
+    {
+        static if (T.max > ptrdiff_t.max)
+            debug assert(value <= ptrdiff_t.max);
+        return cast(ptrdiff_t)value;
+    }
 }
 
 ptrdiff_t defToString(T)(ref const(T) value, char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc
-{
-    return (cast(DefFormat!T*)&value).toString(buffer, format, formatArgs);
-}
+    => (cast(DefFormat!T*)&value).toString(buffer, format, formatArgs);
 
 struct DefFormat(T)
 {
@@ -588,6 +645,8 @@ struct DefFormat(T)
         }
         else static if (is(T == struct))
         {
+            static assert(!__traits(hasMember, T, "toString"), "Struct with custom toString not properly selected!");
+
             // general structs
             if (buffer.ptr)
             {
@@ -645,24 +704,14 @@ struct DefFormat(T)
         else
             static assert(false, "Not implemented for type: ", T.stringof);
     }
-
-    static if (is_some_int!T || is(T == bool))
-    {
-        ptrdiff_t toInt() const pure nothrow @nogc
-        {
-            static if (T.max > ptrdiff_t.max)
-                debug assert(value <= ptrdiff_t.max);
-            return cast(ptrdiff_t)value;
-        }
-    }
 }
 
-char[] concatImpl(char[] buffer, const(FormatArg)[] args) nothrow @nogc
+char[] concatImpl(char[] buffer, const(StringifyFunc)[] args) nothrow @nogc
 {
     size_t len = 0;
     foreach (a; args)
     {
-        ptrdiff_t r = a.getString(buffer.ptr ? buffer[len..$] : null, null, null);
+        ptrdiff_t r = a(buffer.ptr ? buffer[len..$] : null, null, null);
         if (r < 0)
             return null;
         len += r;

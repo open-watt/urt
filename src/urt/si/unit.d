@@ -690,13 +690,27 @@ nothrow:
         {
             if (siScale && exp == -2)
             {
-                if (buffer.length == 0)
-                    return -1;
-                buffer[0] = '%';
+                if (buffer.ptr)
+                {
+                    if (buffer.length == 0)
+                        return -1;
+                    buffer[0] = '%';
+                }
                 return 1;
             }
+            else if (siScale && exp == -3)
+            {
+                enum pm_len = "‰".length;
+                if (buffer.ptr)
+                {
+                    if (buffer.length < pm_len)
+                        return -1;
+                    buffer[0..pm_len] = "‰";
+                }
+                return pm_len;
+            }
             else
-                assert(false, "TODO!");
+                assert(false, "TODO!"); // how (or should?) we encode a scale as a unit type?
         }
 
         size_t len = 0;
@@ -711,18 +725,24 @@ nothrow:
                 {
                     if (y == 1)
                     {
-                        if (buffer.length < 2)
-                            return -1;
+                        if (buffer.ptr)
+                        {
+                            if (buffer.length < 2)
+                                return -1;
+                            buffer[0..2] = "10";
+                        }
                         --x;
-                        buffer[0..2] = "10";
                         len += 2;
                     }
                     else
                     {
-                        if (buffer.length < 3)
-                            return -1;
+                        if (buffer.ptr)
+                        {
+                            if (buffer.length < 3)
+                                return -1;
+                            buffer[0..3] = "100";
+                        }
                         x -= 2;
-                        buffer[0..3] = "100";
                         len += 3;
                     }
                 }
@@ -730,17 +750,24 @@ nothrow:
 
                 if (x != 0)
                 {
-                    if (buffer.length <= len)
-                        return -1;
-                    buffer[len++] = "qryzafpnum kMGTPEZYRQ"[x/3 + 10];
+                    if (buffer.ptr)
+                    {
+                        if (buffer.length <= len)
+                            return -1;
+                        buffer[len] = "qryzafpnum kMGTPEZYRQ"[x/3 + 10];
+                    }
+                    ++len;
                 }
             }
 
             if (const string* name = unit in unitNames)
             {
-                if (buffer.length < len + name.length)
-                    return -1;
-                buffer[len .. len + name.length] = *name;
+                if (buffer.ptr)
+                {
+                    if (buffer.length < len + name.length)
+                        return -1;
+                    buffer[len .. len + name.length] = *name;
+                }
                 len += name.length;
             }
             else
@@ -753,9 +780,12 @@ nothrow:
         {
             if (const string* name = this in scaledUnitNames)
             {
-                if (buffer.length < len + name.length)
-                    return -1;
-                buffer[len .. len + name.length] = *name;
+                if (buffer.ptr)
+                {
+                    if (buffer.length < len + name.length)
+                        return -1;
+                    buffer[len .. len + name.length] = *name;
+                }
                 len += name.length;
             }
             else
@@ -775,7 +805,6 @@ nothrow:
             return -1;
         return r;
     }
-
 
     size_t toHash() const pure
         => pack;

@@ -181,26 +181,27 @@ StringifyFunc get_to_string_func(T)(ref T value)
 
     static if (overload_index >= 0)
     {
-        static if (is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]) : StringifyFunc))
-            return &__traits(getOverloads, value, "toString", true)[overload_index];
+        alias overload = __traits(getOverloads, T, "toString", true)[overload_index];
+        static if (__traits(isTemplate, overload))
+            alias to_string = overload!();
+        else
+            alias to_string = overload;
 
-        // TODO: if toString is a template, we need to instantiate it and then captuire the function pointer...
+        // TODO: we can't alias the __traits(child) expression, so we need to repeat it everywhere!
 
-        static if (is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]) : StringifyFuncReduced))// ||
-//                   is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]!()) : StringifyFuncReduced))
+        alias method_type = typeof(&__traits(child, value, to_string));
+
+        static if (is(method_type : StringifyFunc))
+            return &__traits(child, value, to_string);
+
+        else static if (is(method_type : StringifyFuncReduced) || is(method_type : StringifyFuncReduced2))
         {
             StringifyFunc d;
             d.ptr = &value;
-            d.funcptr = &ToStringShim.shim1!T;
-            return d;
-        }
-
-        static if (is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]) : StringifyFuncReduced2))// ||
-//                   is(typeof(&__traits(getOverloads, value, "toString", true)[overload_index]!()) : StringifyFuncReduced2))
-        {
-            StringifyFunc d;
-            d.ptr = &value;
-            d.funcptr = &ToStringShim.shim2!T;
+            static if (is(method_type : StringifyFuncReduced))
+                d.funcptr = &ToStringShim.shim1!T;
+            else
+                d.funcptr = &ToStringShim.shim2!T;
             return d;
         }
 

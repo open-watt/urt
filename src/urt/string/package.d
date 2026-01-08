@@ -459,19 +459,66 @@ unittest
 }
 
 
-bool wildcardMatch(const(char)[] wildcard, const(char)[] value) pure
+bool wildcard_match(const(char)[] wildcard, const(char)[] value, bool value_wildcard = false) pure
 {
-    // TODO: write this function...
+    const(char)* a = wildcard.ptr, ae = a + wildcard.length, b = value.ptr, be = b + value.length;
+    const(char)* star_a = null, star_b = null;
 
-    // HACK: we just use this for tail wildcards right now...
-    for (size_t i = 0; i < wildcard.length; ++i)
+    while (a < ae && b < be)
     {
-        if (wildcard[i] == '*')
-            return true;
-        if (wildcard[i] != value[i])
+        char ca_orig = *a, cb_orig = *b;
+        char ca = ca_orig, cb = cb_orig;
+
+        // handle escape
+        if (ca == '\\' && a + 1 < ae)
+            ca = *++a;
+        if (value_wildcard && cb == '\\' && b + 1 < be)
+            cb = *++b;
+
+        // handle wildcards
+        if (ca_orig == '*')
+        {
+            star_a = ++a;
+            star_b = b;
+            continue;
+        }
+        if (value_wildcard && cb_orig == '*')
+        {
+            star_b = ++b;
+            star_a = a;
+            continue;
+        }
+
+        // compare next char
+        if (ca_orig == '?' || (value_wildcard && cb_orig == '?') || ca == cb)
+        {
+            ++a;
+            ++b;
+            continue;
+        }
+
+        // backtrack: expand previous * match
+        if (!star_a)
             return false;
+        a = star_a;
+        b = ++star_b;
     }
-    return wildcard.length == value.length;
+
+    // skip past tail wildcards
+    while (a < ae && *a == '*')
+        ++a;
+    if (value_wildcard)
+    {
+        while (b < be && *b == '*')
+            ++b;
+    }
+
+    // check for match
+    if (a == ae && (b == be || star_a !is null))
+        return true;
+    if (value_wildcard && b == be && star_b !is null)
+        return true;
+    return false;
 }
 
 
@@ -500,4 +547,106 @@ unittest
     assert("HÉLLO".contains('É'));
     assert(!"HÉLLO".contains('A'));
     assert("HÉLLO".contains_i("éll"));
+
+    // test wildcard_match
+    assert(wildcard_match("hello", "hello"));
+    assert(!wildcard_match("hello", "world"));
+    assert(wildcard_match("h*o", "hello"));
+    assert(wildcard_match("h*", "hello"));
+    assert(wildcard_match("*o", "hello"));
+    assert(wildcard_match("*", "hello"));
+    assert(wildcard_match("h?llo", "hello"));
+    assert(!wildcard_match("h?llo", "hllo"));
+    assert(wildcard_match("h??lo", "hello"));
+    assert(!wildcard_match("a*b", "axxxc"));
+
+    // multiple wildcards
+    assert(wildcard_match("*l*o", "hello"));
+    assert(wildcard_match("h*l*o", "hello"));
+    assert(wildcard_match("h*l*", "hello"));
+    assert(wildcard_match("*e*l*", "hello"));
+    assert(wildcard_match("*h*e*l*l*o*", "hello"));
+
+    // wildcards with sequences in between
+    assert(wildcard_match("h*ll*", "hello"));
+    assert(wildcard_match("*el*", "hello"));
+    assert(wildcard_match("h*el*o", "hello"));
+    assert(!wildcard_match("h*el*x", "hello"));
+    assert(wildcard_match("*lo", "hello"));
+    assert(!wildcard_match("*lx", "hello"));
+
+    // mixed wildcards and single matches
+    assert(wildcard_match("h?*o", "hello"));
+    assert(wildcard_match("h*?o", "hello"));
+    assert(wildcard_match("?e*o", "hello"));
+    assert(wildcard_match("h?ll?", "hello"));
+    assert(!wildcard_match("h?ll?", "hllo"));
+
+    // overlapping wildcards
+    assert(wildcard_match("**hello", "hello"));
+    assert(wildcard_match("hello**", "hello"));
+    assert(wildcard_match("h**o", "hello"));
+    assert(wildcard_match("*?*", "hello"));
+    assert(wildcard_match("?*?", "hello"));
+    assert(!wildcard_match("?*?", "x"));
+    assert(wildcard_match("?*?", "xx"));
+
+    // escape sequences
+    assert(wildcard_match("\\*", "*"));
+    assert(wildcard_match("\\?", "?"));
+    assert(wildcard_match("\\\\", "\\"));
+    assert(!wildcard_match("\\*", "a"));
+    assert(wildcard_match("h\\*o", "h*o"));
+    assert(!wildcard_match("h\\*o", "hello"));
+    assert(wildcard_match("\\*\\?\\\\", "*?\\"));
+    assert(wildcard_match("a\\*b*c", "a*bxyzc"));
+    assert(wildcard_match("*\\**", "hello*world"));
+
+    // edge cases
+    assert(wildcard_match("", ""));
+    assert(!wildcard_match("", "a"));
+    assert(wildcard_match("*", ""));
+    assert(wildcard_match("**", ""));
+    assert(!wildcard_match("?", ""));
+    assert(wildcard_match("a*b*c", "abc"));
+    assert(wildcard_match("a*b*c", "aXbYc"));
+    assert(wildcard_match("a*b*c", "aXXbYYc"));
+
+    // value_wildcard tests - bidirectional matching
+    assert(wildcard_match("hello", "h*o", true));
+    assert(wildcard_match("h*o", "hello", true));
+    assert(wildcard_match("h?llo", "he?lo", true));
+    assert(wildcard_match("h\\*o", "h\\*o", true));
+    assert(wildcard_match("test*", "*test", true));
+
+    // both sides have wildcards
+    assert(wildcard_match("h*o", "h*o", true));
+    assert(wildcard_match("*hello*", "*world*", true));
+    assert(wildcard_match("a*b*c", "a*b*c", true));
+    assert(wildcard_match("*", "*", true));
+    assert(wildcard_match("?", "?", true));
+
+    // complex interplay - wildcards matching wildcards
+    assert(wildcard_match("a*c", "a?c", true));
+    assert(wildcard_match("a?c", "a*c", true));
+    assert(wildcard_match("*abc", "?abc", true));
+    assert(wildcard_match("abc*", "abc?", true));
+
+    // multiple wildcards on both sides
+    assert(wildcard_match("a*b*c", "a?b?c", true));
+    assert(wildcard_match("*a*b*", "?a?b?", true));
+    assert(wildcard_match("a**b", "a*b", true));
+    assert(wildcard_match("a*b", "a**b", true));
+
+    // wildcards at different positions
+    assert(wildcard_match("*test", "test*", true));
+    assert(wildcard_match("test*end", "*end", true));
+    assert(wildcard_match("*middle*", "start*", true));
+
+    // edge cases with value_wildcard
+    assert(wildcard_match("", "", true));
+    assert(wildcard_match("*", "", true));
+    assert(wildcard_match("", "*", true));
+    assert(wildcard_match("**", "*", true));
+    assert(wildcard_match("*", "**", true));
 }

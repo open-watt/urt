@@ -459,67 +459,185 @@ unittest
 }
 
 
-bool wildcard_match(const(char)[] wildcard, const(char)[] value, bool value_wildcard = false) pure
+// Pattern grammar:
+//   *     - Match zero or more characters
+//   ?     - Match exactly one character
+//   #     - Match exactly one digit (0-9)
+//   ~T    - Token T is optional (matches with or without T)
+//   \C    - Escape character C (literal match)
+// Examples:
+//   "h*o"    matches "hello", "ho"
+//   "h?llo"  matches "hello", "hallo" but not "hllo"
+//   "v#.#"   matches "v1.2", "v3.7" but not "va.b"
+//   "~ab"    matches "ab", "b"
+//   "h\*o"   matches "h*o" literally
+bool wildcard_match(const(char)[] wildcard, const(char)[] value, bool value_wildcard = false, bool case_insensitive = false) pure
 {
     const(char)* a = wildcard.ptr, ae = a + wildcard.length, b = value.ptr, be = b + value.length;
-    const(char)* star_a = null, star_b = null;
+
+    static inout(char)* skip_wilds(inout(char)* p, const(char)* pe)
+    {
+        while (p < pe)
+        {
+            if (*p == '*')
+                ++p;
+            else if (*p == '~')
+            {
+            one_more:
+                if (++p < pe)
+                {
+                    if (*p == '~')
+                        goto one_more;
+                    if (*p++ == '\\' && p < pe)
+                        ++p;
+                }
+            }
+            else break;
+        }
+        // HACK: skip trailing slash (handle a degenerate case)
+        if (p == pe - 1 && *p == '\\')
+            ++p;
+        return p;
+    }
+
+    struct BacktrackState
+    {
+        const(char)* a, b;
+    }
+    BacktrackState[64] backtrack_stack = void;
+    size_t backtrack_depth = 0;
+
+    char ca_orig = void, cb_orig = void, ca = void, cb = void;
 
     while (a < ae && b < be)
     {
-        char ca_orig = *a, cb_orig = *b;
-        char ca = ca_orig, cb = cb_orig;
-
-        // handle escape
-        if (ca == '\\' && a + 1 < ae)
-            ca = *++a;
-        if (value_wildcard && cb == '\\' && b + 1 < be)
-            cb = *++b;
+        ca_orig = *a, cb_orig = *b;
 
         // handle wildcards
         if (ca_orig == '*')
         {
-            star_a = ++a;
-            star_b = b;
+            a = skip_wilds(++a, ae);
+            if (a == ae) // tail star matches everything
+                return true;
+
+            const(char)[] a_remain = a[0 .. ae - a];
+            for (; b <= be; ++b)
+            {
+                if (wildcard_match(a_remain, b[0 .. be - b], value_wildcard, case_insensitive))
+                    return true;
+            }
+            return false;
+        }
+
+        // handle optionals
+        if (ca_orig == '~')
+        {
+            while (++a < ae && *a == '~') {}
+            if (a == ae)
+                break;
+
+            if (backtrack_depth < backtrack_stack.length)
+            {
+                backtrack_stack[backtrack_depth].a = a + (*a == '\\' ? 2 : 1);
+                backtrack_stack[backtrack_depth].b = b;
+                ++backtrack_depth;
+            }
             continue;
         }
-        if (value_wildcard && cb_orig == '*')
+
+        // handle escape
+        ca = ca_orig, cb = cb_orig;
+        if (ca == '\\')
         {
-            star_b = ++b;
-            star_a = a;
-            continue;
+            if (++a < ae)
+                ca = *a;
+            else
+                break;
+        }
+
+        // handle value wildcards
+        if (value_wildcard)
+        {
+            if (cb_orig == '*')
+            {
+                b = skip_wilds(++b, be);
+                if (b == be) // tail star matches everything
+                    return true;
+
+                const(char)[] b_remain = b[0 .. be - b];
+                for (; a <= ae; ++a)
+                {
+                    if (wildcard_match(a[0 .. ae - a], b_remain, true, case_insensitive))
+                        return true;
+                }
+                return false;
+            }
+            if (cb_orig == '~')
+            {
+                while (++b < be && *b == '~') {}
+                if (b == be)
+                    break;
+
+                if (backtrack_depth < backtrack_stack.length)
+                {
+                    backtrack_stack[backtrack_depth].a = a;
+                    backtrack_stack[backtrack_depth].b = b + (*b == '\\' ? 2 : 1);
+                    ++backtrack_depth;
+                }
+                continue;
+            }
+            if (cb == '\\')
+            {
+                if (++b < be)
+                    cb = *b;
+                else
+                    break;
+            }
+            if (cb_orig == '#')
+            {
+                if (ca.is_numeric || ca_orig == '#')
+                    goto advance;
+            }
         }
 
         // compare next char
-        if (ca_orig == '?' || (value_wildcard && cb_orig == '?') || ca == cb)
+        if (ca_orig == '#')
         {
-            ++a;
-            ++b;
-            continue;
+            if (cb.is_numeric)
+                goto advance;
         }
+        else if ((case_insensitive ? ca.to_lower == cb.to_lower : ca == cb) || (ca_orig == '?') || (value_wildcard && cb_orig == '?'))
+            goto advance;
 
-        // backtrack: expand previous * match
-        if (!star_a)
+    try_backtrack:
+        if (backtrack_depth == 0)
             return false;
-        a = star_a;
-        b = ++star_b;
+
+        --backtrack_depth;
+        a = backtrack_stack[backtrack_depth].a;
+        b = backtrack_stack[backtrack_depth].b;
+        continue;
+
+    advance:
+        ++a, ++b;
     }
 
-    // skip past tail wildcards
-    while (a < ae && *a == '*')
-        ++a;
-    if (value_wildcard)
+    // check the strings are equal...
+    if (a == ae)
     {
-        while (b < be && *b == '*')
-            ++b;
+        if (value_wildcard)
+            b = skip_wilds(b, be);
+        if (b == be)
+            return true;
     }
+    else if (b == be && skip_wilds(a, ae) == ae)
+        return true;
 
-    // check for match
-    if (a == ae && (b == be || star_a !is null))
-        return true;
-    if (value_wildcard && b == be && star_b !is null)
-        return true;
-    return false;
+    goto try_backtrack;
 }
+
+bool wildcard_match_i(const(char)[] wildcard, const(char)[] value, bool value_wildcard = false) pure
+    => wildcard_match(wildcard, value, value_wildcard, true);
 
 
 unittest
@@ -560,6 +678,149 @@ unittest
     assert(wildcard_match("h??lo", "hello"));
     assert(!wildcard_match("a*b", "axxxc"));
 
+    // test optional - basic cases
+    assert(wildcard_match("~ab", "b"));
+    assert(wildcard_match("~ab", "ab"));
+    assert(wildcard_match("a~b", "a"));
+    assert(wildcard_match("a~b", "ab"));
+    assert(!wildcard_match("~ab", "a"));
+    assert(!wildcard_match("a~b", "b"));
+    assert(!wildcard_match("a~b", "ac"));
+
+    // optional - multiple optionals
+    assert(wildcard_match("~a~b", ""));
+    assert(wildcard_match("~a~b", "a"));
+    assert(wildcard_match("~a~b", "b"));
+    assert(wildcard_match("~a~b", "ab"));
+    assert(!wildcard_match("~a~b", "ba"));
+    assert(wildcard_match("~a~b~c", ""));
+    assert(wildcard_match("~a~b~c", "ac"));
+    assert(wildcard_match("~a~b~c", "abc"));
+
+    // optional with wildcards
+    assert(wildcard_match("~a*", ""));
+    assert(wildcard_match("~a*", "a"));
+    assert(wildcard_match("~a*", "abc"));
+    assert(wildcard_match("*~a", ""));
+    assert(wildcard_match("*~a", "a"));
+    assert(wildcard_match("*~a", "xya"));
+    assert(wildcard_match("a~b*c", "ac"));
+    assert(wildcard_match("a~b*c", "abc"));
+    assert(wildcard_match("a~b*c", "abxc"));
+    assert(wildcard_match("a~b*c", "axbc"));
+    assert(!wildcard_match("a*~bc", "a"));
+    assert(wildcard_match("a*~bc", "ac"));
+    assert(wildcard_match("a*~bc", "abc"));
+    assert(wildcard_match("a*~bc", "axbc"));
+
+    // optional with ?
+    assert(wildcard_match("~a?", "a"));
+    assert(wildcard_match("~a?", "x"));
+    assert(wildcard_match("~a?", "ax"));
+    assert(wildcard_match("?~a", "x"));
+    assert(wildcard_match("?~a", "xa"));
+    assert(wildcard_match("?~a", "a"));
+    assert(wildcard_match("?~a", "aa"));
+
+    // optional with #
+    assert(wildcard_match("~a#", "5"));
+    assert(wildcard_match("~a#", "a5"));
+    assert(!wildcard_match("~a#", "a"));
+    assert(!wildcard_match("~a#", "ax"));
+    assert(wildcard_match("v~#.#", "v.5"));
+    assert(wildcard_match("v~#.#", "v1.5"));
+
+    // optional with escape
+    assert(wildcard_match("~\\*", ""));
+    assert(wildcard_match("~\\*", "*"));
+    assert(!wildcard_match("~\\*", "x"));
+    assert(wildcard_match("a~\\*b", "ab"));
+    assert(wildcard_match("a~\\*b", "a*b"));
+    assert(!wildcard_match("a~\\*b", "axb"));
+
+    // double optional ~~
+    assert(wildcard_match("~~a", ""));
+    assert(wildcard_match("~~a", "a"));
+    assert(!wildcard_match("~~a", "aa"));
+
+    // degenerates
+    assert(wildcard_match("a\\", "a"));
+    assert(!wildcard_match("a\\", ""));
+    assert(!wildcard_match("a\\", "x"));
+    assert(wildcard_match("a~", "a"));
+    assert(!wildcard_match("a~", ""));
+    assert(!wildcard_match("a~", "x"));
+    assert(wildcard_match("a~\\", "a"));
+    assert(!wildcard_match("a~\\", ""));
+    assert(!wildcard_match("a~\\", "x"));
+
+    // optional with value_wildcard - basic
+    assert(wildcard_match("~b", "", true));
+    assert(wildcard_match("~b", "b", true));
+    assert(wildcard_match("", "~b", true));
+    assert(wildcard_match("b", "~b", true));
+    assert(wildcard_match("ab", "~ab", true));
+    assert(wildcard_match("ab", "~a~b", true));
+    assert(wildcard_match("~ab", "ab", true));
+    assert(wildcard_match("~ab", "~ab", true));
+    assert(wildcard_match("~ab", "~a~b", true));
+    assert(wildcard_match("a~b", "~ab", true));
+    assert(wildcard_match("a~b", "~a~b", true));
+    assert(wildcard_match("~a~b", "~ab", true));
+    assert(wildcard_match("~a~b", "~a~b", true));
+
+    // optional with value_wildcard - with wildcards on rhs
+    assert(wildcard_match("~a", "*", true));
+    assert(wildcard_match("~ab", "*", true));
+    assert(wildcard_match("~a~b", "*", true));
+    assert(wildcard_match("*", "~a", true));
+    assert(wildcard_match("*", "~ab", true));
+    assert(wildcard_match("*", "~a~b", true));
+    assert(wildcard_match("~a", "?", true));
+    assert(wildcard_match("?", "~a", true));
+    assert(wildcard_match("~ab", "?", true));
+    assert(wildcard_match("~ab", "?b", true));
+    assert(wildcard_match("~ab", "a?", true));
+    assert(wildcard_match("~ab", "??", true));
+    assert(wildcard_match("?", "~ab", true));
+    assert(wildcard_match("?b", "~ab", true));
+    assert(wildcard_match("a?", "~ab", true));
+    assert(wildcard_match("??", "~ab", true));
+    assert(wildcard_match("~ab", "?b", true));
+    assert(wildcard_match("~abc", "?c", true));
+    assert(wildcard_match("~a*", "*", true));
+    assert(wildcard_match("*~a", "*", true));
+    assert(wildcard_match("*", "~a*", true));
+    assert(wildcard_match("*", "*~a", true));
+    assert(wildcard_match("ab", "*~c", true));
+    assert(wildcard_match("abc", "a?~c", true));
+
+    // optional on both sides with wildcards
+    assert(wildcard_match("~a*", "*~b", true));
+    assert(wildcard_match("a~b*", "*~cd", true));
+    assert(wildcard_match("~ab", "*b", true));
+    assert(wildcard_match("~ab", "*ab", true));
+    assert(wildcard_match("x~ab", "*ab", true));
+    assert(wildcard_match("*b", "~ab", true));
+    assert(wildcard_match("*ab", "~ab", true));
+    assert(wildcard_match("*ab", "x~ab", true));
+    assert(wildcard_match("~a~b", "~c~d", true));
+    assert(wildcard_match("~a~b", "~c~da", true));
+    assert(wildcard_match("~a~b", "~c~db", true));
+    assert(wildcard_match("~a~b", "~c~dab", true));
+    assert(wildcard_match("~a~bc", "~c~d", true));
+    assert(wildcard_match("~a~bd", "~c~d", true));
+    assert(wildcard_match("~a~bcd", "~c~d", true));
+    assert(wildcard_match("*a~bc*d", "xxacxxd", true));
+    assert(!wildcard_match("*a~bc*de", "xxabcxxd", true));
+    assert(!wildcard_match("*a~bc*d", "xxabcxxde", true));
+    assert(wildcard_match("*a~bc*d", "~x~x~a~c~x~x~d", true));
+
+    // case insensitive with optional
+    assert(wildcard_match_i("~a", "A"));
+    assert(wildcard_match_i("~aB", "Ab"));
+    assert(wildcard_match_i("A~b", "aB"));
+
     // multiple wildcards
     assert(wildcard_match("*l*o", "hello"));
     assert(wildcard_match("h*l*o", "hello"));
@@ -594,8 +855,11 @@ unittest
     // escape sequences
     assert(wildcard_match("\\*", "*"));
     assert(wildcard_match("\\?", "?"));
+    assert(wildcard_match("\\#", "#"));
     assert(wildcard_match("\\\\", "\\"));
     assert(!wildcard_match("\\*", "a"));
+    assert(!wildcard_match("\\?", "a"));
+    assert(!wildcard_match("\\#", "5"));
     assert(wildcard_match("h\\*o", "h*o"));
     assert(!wildcard_match("h\\*o", "hello"));
     assert(wildcard_match("\\*\\?\\\\", "*?\\"));
@@ -649,4 +913,22 @@ unittest
     assert(wildcard_match("", "*", true));
     assert(wildcard_match("**", "*", true));
     assert(wildcard_match("*", "**", true));
+
+    // digit wildcard tests
+    assert(wildcard_match("#", "0"));
+    assert(wildcard_match("#", "5"));
+    assert(wildcard_match("#", "9"));
+    assert(!wildcard_match("#", "a"));
+    assert(!wildcard_match("#", "A"));
+    assert(!wildcard_match("#", ""));
+    assert(!wildcard_match("#", "12"));
+    assert(!wildcard_match("#", "#"));
+    assert(wildcard_match("#", "#", true));
+    assert(!wildcard_match("#", "\\#", true));
+    assert(wildcard_match("v#.#", "v1.2"));
+    assert(!wildcard_match("v#.#", "va.b"));
+    assert(!wildcard_match("v#.#", "v1."));
+    assert(wildcard_match("port-##", "port-42"));
+    assert(wildcard_match("#*#", "123"));
+    assert(!wildcard_match("#*#", "abc"));
 }

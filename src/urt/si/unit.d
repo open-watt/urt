@@ -595,85 +595,85 @@ nothrow:
             if (p == 0)
                 return -1; // invalid exponent
 
-            if (const ScaledUnit* su = term in noScaleUnitMap)
+            size_t offset = 0;
+
+            // parse the scale factor
+            int e = 0;
+            if (term[0].is_numeric)
+            {
+                ulong sf = term.parse_uint_with_exponent(e, &offset);
+                preScale *= sf;
+            }
+
+            if (offset == term.length)
+                r *= ScaledUnit(Unit(), e);
+            else if (const ScaledUnit* su = term[offset .. $] in noScaleUnitMap)
+            {
                 r *= (*su) ^^ (invert ? -p : p);
+                preScale *= 10.0^^e;
+            }
             else
             {
-                size_t offset = 0;
-
-                // parse the scale factor
-                int e = 0;
-                if (term[0].is_numeric)
+                // try and parse SI prefix...
+                switch (term[offset])
                 {
-                    ulong sf = term.parse_uint_with_exponent(e, &offset);
-                    preScale *= sf;
-                }
-
-                if (offset == term.length)
-                    r *= ScaledUnit(Unit(), e);
-                else
-                {
-                    // try and parse SI prefix...
-                    switch (term[offset])
-                    {
-                        case 'Y':   e += 24;   ++offset;    break;
-                        case 'Z':   e += 21;   ++offset;    break;
-                        case 'E':   e += 18;   ++offset;    break;
-                        case 'P':   e += 15;   ++offset;    break;
-                        case 'T':   e += 12;   ++offset;    break;
-                        case 'G':   e += 9;    ++offset;    break;
-                        case 'M':   e += 6;    ++offset;    break;
-                        case 'k':   e += 3;    ++offset;    break;
-                        case 'h':   e += 2;    ++offset;    break;
-                        case 'c':   e -= 2;    ++offset;    break;
-                        case 'u':   e -= 6;    ++offset;    break;
-                        case 'n':   e -= 9;    ++offset;    break;
-                        case 'p':   e -= 12;   ++offset;    break;
-                        case 'f':   e -= 15;   ++offset;    break;
-                        case 'a':   e -= 18;   ++offset;    break;
-                        case 'z':   e -= 21;   ++offset;    break;
-                        case 'y':   e -= 24;   ++offset;    break;
-                        case 'm':
-                            // can confuse with metres... so gotta check...
-                            if (offset + 1 < term.length)
-                                e -= 3, ++offset;
-                            break;
-                        case 'd':
-                            if (offset + 1 < term.length && term[offset + 1] == 'a')
-                            {
-                                e += 1, offset += 2;
-                                break;
-                            }
-                            e -= 1, ++offset;
-                            break;
-                        default:
-                            if (offset + "µ".length < term.length && term[offset .. offset + "µ".length] == "µ")
-                                e -= 6, offset += "µ".length;
-                            break;
-                    }
-                    if (offset == term.length)
-                        return -1;
-
-                    term = term[offset .. $];
-                    if (const Unit* u = term in unitMap)
-                    {
-                        if (term == "kg")
+                    case 'Y':   e += 24;   ++offset;    break;
+                    case 'Z':   e += 21;   ++offset;    break;
+                    case 'E':   e += 18;   ++offset;    break;
+                    case 'P':   e += 15;   ++offset;    break;
+                    case 'T':   e += 12;   ++offset;    break;
+                    case 'G':   e += 9;    ++offset;    break;
+                    case 'M':   e += 6;    ++offset;    break;
+                    case 'k':   e += 3;    ++offset;    break;
+                    case 'h':   e += 2;    ++offset;    break;
+                    case 'c':   e -= 2;    ++offset;    break;
+                    case 'u':   e -= 6;    ++offset;    break;
+                    case 'n':   e -= 9;    ++offset;    break;
+                    case 'p':   e -= 12;   ++offset;    break;
+                    case 'f':   e -= 15;   ++offset;    break;
+                    case 'a':   e -= 18;   ++offset;    break;
+                    case 'z':   e -= 21;   ++offset;    break;
+                    case 'y':   e -= 24;   ++offset;    break;
+                    case 'm':
+                        // can confuse with metres... so gotta check...
+                        if (offset + 1 < term.length)
+                            e -= 3, ++offset;
+                        break;
+                    case 'd':
+                        if (offset + 1 < term.length && term[offset + 1] == 'a')
                         {
-                            // we alrady parsed the 'k'
-                            return -1;
+                            e += 1, offset += 2;
+                            break;
                         }
-                        r *= ScaledUnit((*u) ^^ (invert ? -p : p), e);
-                    }
-                    else if (const ScaledUnit* su = term in scaledUnitMap)
-                        r *= ScaledUnit(su.unit, su.exp + e) ^^ (invert ? -p : p);
-                    else if (const ScaledUnit* su = term in noScaleUnitMap)
-                    {
-                        r *= (*su) ^^ (invert ? -p : p);
-                        preScale *= 10^^e;
-                    }
-                    else
-                        return -1; // string was not taken?
+                        e -= 1, ++offset;
+                        break;
+                    default:
+                        if (offset + "µ".length < term.length && term[offset .. offset + "µ".length] == "µ")
+                            e -= 6, offset += "µ".length;
+                        break;
                 }
+                if (offset == term.length)
+                    return -1;
+
+                term = term[offset .. $];
+                if (const Unit* u = term in unitMap)
+                {
+                    if (term == "kg")
+                    {
+                        // we alrady parsed the 'k', so this string must have been "kkg", which is nonsense
+                        return -1;
+                    }
+                    r *= ScaledUnit((*u) ^^ (invert ? -p : p), e);
+                }
+                else if (const ScaledUnit* su = term in scaledUnitMap)
+                    r *= ScaledUnit(su.unit, su.exp + e) ^^ (invert ? -p : p);
+                else if (const ScaledUnit* su = term in noScaleUnitMapSI)
+                {
+                    r *= (*su) ^^ (invert ? -p : p);
+                    preScale *= 10.0^^e;
+                }
+                else
+                    return -1; // string was not taken?
             }
 
             if (sep == '/')
@@ -986,7 +986,7 @@ immutable Unit[string] unitMap = [
     "kg"    : Kilogram,
     "s"     : Second,
     "A"     : Ampere,
-    "°K"    : Kelvin,
+    "K"     : Kelvin,
     "cd"    : Candela,
     "rad"   : Radian,
 
@@ -1030,22 +1030,29 @@ immutable ScaledUnit[string] noScaleUnitMap = [
     "deg"   : Degree,
     "°C"    : Celsius,
     "°F"    : Fahrenheit,
+    "cy"    : Cycle,
+    "psi"   : PSI,
+    "%"     : Percent,
+    "‰"     : Permille,
+    "‱"    : ScaledUnit(Unit(), -4),
+    "ppm"   : ScaledUnit(Unit(), -6),
+];
+
+// these can have SI prefixes
+immutable ScaledUnit[string] scaledUnitMap = [
+    "l"     : Litre,
+    "g"     : Gram,
+];
+
+// these can have SI prefixes, but scale must be converted to coefficient
+immutable ScaledUnit[string] noScaleUnitMapSI = [
     "Ah"    : AmpereHour,
     "Wh"    : WattHour,
-    "cy"    : Cycle,
     "Hz"    : Hertz,
-    "psi"   : PSI,
 
     // questionable... :/
     "VAh"   : WattHour,
     "varh"  : WattHour,
-];
-
-immutable ScaledUnit[string] scaledUnitMap = [
-    "%"     : Percent,
-    "‰"     : Permille,
-    "l"     : Litre,
-    "g"     : Gram,
 ];
 
 int takePower(ref const(char)[] s) pure

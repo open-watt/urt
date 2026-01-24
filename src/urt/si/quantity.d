@@ -69,7 +69,7 @@ nothrow @nogc:
                 assert(isCompatible(b), "Incompatible units!");
             else
                 static assert(IsCompatible!_U, "Incompatible units: ", unit.toString, " and ", b.unit.toString);
-            value = adjustScale(b);
+            value = adjust_scale(b);
         }
     }
 
@@ -97,7 +97,7 @@ nothrow @nogc:
                 assert(isCompatible(b), "Incompatible units!");
             else
                 static assert(IsCompatible!_U, "Incompatible units: ", unit.toString, " and ", b.unit.toString);
-            value = adjustScale(b);
+            value = adjust_scale(b);
         }
     }
 
@@ -132,7 +132,7 @@ nothrow @nogc:
                 static assert(IsCompatible!_U, "Incompatible units: ", unit.toString, " and ", b.unit.toString);
 
             Quantity!(TypeForOp!(op, T, U), _unit) r;
-            r.value = mixin("value " ~ op ~ " adjustScale(b)");
+            r.value = mixin("value " ~ op ~ " adjust_scale(b)");
             static if (Dynamic)
                 r.unit = unit;
             return r;
@@ -211,7 +211,7 @@ nothrow @nogc:
                 assert(isCompatible(r), "Incompatible units!");
             else
                 static assert(IsCompatible!_U, "Incompatible units: ", r.unit.toString, " and ", unit.toString);
-            r.value = cast(U)r.adjustScale(this);
+            r.value = cast(U)r.adjust_scale(this);
             static if (T.Dynamic)
                 r.unit = unit;
             return r;
@@ -258,7 +258,7 @@ nothrow @nogc:
             rhs = rhs*rScale + rTrans;
         }}
         else
-            rhs = adjustScale(rh);
+            rhs = adjust_scale(rh);
 
     compare:
         static if (epsilon == 0)
@@ -287,7 +287,19 @@ nothrow @nogc:
         }
         else
             Quantity!(T, ScaledUnit(unit.unit)) r;
-        r.value = r.adjustScale(this);
+        r.value = r.adjust_scale(this);
+        return r;
+    }
+
+    Quantity!Ty adjust_scale(Ty = T)(ScaledUnit su) const pure
+    {
+        Quantity!Ty r;
+        r.unit = su;
+        assert(r.isCompatible(this), "Incompatible units!");
+        if (su == unit)
+            r.value = cast(Ty)this.value;
+        else
+            r.value = r.adjust_scale(this);
         return r;
     }
 
@@ -354,40 +366,48 @@ nothrow @nogc:
     }
 
 private:
-    T adjustScale(U, ScaledUnit _U)(Quantity!(U, _U) b) const pure
+    T adjust_scale(U, ScaledUnit _U)(Quantity!(U, _U) b) const pure
     {
-        static if (Dynamic)
-        {
-            auto lScale = unit.scale!true();
-            auto lTrans = unit.offset!true();
-        }
+        static if (!Dynamic && !b.Dynamic && unit == b.unit)
+            return cast(T)b.value;
         else
         {
-            enum lScale = unit.scale!true();
-            enum lTrans = unit.offset!true();
-        }
-        static if (b.Dynamic)
-        {
-            auto rScale = b.unit.scale();
-            auto rTrans = b.unit.offset();
-        }
-        else
-        {
-            enum rScale = b.unit.scale();
-            enum rTrans = b.unit.offset();
-        }
+            if (unit == b.unit)
+                return cast(T)b.value;
 
-        static if (Dynamic || b.Dynamic)
-        {
-            auto scale = lScale*rScale;
-            auto trans = lTrans + lScale*rTrans;
+            static if (Dynamic)
+            {
+                auto lScale = unit.scale!true();
+                auto lTrans = unit.offset!true();
+            }
+            else
+            {
+                enum lScale = unit.scale!true();
+                enum lTrans = unit.offset!true();
+            }
+            static if (b.Dynamic)
+            {
+                auto rScale = b.unit.scale();
+                auto rTrans = b.unit.offset();
+            }
+            else
+            {
+                enum rScale = b.unit.scale();
+                enum rTrans = b.unit.offset();
+            }
+
+            static if (Dynamic || b.Dynamic)
+            {
+                auto scale = lScale*rScale;
+                auto trans = lTrans + lScale*rTrans;
+            }
+            else
+            {
+                enum scale = lScale*rScale;
+                enum trans = lTrans + lScale*rTrans;
+            }
+            return cast(T)(b.value*scale + trans);
         }
-        else
-        {
-            enum scale = lScale*rScale;
-            enum trans = lTrans + lScale*rTrans;
-        }
-        return cast(T)(b.value*scale + trans);
     }
 }
 

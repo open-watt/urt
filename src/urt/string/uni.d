@@ -6,36 +6,38 @@ import urt.traits : is_some_char;
 pure nothrow @nogc:
 
 
-size_t uni_seq_len(const(char)[] s)
+size_t uni_seq_len(const(char)[] str)
 {
-    if (s.length == 0)
-        return 0;
+    debug assert(str.length > 0);
+
+    const(char)* s = str.ptr;
     if (s[0] < 0x80) // 1-byte sequence: 0xxxxxxx
         return 1;
     else if ((s[0] & 0xE0) == 0xC0) // 2-byte sequence: 110xxxxx 10xxxxxx
-        return (s.length >= 2 && (s[1] & 0xC0) == 0x80) ? 2 : 1;
+        return (str.length >= 2 && (s[1] & 0xC0) == 0x80) ? 2 : 1;
     else if ((s[0] & 0xF0) == 0xE0) // 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
-        return (s.length >= 3 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) ? 3 :
-               (s.length >= 2 && (s[1] & 0xC0) == 0x80) ? 2 : 1;
+        return (str.length >= 3 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) ? 3 :
+               (str.length >= 2 && (s[1] & 0xC0) == 0x80) ? 2 : 1;
     else if ((s[0] & 0xF8) == 0xF0) // 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-        return (s.length >= 4 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) ? 4 :
-               (s.length >= 3 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) ? 3 :
-               (s.length >= 2 && (s[1] & 0xC0) == 0x80) ? 2 : 1;
+        return (str.length >= 4 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) ? 4 :
+               (str.length >= 3 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) ? 3 :
+               (str.length >= 2 && (s[1] & 0xC0) == 0x80) ? 2 : 1;
     return 1; // Invalid UTF-8 sequence
 }
 
-size_t uni_seq_len(const(wchar)[] s)
+size_t uni_seq_len(const(wchar)[] str)
 {
-    if (s.length == 0)
-        return 0;
-    if (s[0] >= 0xD800 && s[0] < 0xDC00 && s.length >= 2 && s[1] >= 0xDC00 && s[1] < 0xE000)
+    debug assert(str.length > 0);
+
+    const(wchar)* s = str.ptr;
+    if (s[0] >= 0xD800 && s[0] < 0xDC00 && str.length >= 2 && s[1] >= 0xDC00 && s[1] < 0xE000)
         return 2; // Surrogate pair: 110110xxxxxxxxxx 110111xxxxxxxxxx
     return 1;
 }
 
 pragma(inline, true)
 size_t uni_seq_len(const(dchar)[] s)
-    => s.length > 0;
+    => 1;
 
 size_t uni_strlen(C)(const(C)[] s)
     if (is_some_char!C)
@@ -552,38 +554,41 @@ int uni_compare(T, U)(const(T)[] s1, const(U)[] s2)
 
     // TODO: this is crude and insufficient; doesn't handle compound diacritics, etc (needs a NFKC normalisation step)
 
-    while (p1 < p1end && p2 < p2end)
+    while (true)
     {
-        dchar a = *p1;
+        // return int.min/max in the case that the strings are a sub-string of the other so the caller can detect this case
+        if (p1 >= p1end)
+            return p2 < p2end ? int.min : 0;
+        if (p2 >= p2end)
+            return int.max;
+
+        dchar a = *p1, b = *p2;
+
         if (a < 0x80)
         {
-            dchar b = *p2;
             if (a != b)
-            {
-                if (b >= 0x80)
-                {
-                    size_t _;
-                    b = next_dchar(p2[0 .. p2end - p2], _);
-                }
-                return cast(int)a - cast(int)b;
-            }
+                return int(a) - int(b);
             ++p1;
+            p2 += b < 0x80 ? 1 : p2[0 .. p2end - p2].uni_seq_len;
+        }
+        else if (b < 0x80)
+        {
+            if (a != b)
+                return int(a) - int(b);
+            p1 += p1[0 .. p1end - p1].uni_seq_len;
             ++p2;
         }
         else
         {
             size_t al, bl;
             a = next_dchar(p1[0 .. p1end - p1], al);
-            dchar b = next_dchar(p2[0 .. p2end - p2], bl);
+            b = next_dchar(p2[0 .. p2end - p2], bl);
             if (a != b)
                 return cast(int)a - cast(int)b;
             p1 += al;
-            p2 += al;
+            p2 += bl;
         }
     }
-
-    // return int.min/max in the case that the strings are a sub-string of the other so the caller can detect this case
-    return (p1 < p1end) ? int.max : (p2 < p2end) ? int.min : 0;
 }
 
 int uni_compare_i(T, U)(const(T)[] s1, const(U)[] s2)

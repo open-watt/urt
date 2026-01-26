@@ -391,7 +391,7 @@ private:
         return total;
     }();
 
-    enum MakeKI(ushort i) = KI(enum_members[i], i);
+    enum MakeKI(ushort i) = KI(trim_key!(enum_members[i]), i);
     enum MakeVI(ushort i) = VI(__traits(getMember, E, enum_members[i]), i);
     enum GetValue(size_t i) = by_value[i].v;
     enum GetKeyRedirect(size_t i) = inv_val[by_key[i].i];
@@ -486,6 +486,9 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
 }
 
 private:
+
+import urt.string : trim;
+enum trim_key(string key) = key.trim!(c => c == '_');
 
 template is_same(alias a, alias b)
 {

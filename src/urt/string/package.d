@@ -223,25 +223,25 @@ bool endsWith(const(char)[] s, const(char)[] suffix) pure
     return cmp(s[$ - suffix.length .. $], suffix) == 0;
 }
 
-inout(char)[] trim(bool Front = true, bool Back = true)(inout(char)[] s) pure
+inout(char)[] trim(alias pred = is_whitespace, bool Front = true, bool Back = true)(inout(char)[] s) pure
 {
     size_t first = 0, last = s.length;
     static if (Front)
     {
-        while (first < s.length && is_whitespace(s.ptr[first]))
+        while (first < s.length && pred(s.ptr[first]))
             ++first;
     }
     static if (Back)
     {
-        while (last > first && is_whitespace(s.ptr[last - 1]))
+        while (last > first && pred(s.ptr[last - 1]))
             --last;
     }
     return s.ptr[first .. last];
 }
 
-alias trimFront = trim!(true, false);
+alias trimFront(alias pred = is_whitespace) = trim!(pred, true, false);
 
-alias trimBack = trim!(false, true);
+alias trimBack(alias pred = is_whitespace) = trim!(pred, false, true);
 
 inout(char)[] trimComment(char Delimiter)(inout(char)[] s) pure
 {

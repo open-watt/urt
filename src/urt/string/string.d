@@ -45,6 +45,7 @@ nothrow @nogc:
     ushort add_string(const(char)[] s) pure
     {
         assert(s.length <= MaxStringLen, "String too long");
+        assert(_offset + s.length + 2 + (s.length & 1) <= _buffer.length, "Not enough space in buffer");
         if (__ctfe)
         {
             version (LittleEndian)
@@ -68,6 +69,15 @@ nothrow @nogc:
             _buffer[_offset++] = '\0';
         return result;
     }
+
+    size_t used() const pure
+        => _offset;
+
+    size_t remaining() const pure
+        => _buffer.length - _offset;
+
+    bool full() const pure
+        => _offset == _buffer.length;
 
 private:
     char[] _buffer;

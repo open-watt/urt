@@ -700,9 +700,9 @@ nothrow @nogc:
         return this;
     }
 
-    ref MutableString!Embed appendFormat(Things...)(const(char)[] format, auto ref Things args)
+    ref MutableString!Embed append_format(Things...)(const(char)[] format, auto ref Things args)
     {
-        insertFormat(length(), format, forward!args);
+        insert_format(length(), format, forward!args);
         return this;
     }
 
@@ -718,7 +718,7 @@ nothrow @nogc:
     {
         if (ptr)
             writeLength(0);
-        insertFormat(0, format, forward!args);
+        insert_format(0, format, forward!args);
         return this;
     }
 
@@ -750,7 +750,7 @@ nothrow @nogc:
         return this;
     }
 
-    ref MutableString!Embed insertFormat(Things...)(size_t offset, const(char)[] format, auto ref Things args)
+    ref MutableString!Embed insert_format(Things...)(size_t offset, const(char)[] format, auto ref Things args)
     {
         import urt.string.format : _format = format;
         import urt.util : max, next_power_of_2;
@@ -923,11 +923,11 @@ unittest
     m.append(" Text");
     assert(m == "X! More Text");
 
-    // appendFormat
+    // append_format
     m.clear();
-    m.appendFormat("Value: {0}", 123);
+    m.append_format("Value: {0}", 123);
     assert(m == "Value: 123");
-    m.appendFormat(", String: {0}", "abc");
+    m.append_format(", String: {0}", "abc");
     assert(m == "Value: 123, String: abc");
 
     // concat
@@ -948,13 +948,13 @@ unittest
     m.insert(m.length, "!"); // End (same as append)
     assert(m == "My Super String!");
 
-    // insertFormat
+    // insert_format
     m = "Data";
-    m.insertFormat(0, "[{0}] ", 1);
+    m.insert_format(0, "[{0}] ", 1);
     assert(m == "[1] Data");
-    m.insertFormat(4, "\\{{0}\\}", "fmt");
+    m.insert_format(4, "\\{{0}\\}", "fmt");
     assert(m == "[1] {fmt}Data");
-    m.insertFormat(m.length, " End");
+    m.insert_format(m.length, " End");
     assert(m == "[1] {fmt}Data End");
 
     // erase

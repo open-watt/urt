@@ -1,7 +1,7 @@
 module urt.array;
 
 import urt.mem;
-import urt.traits : is_some_char;
+import urt.traits : is_some_char, is_primitive, is_trivial;
 
 nothrow @nogc:
 
@@ -314,17 +314,120 @@ nothrow @nogc:
     }
 
     // manipulation
-    ref Array!(T, EmbedCount) concat(Things...)(auto ref Things things)
+    static if (!is_some_char!T)
     {
-        reserve(_length + things.length);
-        static foreach (i; 0 .. things.length)
+        alias concat = append; // TODO: REMOVE THIS ALIAS, we phase out the old name...
+
+        ref Array!(T, EmbedCount) append(Things...)(auto ref Things things)
         {
-            static if (is(T == class) || is(T == interface))
-                ptr[_length++] = things[i];
-            else
-                emplace!T(&ptr[_length++], forward!(things[i]));
+            size_t ext_len = 0;
+            static foreach (i; 0 .. things.length)
+            {
+                static if (is(Things[i] == U[], U) && is(U : T))
+                    ext_len += things[i].length;
+                else static if (is(Things[i] == U[N], U, size_t N) && is(U : T))
+                    ext_len += N;
+                else static if (is(Things[i] : T))
+                    ext_len += 1;
+                else
+                    static assert(false, "Invalid type for concat");
+            }
+            reserve(_length + ext_len);
+            static foreach (i; 0 .. things.length)
+            {
+                static if (is(Things[i] == V[], V) && is(V : T))
+                {
+                    static if (copy_elements)
+                    {
+                        foreach (ref el; things[i])
+                            ptr[_length++] = el;
+                    }
+                    else
+                    {
+                        foreach (ref el; things[i])
+                            emplace!T(&ptr[_length++], el);
+                    }
+                }
+                else static if (is(Things[i] == V[M], V, size_t M) && is(V : T))
+                {
+                    static if (copy_elements)
+                    {
+                        foreach (ref el; things[i])
+                            ptr[_length++] = el;
+                    }
+                    else
+                    {
+                        foreach (ref el; things[i])
+                            emplace!T(&ptr[_length++], el);
+                    }
+                }
+                else static if (is(Things[i] : T))
+                {
+                    static if (copy_elements)
+                        ptr[_length++] = things[i];
+                    else
+                        emplace!T(&ptr[_length++], forward!(things[i]));
+                }
+            }
+            return this;
         }
-        return this;
+    }
+    else
+    {
+        // char arrays are really just a string buffer, and so we'll expand the capability of concat to match what `MutableString` accepts...
+        static assert(is(T == char), "TODO: wchar and dchar"); // needs buffer length counting helpers
+
+        // TODO: string's have this function `concat` which clears the string first, and that's different than Array
+        //       we need to tighten this up!
+        ref Array!(T, EmbedCount) concat(Things...)(auto ref Things things)
+        {
+            clear();
+            append(forward!things);
+            return this;
+        }
+
+        ref Array!(T, EmbedCount) append(Things...)(auto ref Things things)
+        {
+            import urt.string.format : _concat = concat;
+
+            size_t ext_len = _concat(null, things).length;
+            reserve(_length + ext_len);
+            _concat(ptr[_length .. _length + ext_len], forward!things);
+            _length += ext_len;
+            return this;
+        }
+
+        ref Array!(T, EmbedCount) append_format(Things...)(const(char)[] format, auto ref Things args)
+        {
+            import urt.string.format : _format = format;
+
+            size_t ext_len = _format(null, format, args).length;
+            reserve(_length + ext_len);
+            _format(ptr[_length .. _length + ext_len], format, forward!args);
+            _length += ext_len;
+            return this;
+        }
+    }
+
+    T[] extend(bool do_init = true)(size_t length)
+    {
+        assert(_length + length <= uint.max);
+
+        size_t old_len = _length;
+        reserve(_length + length);
+        static if (do_init)
+        {
+            foreach (i; _length .. _length + length)
+            {
+                // TODO: replace with palcement new...
+                static if (copy_elements)
+                    ptr[i] = T.init;
+                else
+                    emplace!T(&ptr[i]);
+            }
+        }
+        _length += cast(uint)length;
+        return ptr[old_len .. _length];
     }
 
     bool empty() const
@@ -592,18 +695,9 @@ nothrow @nogc:
         return [x, y];
     }
 
-    void opOpAssign(string op : "~", U)(auto ref U el)
-        if (is(U : T))
+    void opOpAssign(string op : "~", U)(auto ref U rh)
     {
-        pushBack(forward!el);
-    }
-
-    void opOpAssign(string op : "~", U)(U[] arr)
-        if (is(U : T))
-    {
-        reserve(_length + arr.length);
-        foreach (ref e; arr)
-            pushBack(e);
+        append(forward!rh);
     }
 
     void reserve(size_t count)
@@ -700,6 +794,8 @@ nothrow @nogc:
     }
 
 private:
+    enum copy_elements = is(T == class) || is(T == interface) || is_primitive!T || is_trivial!T;
+
     T* ptr;
     uint _length;
 

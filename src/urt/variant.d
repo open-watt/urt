@@ -426,21 +426,19 @@ nothrow @nogc:
                     static double asDoubleWithBool(ref const Variant v)
                         => v.isBool() ? double(v.asBool()) : v.asDouble();
 
-                    if (a.isQuantity || b.isQuantity)
+                    uint aunit = a.isQuantity ? a.count : 0;
+                    uint bunit = b.isQuantity ? b.count : 0;
+                    if (aunit || bunit)
                     {
                         // we can't compare different units
-                        uint aunit = a.isQuantity ? (a.count & 0xFFFFFF) : 0;
-                        uint bunit = b.isQuantity ? (b.count & 0xFFFFFF) : 0;
-                        if (aunit != bunit)
+                        if ((aunit & 0xFFFFFF) != (bunit & 0xFFFFFF))
                         {
-                            r = aunit - bunit;
+                            r = (aunit & 0xFFFFFF) - (bunit & 0xFFFFFF);
                             break;
                         }
 
                         // matching units, but we'll only do quantity comparison if there is some scaling
-                        ubyte ascale = a.isQuantity ? (a.count >> 24) : 0;
-                        ubyte bscale = b.isQuantity ? (b.count >> 24) : 0;
-                        if (ascale || bscale)
+                        if ((aunit >> 24) != (bunit >> 24))
                         {
                             Quantity!double aq = a.isQuantity ? a.asQuantity!double() : Quantity!double(asDoubleWithBool(*a));
                             Quantity!double bq = b.isQuantity ? b.asQuantity!double() : Quantity!double(asDoubleWithBool(*b));
@@ -449,7 +447,7 @@ nothrow @nogc:
                         }
                     }
 
-                    if (a.flags & Flags.FloatFlag || b.flags & Flags.FloatFlag)
+                    if (a.flags & Flags.DoubleFlag || b.flags & Flags.DoubleFlag)
                     {
                         // float comparison
                         // TODO: determine if float/bool comparison seems right? is: -1 < false < 0.9 < true < 1.1?

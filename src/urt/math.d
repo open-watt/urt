@@ -63,6 +63,7 @@ extern(C)
     double exp(double x);
     double log(double x);
     double acos(double x);
+    double pow(double x, double e);
 }
 
 int float_is_integer(double f, out ulong i)

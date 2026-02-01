@@ -243,19 +243,6 @@ alias trimFront(alias pred = is_whitespace) = trim!(pred, true, false);
 
 alias trimBack(alias pred = is_whitespace) = trim!(pred, false, true);
 
-inout(char)[] trimComment(char Delimiter)(inout(char)[] s) pure
-{
-    size_t i = 0;
-    for (; i < s.length; ++i)
-    {
-        if (s[i] == Delimiter)
-            break;
-    }
-    while(i > 0 && (s[i-1] == ' ' || s[i-1] == '\t'))
-        --i;
-    return s[0 .. i];
-}
-
 inout(char)[] takeLine(ref inout(char)[] s) pure
 {
     for (size_t i = 0; i < s.length; ++i)

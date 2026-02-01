@@ -28,7 +28,8 @@ enum Day : ubyte
 
 enum Month : ubyte
 {
-    January = 1,
+    Unspecified = 0,
+    January,
     February,
     March,
     April,
@@ -63,10 +64,15 @@ pure nothrow @nogc:
     T opCast(T)() const
         if (is(T == Time!c, Clock c) && c != clock)
     {
-        static if (clock == Clock.Monotonic && c == Clock.SystemTime)
-            return SysTime(ticks + ticksSinceBoot);
+        static if (is(T == Time!c, Clock c) && c != clock)
+        {
+            static if (clock == Clock.Monotonic && c == Clock.SystemTime)
+                return SysTime(ticks + ticksSinceBoot);
+            else
+                return MonoTime(ticks - ticksSinceBoot);
+        }
         else
-            return MonoTime(ticks - ticksSinceBoot);
+            static assert(false, "constraint out of sync");
     }
 
     bool opEquals(Time!clock b) const
@@ -468,27 +474,31 @@ pure nothrow @nogc:
                 nsecs -= digit * digit_multipliers[m++];
             }
         }
+        // TODO: timezone suffix?
         return offset;
     }
 
     ptrdiff_t fromString(const(char)[] s)
     {
-        import urt.conv : parse_int;
+        import urt.conv : parse_int, parse_uint;
         import urt.string.ascii : ieq, is_numeric, is_whitespace, to_lower;
 
-        if (s.length < 14)
-            return -1;
+        month = Month.Unspecified;
+        day = 0;
+        hour = 0;
+        minute = 0;
+        second = 0;
+        ns = 0;
+
         size_t offset = 0;
 
         // parse year
-        if (s[0..2].ieq("bc"))
+        if (s.length >= 2 && s[0..2].ieq("bc"))
         {
             offset = 2;
-            if (s[2] == ' ')
+            if (s.length >= 3 && s[2] == ' ')
                 ++offset;
         }
-        if (s[offset] == '+')
-            return -1;
         size_t len;
         long value = s[offset..$].parse_int(&len);
         if (len == 0)
@@ -504,13 +514,15 @@ pure nothrow @nogc:
         year = cast(short)value;
         offset += len;
 
-        if (s[offset] != '-' && s[offset] != '/')
-            return -1;
+        if (offset == s.length || (s[offset] != '-' && s[offset] != '/'))
+            return offset;
 
         // parse month
         value = s[++offset..$].parse_int(&len);
         if (len == 0)
         {
+            if (s.length < 3)
+                return -1;
             foreach (i; 0..12)
             {
                 if (s[offset..offset+3].ieq(g_month_names[i]))
@@ -528,8 +540,8 @@ pure nothrow @nogc:
         month = cast(Month)value;
         offset += len;
 
-        if (s[offset] != '-' && s[offset] != '/')
-            return -1;
+        if (offset == s.length || (s[offset] != '-' && s[offset] != '/'))
+            return offset;
 
         // parse day
         value = s[++offset..$].parse_int(&len);
@@ -538,8 +550,8 @@ pure nothrow @nogc:
         day = cast(ubyte)value;
         offset += len;
 
-        if (offset >= s.length || (s[offset] != 'T' && s[offset] != ' '))
-            return -1;
+        if (offset == s.length || (s[offset] != 'T' && s[offset] != ' '))
+            return offset;
 
         // parse hour
         value = s[++offset..$].parse_int(&len);
@@ -548,49 +560,116 @@ pure nothrow @nogc:
         hour = cast(ubyte)value;
         offset += len;
 
-        if (offset >= s.length || s[offset++] != ':')
-            return -1;
+        if (offset == s.length)
+            return offset;
 
-        // parse minute
-        value = s[offset..$].parse_int(&len);
-        if (len != 2 || value < 0 || value > 59)
-            return -1;
-        minute = cast(ubyte)value;
-        offset += len;
-
-        if (offset >= s.length || s[offset++] != ':')
-            return -1;
-
-        // parse second
-        value = s[offset..$].parse_int(&len);
-        if (len != 2 || value < 0 || value > 59)
-            return -1;
-        second = cast(ubyte)value;
-        offset += len;
-
-        ns = 0;
-        if (offset < s.length && s[offset] == '.')
+        if (s[offset] == ':')
         {
-            // parse fractions
-            ++offset;
-            uint multiplier = 100_000_000;
-            while (offset < s.length && multiplier > 0 && s[offset].is_numeric)
+            // parse minute
+            value = s[++offset..$].parse_int(&len);
+            if (len != 2 || value < 0 || value > 59)
+                return -1;
+            minute = cast(ubyte)value;
+            offset += len;
+
+            if (offset == s.length)
+                return offset;
+
+            if (s[offset] == ':')
             {
-                ns += (s[offset++] - '0') * multiplier;
-                multiplier /= 10;
+                // parse second
+                value = s[++offset..$].parse_int(&len);
+                if (len != 2 || value < 0 || value > 59)
+                    return -1;
+                second = cast(ubyte)value;
+                offset += len;
+
+                if (offset < s.length && s[offset] == '.')
+                {
+                    // parse fractions
+                    ++offset;
+                    uint multiplier = 100_000_000;
+                    while (offset < s.length && multiplier > 0 && s[offset].is_numeric)
+                    {
+                        ns += (s[offset++] - '0') * multiplier;
+                        multiplier /= 10;
+                    }
+                    if (multiplier == 100_000_000)
+                        return offset-1; // no number after the dot
+                }
             }
-            if (multiplier == 100_000_000)
-                return -1; // no number after the dot
+            else if (s[offset] == '.')
+            {
+                // fraction of minute
+                assert(false, "TODO");
+            }
         }
-
-        if (offset < s.length && s[offset].to_lower == 'z')
+        else if (s[offset] == '.')
         {
-            ++offset;
-            // TODO: UTC timezone designator...
-            assert(false, "TODO: we need to know our local timezone...");
+            // fraction of hour
+            assert(false, "TODO");
         }
 
-        return offset;
+        if (offset == s.length)
+            return offset;
+
+        if (s[offset].to_lower == 'z')
+        {
+            // TODO: UTC timezone designator...
+//            assert(false, "TODO: we need to know our local timezone...");
+
+            return offset + 1;
+        }
+
+        if (s[offset] != '-' && s[offset] != '+')
+            return offset;
+
+        size_t tz_offset = offset + 1;
+
+        // parse timezone (00:00)
+        int tz_hr, tz_min;
+
+        value = s[tz_offset..$].parse_uint(&len);
+        if (len == 0)
+            return offset;
+
+        if (len == 4)
+        {
+            if (value > 2359)
+                return -1;
+            tz_min = cast(int)(value % 100);
+            if (tz_min > 59)
+                return -1;
+            tz_hr = cast(int)(value / 100);
+            tz_offset += 4;
+        }
+        else
+        {
+            if (len != 2 || value > 59)
+                return -1;
+
+            tz_hr = cast(int)value;
+            tz_offset += 2;
+
+            if (tz_offset < s.length && s[tz_offset] == ':')
+            {
+                value = s[tz_offset+1..$].parse_uint(&len);
+                if (len != 0)
+                {
+                    if (len != 2 || value > 59)
+                        return -1;
+                    tz_min = cast(int)value;
+                    tz_offset += 3;
+                }
+            }
+        }
+
+        if (s[offset] == '-')
+            tz_hr = -tz_hr;
+
+//        assert(false, "TODO: we need to know our local timezone...");
+
+        return tz_offset;
     }
 }
 
@@ -663,7 +742,14 @@ SysTime getSysTime()
 
 SysTime getSysTime(DateTime time) pure
 {
-    assert(false, "TODO: convert to SysTime...");
+    version (Windows)
+        return dateTimeToFileTime(time);
+    else version (Posix)
+    {
+        assert(false, "TODO");
+    }
+    else
+        static assert(false, "TODO");
 }
 
 DateTime getDateTime()
@@ -896,8 +982,18 @@ unittest
     assert(dt.fromString("BC100-AUG-15 12:34:56.789") == 25);
     assert(dt.fromString("BC 10000-AUG-15 12:34:56.789123456") == 34);
     assert(dt.fromString("1-1-1 01:01:01") == 14);
-    assert(dt.fromString("1-1-1 01:01:01.") == -1);
-    assert(dt.fromString("2025-01-01") == -1);
+    assert(dt.fromString("1-1-1 01:01:01.") == 14);
+    assert(dt.fromString("2025") == 4);
+    assert(dt.fromString("2025-10") == 7);
+    assert(dt.fromString("2025-01-01") == 10);
+    assert(dt.fromString("2025-01-01 00") == 13);
+    assert(dt.fromString("2025-01-01 00:10") == 16);
+    assert(dt.fromString("2025-01-01 00:10z") == 17);
+    assert(dt.fromString("2025-01-01 00+00:00") == 19);
+    assert(dt.fromString("2025-01-01 00-1030") == 18);
+    assert(dt.fromString("2025-01-01 00+08") == 16);
+
+    assert(dt.fromString("BC -10") == -1);
     assert(dt.fromString("2024-0-15 12:34:56") == -1);
     assert(dt.fromString("2024-13-15 12:34:56") == -1);
     assert(dt.fromString("2024-1-0 12:34:56") == -1);
@@ -933,6 +1029,32 @@ version (Windows)
         debug assert(stime.wMilliseconds == dt.msec);
 
         return dt;
+    }
+
+    SysTime dateTimeToFileTime(DateTime dt) pure
+    {
+        version (BigEndian)
+            static assert(false, "Only works in little endian!");
+
+        SYSTEMTIME stime;
+        stime.wYear = dt.year;
+        stime.wMonth = cast(ushort)dt.month;
+        stime.wDayOfWeek = cast(ushort)dt.wday;
+        stime.wDay = cast(ushort)dt.day;
+        stime.wHour = cast(ushort)dt.hour;
+        stime.wMinute = cast(ushort)dt.minute;
+        stime.wSecond = cast(ushort)dt.second;
+        stime.wMilliseconds = cast(ushort)(dt.ns / 1_000_000);
+
+        SysTime ftime;
+        alias PureHACK = extern(Windows) BOOL function(const(SYSTEMTIME)*, FILETIME*) pure nothrow @nogc;
+        if (!(cast(PureHACK)&SystemTimeToFileTime)(&stime, cast(FILETIME*)&ftime))
+            assert(false, "TODO: WHAT TO DO?");
+
+        debug assert(ftime.ticks % 10_000_000 == (dt.ns / 1_000_000) * 10_000);
+        ftime.ticks = ftime.ticks - ftime.ticks % 10_000_000 + dt.ns / 100;
+
+        return ftime;
     }
 }
 else version (Posix)

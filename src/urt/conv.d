@@ -8,47 +8,52 @@ nothrow @nogc:
 
 
 // on error or not-a-number cases, bytes_taken will contain 0
-long parse_int(const(char)[] str, size_t* bytes_taken = null, int base = 10) pure
+
+long parse_int(const(char)[] str, size_t* bytes_taken = null, uint base = 10) pure
 {
-    size_t i = 0;
-    bool neg = false;
-
-    if (str.length > 0)
-    {
-        char c = str.ptr[0];
-        neg = c == '-';
-        if (neg || c == '+')
-            i++;
-    }
-
-    ulong value = str.ptr[i .. str.length].parse_uint(bytes_taken, base);
+    const(char)* s = str.ptr, e = s + str.length, p = s;
+    uint neg = parse_sign(p, e);
+    ulong value = p[0 .. e - p].parse_uint(bytes_taken, base);
     if (bytes_taken && *bytes_taken != 0)
-        *bytes_taken += i;
-    return neg ? -cast(long)value : cast(long)value;
+        *bytes_taken += p - s;
+    return neg ? -long(value) : long(value);
 }
 
-long parse_int_with_decimal(const(char)[] str, out ulong fixed_point_divisor, size_t* bytes_taken = null, int base = 10) pure
+long parse_int_with_base(const(char)[] str, size_t* bytes_taken = null) pure
 {
-    size_t i = 0;
-    bool neg = false;
-
-    if (str.length > 0)
-    {
-        char c = str.ptr[0];
-        neg = c == '-';
-        if (neg || c == '+')
-            i++;
-    }
-
-    ulong value = str[i .. str.length].parse_uint_with_decimal(fixed_point_divisor, bytes_taken, base);
+    const(char)* s = str.ptr, e = s + str.length, p = s;
+    uint neg = parse_sign(p, e);
+    uint base = parse_base_prefix(p, e);
+    ulong i = p[0 .. e - p].parse_uint(bytes_taken, base);
     if (bytes_taken && *bytes_taken != 0)
-        *bytes_taken += i;
-    return neg ? -cast(long)value : cast(long)value;
+        *bytes_taken += p - s;
+    return neg ? -long(i) : long(i);
 }
 
-ulong parse_uint(const(char)[] str, size_t* bytes_taken = null, int base = 10) pure
+long parse_int_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10) pure
 {
-    assert(base > 1 && base <= 36, "Invalid base");
+    const(char)* s = str.ptr, e = s + str.length, p = s;
+    uint neg = parse_sign(p, e);
+    ulong value = p[0 .. e - p].parse_uint_with_exponent(exponent, bytes_taken, base);
+    if (bytes_taken && *bytes_taken != 0)
+        *bytes_taken += p - s;
+    return neg ? -long(value) : long(value);
+}
+
+long parse_int_with_exponent_and_base(const(char)[] str, out int exponent, out uint base, size_t* bytes_taken = null) pure
+{
+    const(char)* s = str.ptr, e = s + str.length, p = s;
+    uint neg = parse_sign(p, e);
+    base = parse_base_prefix(p, e);
+    ulong value = p[0 .. e - p].parse_uint_with_exponent(exponent, bytes_taken, base);
+    if (bytes_taken && *bytes_taken != 0)
+        *bytes_taken += p - s;
+    return neg ? -long(value) : long(value);
+}
+
+ulong parse_uint(const(char)[] str, size_t* bytes_taken = null, uint base = 10) pure
+{
+    debug assert(base > 1 && base <= 36, "Invalid base");
 
     ulong value = 0;
 
@@ -81,11 +86,19 @@ ulong parse_uint(const(char)[] str, size_t* bytes_taken = null, int base = 10) p
     return value;
 }
 
+ulong parse_uint_with_base(const(char)[] str, size_t* bytes_taken = null) pure
+{
+    const(char)* s = str.ptr, e = s + str.length, p = s;
+    uint base = parse_base_prefix(p, e);
+    ulong i = p[0 .. e - p].parse_uint(bytes_taken, base);
+    if (bytes_taken && *bytes_taken != 0)
+        *bytes_taken += p - s;
+    return i;
+}
+
 ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10) pure
 {
-    import urt.util : ctz, is_power_of_2;
-
-    assert(base > 1 && base <= 36, "Invalid base");
+    debug assert(base > 1 && base <= 36, "Invalid base");
 
     const(char)* s = str.ptr;
     const(char)* e = s + str.length;
@@ -129,8 +142,11 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
     }
 
     // number has no decimal point, tail zeroes are positive exp
-    exp = digits ? zero_seq : 0;
-    goto done;
+    if (!digits)
+        goto nothing;
+
+    exp = zero_seq;
+    goto check_exp;
 
 parse_decimal:
     for (; s < e; ++s)
@@ -159,19 +175,74 @@ parse_decimal:
         zero_seq = 0;
     }
     if (!digits)
-        exp = 0; // didn't parse any digits; reset exp to 0
+        goto nothing;
+
+check_exp:
+    // check for exponent part
+    if (s < e && (*s == 'e' || *s == 'E'))
+    {
+        ++s;
+        bool exp_neg = false;
+        if (s < e)
+        {
+            char c = *s;
+            exp_neg = c == '-';
+            if (exp_neg || c == '+')
+                ++s;
+        }
+
+        int exp_value = 0;
+        const(char)* t = s;
+        for (; t < e; ++t)
+        {
+            uint digit = *t - '0';
+            if (digit > 9)
+                break;
+            exp_value = exp_value * 10 + digit;
+        }
+        if (t > s)
+        {
+            exp += exp_neg ? -exp_value : exp_value;
+            s = t;
+        }
+    }
 
 done:
     exponent = exp;
     if (bytes_taken)
         *bytes_taken = s - str.ptr;
     return value;
+
+nothing:
+    exp = 0;
+    goto done;
+}
+
+ulong parse_uint_with_exponent_and_base(const(char)[] str, out int exponent, out uint base, size_t* bytes_taken = null) pure
+{
+    const(char)* s = str.ptr, e = s + str.length, p = s;
+    base = parse_base_prefix(p, e);
+    ulong value = p[0 .. e - p].parse_uint_with_exponent(exponent, bytes_taken, base);
+    if (value && *bytes_taken != 0)
+        *bytes_taken += p - s;
+    return value;
 }
 
 unittest
 {
-    int e;
     size_t taken;
+    assert(parse_uint("123") == 123);
+    assert(parse_int("+123.456") == 123);
+    assert(parse_int("-123.456", null, 10) == -123);
+    assert(parse_int("11001", null, 2) == 25);
+    assert(parse_int("123abc", &taken, 10) == 123 && taken == 3);
+    assert(parse_int("!!!", &taken, 10) == 0 && taken == 0);
+    assert(parse_int("-!!!", &taken, 10) == 0 && taken == 0);
+    assert(parse_int("Wow", &taken, 36) == 42368 && taken == 3);
+    assert(parse_uint_with_base("0x100", &taken) == 0x100 && taken == 5);
+    assert(parse_int_with_base("-0x100", &taken) == -0x100 && taken == 6);
+
+    int e;
     assert("0001023000".parse_uint_with_exponent(e, &taken, 10) == 1023 && e == 3 && taken == 10);
     assert("0.0012003000".parse_uint_with_exponent(e, &taken, 10) == 12003 && e == -7 && taken == 12);
     assert("00010.23000".parse_uint_with_exponent(e, &taken, 10) == 1023 && e == -2 && taken == 11);
@@ -179,100 +250,8 @@ unittest
     assert("00100.00230".parse_uint_with_exponent(e, &taken, 10) == 1000023 && e == -4 && taken == 11);
     assert("0.0".parse_uint_with_exponent(e, &taken, 10) == 0 && e == 0 && taken == 3);
     assert(".01".parse_uint_with_exponent(e, &taken, 10) == 0 && e == 0 && taken == 0);
-}
-
-ulong parse_uint_with_decimal(const(char)[] str, out ulong fixed_point_divisor, size_t* bytes_taken = null, int base = 10) pure
-{
-    assert(base > 1 && base <= 36, "Invalid base");
-
-    ulong value = 0;
-    ulong divisor = 1;
-
-    const(char)* s = str.ptr;
-    const(char)* e = s + str.length;
-
-    // TODO: we could optimise the common base <= 10 case...
-
-    for (; s < e; ++s)
-    {
-        char c = *s;
-
-        if (c == '.')
-        {
-            if (s == str.ptr)
-                goto done;
-            ++s;
-            goto parse_decimal;
-        }
-
-        uint digit = get_digit(c);
-        if (digit >= base)
-            break;
-        value = value*base + digit;
-    }
-    goto done;
-
-parse_decimal:
-    for (; s < e; ++s)
-    {
-        uint digit = get_digit(*s);
-        if (digit >= base)
-        {
-            // if i == 1, then the first char was a '.' and the next was not numeric, so this is not a number!
-            if (s == str.ptr + 1)
-                s = str.ptr;
-            break;
-        }
-        value = value*base + digit;
-        divisor *= base;
-    }
-
-done:
-    fixed_point_divisor = divisor;
-    if (bytes_taken)
-        *bytes_taken = s - str.ptr;
-    return value;
-}
-
-long parse_int_with_base(const(char)[] str, size_t* bytes_taken = null) pure
-{
-    const(char)* p = str.ptr;
-    int base = str.parse_base_prefix();
-    if (base == 10)
-        return str.parse_int(bytes_taken);
-    ulong i = str.parse_uint(bytes_taken, base);
-    if (bytes_taken && *bytes_taken != 0)
-        *bytes_taken += str.ptr - p;
-    return i;
-}
-
-ulong parse_uint_with_base(const(char)[] str, size_t* bytes_taken = null) pure
-{
-    const(char)* p = str.ptr;
-    int base = str.parse_base_prefix();
-    ulong i = str.parse_uint(bytes_taken, base);
-    if (bytes_taken && *bytes_taken != 0)
-        *bytes_taken += str.ptr - p;
-    return i;
-}
-
-
-unittest
-{
-    size_t taken;
-    ulong divisor;
-    assert(parse_uint("123") == 123);
-    assert(parse_int("+123.456") == 123);
-    assert(parse_int("-123.456", null, 10) == -123);
-    assert(parse_uint_with_decimal("123.456", divisor, null, 10) == 123456 && divisor == 1000);
-    assert(parse_int_with_decimal("123.456.789", divisor, &taken, 16) == 1193046 && taken == 7 && divisor == 4096);
-    assert(parse_int("11001", null, 2) == 25);
-    assert(parse_int_with_decimal("-AbCdE.f", divisor, null, 16) == -11259375 && divisor == 16);
-    assert(parse_int("123abc", &taken, 10) == 123 && taken == 3);
-    assert(parse_int("!!!", &taken, 10) == 0 && taken == 0);
-    assert(parse_int("-!!!", &taken, 10) == 0 && taken == 0);
-    assert(parse_int("Wow", &taken, 36) == 42368 && taken == 3);
-    assert(parse_uint_with_base("0x100", &taken) == 0x100 && taken == 5);
+    assert("10e+2".parse_uint_with_exponent(e, &taken, 10) == 1 && e == 3 && taken == 5);
+    assert("0.01E+2".parse_uint_with_exponent(e, &taken, 10) == 1 && e == 0 && taken == 7);
 }
 
 int parse_int_fast(ref const(char)[] text, out bool success) pure
@@ -337,17 +316,25 @@ unittest
 
 
 // on error or not-a-number, result will be nan and bytes_taken will contain 0
-double parse_float(const(char)[] str, size_t* bytes_taken = null, int base = 10) pure
+double parse_float(const(char)[] str, size_t* bytes_taken = null, uint base = 10) pure
 {
-    // TODO: E-notation...
-    size_t taken = void;
-    ulong div = void;
-    long value = str.parse_int_with_decimal(div, &taken, base);
+    import urt.math : pow;
+
+    int e;
+    size_t taken;
+    long mantissa = str.parse_int_with_exponent(e, &taken, base);
     if (bytes_taken)
         *bytes_taken = taken;
     if (taken == 0)
         return double.nan;
-    return cast(double)value / div;
+
+    // TODO: the real work needs to happen here!
+    //       we want all the bits of precision!
+
+    if (__ctfe)
+        return mantissa * double(base)^^e;
+    else
+        return mantissa * pow(base, e);
 }
 
 unittest
@@ -362,6 +349,7 @@ unittest
     assert(fcmp(parse_float("123.456"), 123.456));
     assert(fcmp(parse_float("+123.456"), 123.456));
     assert(fcmp(parse_float("-123.456.789"), -123.456));
+    assert(fcmp(parse_float("-123.456e10"), -1.23456e+12));
     assert(fcmp(parse_float("1101.11", &taken, 2), 13.75) && taken == 7);
     assert(parse_float("xyz", &taken) is double.nan && taken == 0);
 }
@@ -626,7 +614,7 @@ template to(T)
     {
         long to(const(char)[] str)
         {
-            int base = parse_base_prefix(str);
+            uint base = parse_base_prefix(str);
             size_t taken;
             long r = parse_int(str, &taken, base);
             assert(taken == str.length, "String is not numeric");
@@ -637,7 +625,7 @@ template to(T)
     {
         double to(const(char)[] str)
         {
-            int base = parse_base_prefix(str);
+            uint base = parse_base_prefix(str);
             size_t taken;
             double r = parse_float(str, &taken, base);
             assert(taken == str.length, "String is not numeric");
@@ -681,33 +669,41 @@ template to(T)
 
 private:
 
+// valid result is 0 .. 35; result is garbage outside that bound
 uint get_digit(char c) pure
 {
     uint zero_base = c - '0';
     if (zero_base < 10)
         return zero_base;
-    uint A_base = c - 'A';
-    if (A_base < 26)
-        return A_base + 10;
-    uint a_base = c - 'a';
-    if (a_base < 26)
-        return a_base + 10;
-    return -1;
+    uint a_base = (c | 0x20) - 'a';
+    return 10 + a_base;
 }
 
-int parse_base_prefix(ref const(char)[] str) pure
+uint parse_base_prefix(ref const(char)* str, const(char)* end) pure
 {
-    int base = 10;
-    if (str.length >= 2)
+    uint base = 10;
+    if (str + 2 <= end && str[0] == '0')
     {
-        if (str[0..2] == "0x")
-            base = 16, str = str[2..$];
-        else if (str[0..2] == "0b")
-            base = 2, str = str[2..$];
-        else if (str[0..2] == "0o")
-            base = 8, str = str[2..$];
+        if (str[1] == 'x')
+            base = 16, str += 2;
+        else if (str[1] == 'b')
+            base = 2, str += 2;
+        else if (str[1] == 'o')
+            base = 8, str += 2;
     }
     return base;
+}
+
+uint parse_sign(ref const(char)* str, const(char)* end) pure
+{
+    if (str == end)
+        return 0;
+    // NOTE: ascii is '+' = 43, '-' = 45
+    uint neg = *str - '+';
+    if (neg > 2 || neg == 1)
+        return 0;
+    ++str;
+    return neg;
 }
 
 

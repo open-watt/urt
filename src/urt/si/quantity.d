@@ -146,11 +146,12 @@ nothrow @nogc:
             return mixin("this.value " ~ op ~ " value");
         else
         {
-            Quantity!(TypeForOp!(op, T, U), unit) r;
-            r.value = mixin("this.value " ~ op ~ " value");
+            alias RT = TypeForOp!(op, T, U);
+            RT v = mixin("this.value " ~ op ~ " value");
             static if (Dynamic)
-                r.unit = unit;
-            return r;
+                return Quantity!RT(v, unit);
+            else
+                return Quantity!(RT, unit)(v);
         }
     }
 

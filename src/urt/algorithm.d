@@ -132,6 +132,9 @@ size_t binary_search(alias pred = void, T, Cmp...)(T[] arr, auto ref Cmp cmp_arg
 
 void qsort(alias pred = void, T)(T[] arr) pure
 {
+    if (arr.length <= 1)
+        return;
+
     version (SmallSize)
         enum use_small_size_impl = true;
     else
@@ -157,39 +160,44 @@ void qsort(alias pred = void, T)(T[] arr) pure
     else
     {
         T* p = arr.ptr;
-        if (arr.length > 1)
+        const n = cast(ptrdiff_t)arr.length;
+
+        size_t pivotIndex = n / 2;
+        T* pivot = p + pivotIndex;
+
+        size_t i = 0;
+        ptrdiff_t j = n - 1;
+
+        while (i <= j)
         {
-            size_t pivotIndex = arr.length / 2;
-            T* pivot = p + pivotIndex;
-
-            size_t i = 0;
-            size_t j = arr.length - 1;
-
-            while (i <= j)
+            static if (is(pred == void))
             {
-                static if (is(pred == void))
-                {
-                    while (p[i] < *pivot) i++;
-                    while (p[j] > *pivot) j--;
-                }
-                else
-                {
-                    while (pred(p[i], *pivot) < 0) i++;
-                    while (pred(p[j], *pivot) > 0) j--;
-                }
-                if (i <= j)
-                {
-                    swap(p[i], p[j]);
-                    i++;
-                    j--;
-                }
+                while (p[i] < *pivot) ++i;
+                while (p[j] > *pivot) --j;
             }
+            else
+            {
+                while (pred(p[i], *pivot) < 0) ++i;
+                while (pred(p[j], *pivot) > 0) --j;
+            }
+            if (i <= j)
+            {
+                // track pivot value across swaps
+                if (p + i == pivot)
+                    pivot = p + j;
+                else if (p + j == pivot)
+                    pivot = p + i;
 
-            if (j > 0)
-                qsort!pred(p[0 .. j + 1]);
-            if (i < arr.length)
-                qsort!pred(p[i .. arr.length]);
+                swap(p[i], p[j]);
+                ++i;
+                --j;
+            }
         }
+
+        if (j >= 0)
+            qsort!pred(p[0 .. j + 1]);
+        if (i < n)
+            qsort!pred(p[i .. n]);
     }
 }
 

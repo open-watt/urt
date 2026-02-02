@@ -399,31 +399,28 @@ Variant parse_node(ref const(char)[] text)
     }
     else if (text[0].is_numeric || (text[0] == '-' && text.length > 1 && text[1].is_numeric))
     {
-        bool neg = text[0] == '-';
         size_t taken = void;
-        ulong div = void;
-        ulong value = text[neg .. $].parse_uint_with_decimal(div, &taken, 10);
+        int e = void;
+        long value = text.parse_int_with_exponent(e, &taken, 10);
         assert(taken > 0);
-        text = text[taken + neg .. $];
+        text = text[taken .. $];
 
-        if (div > 1)
+        // let's work out if value*10^^e is an integer?
+        bool is_integer = e >= 0;
+        for (; e > 0; --e)
         {
-            double d = cast(double)value;
-            if (neg)
-                d = -d;
-            d /= div;
-            return Variant(d);
-        }
-        else
-        {
-            if (neg)
+            if (value < 0 ? (value < long.min / 10) : (value > long.max / 10))
             {
-                assert(value <= long.max + 1);
-                return Variant(-cast(long)value);
+                is_integer = false;
+                break;
             }
-            else
-                return Variant(value);
+            value *= 10;
         }
+
+        if (is_integer)
+            return Variant(value);
+        else
+            return Variant(value * 10.0^^e);
     }
     else
         assert(false, "Invalid JSON!");

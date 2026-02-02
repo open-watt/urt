@@ -1060,8 +1060,8 @@ nothrow @nogc:
         {
             size_t taken;
             ScaledUnit unit;
-            ulong div;
-            long i = s.parse_int_with_decimal(div, &taken, 10);
+            int e;
+            long i = s.parse_int_with_exponent(e, &taken, 10);
             if (taken < s.length)
             {
                 size_t t2 = unit.fromString(s[taken .. $]);
@@ -1070,8 +1070,8 @@ nothrow @nogc:
             }
             if (taken == s.length)
             {
-                if (div != 1)
-                    this = double(i) / div;
+                if (e != 0)
+                    this = i * 10.0^^e;
                 else
                     this = i;
                 if (unit.pack)

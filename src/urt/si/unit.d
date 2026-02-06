@@ -423,12 +423,12 @@ nothrow:
         return unit == b.unit;
     }
 
-    double scale(bool inv = false)() const pure
+    double scale(bool invert = false)() const pure
     {
         if (siScale)
         {
             int e = exp();
-            if (inv)
+            if (invert)
                 e = -e;
             if (uint(e + 9) < 19)
                 return sciScaleFactor[e + 9];
@@ -436,9 +436,9 @@ nothrow:
         }
 
         if (isExtended())
-            return extScaleFactor[(pack >> 29) ^ (inv << 2)];
+            return extScaleFactor[(pack >> 29) ^ (invert << 2)];
 
-        double s = scaleFactor[(pack >> 31) ^ inv][sf()];
+        double s = scaleFactor[(pack >> 31) ^ invert][sf()];
         for (uint i = ((pack >> 29) & 3); i > 0; --i)
             s *= s;
         return s;
@@ -809,6 +809,17 @@ nothrow:
     size_t toHash() const pure
         => pack;
 
+    auto __debugOverview()
+    {
+        debug {
+            char[] buffer = new char[32];
+            ptrdiff_t len = toString(buffer, null, null);
+            return buffer[0 .. len];
+        }
+        else
+            return pack;
+    }
+
 package:
     this(uint pack) pure
     {
@@ -881,9 +892,9 @@ immutable double[16][2] scaleFactor = [ [
     PI/180, // Degrees
     double.nan // extended...
 ], [
-    1/60,   // Minute
-    1/3600, // Hour
-    1/86400, // Day
+    1/60.0,   // Minute
+    1/3600.0, // Hour
+    1/86400.0, // Day
     1/0.0254, // Inch
     1/0.3048, // Foot
     1/1609.344, // Mile

@@ -37,13 +37,17 @@ struct StringCacheBuilder
 nothrow @nogc:
     this(char[] buffer) pure
     {
-        assert(buffer.length <= ushort.max, "Buffer too long");
+        assert(buffer.length >= 2 && buffer.length <= ushort.max, "Invalid buffer length");
+        buffer[0..2] = 0;
         this._buffer = buffer;
-        this._offset = 0;
+        this._offset = 2;
     }
 
     ushort add_string(const(char)[] s) pure
     {
+        if (s.length == 0)
+            return 0;
+
         assert(s.length <= MaxStringLen, "String too long");
         assert(_offset + s.length + 2 + (s.length & 1) <= _buffer.length, "Not enough space in buffer");
         if (__ctfe)

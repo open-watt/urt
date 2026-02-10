@@ -9,7 +9,7 @@ import urt.map;
 import urt.mem.allocator;
 import urt.si.quantity;
 import urt.si.unit : ScaledUnit, Second, Nanosecond;
-import urt.time : Duration, dur;
+import urt.time;
 import urt.traits;
 
 nothrow @nogc:
@@ -257,35 +257,40 @@ nothrow @nogc:
     this(T)(auto ref T thing)
         if (ValidUserType!T)
     {
-        alias dummy = MakeTypeDetails!T;
-
-        flags = Flags.User;
-        static if (is(T == class))
-        {
-            count = UserTypeId!T;
-            alloc = type_detail_index!T();
-            ptr = cast(void*)thing;
-        }
-        else static if (EmbedUserType!T)
-        {
-            alloc = UserTypeId!T;
-            flags |= Flags.Embedded;
-
-            if (TypeDetailsFor!T.destroy) // TODO: we should check the same condition that determined if there is a destruct function...
-                flags |= Flags.NeedDestruction;
-
-            emplace(cast(T*)embed.ptr, forward!thing);
-        }
+        static if (is(Unqual!T == MonoTime))
+            this(cast(SysTime)thing);
         else
         {
-            count = UserTypeId!T;
-            alloc = type_detail_index!T();
+            alias dummy = MakeTypeDetails!T;
 
-            if (TypeDetailsFor!T.destroy) // TODO: we should check the same condition that determined if there is a destruct function...
-                flags |= Flags.NeedDestruction;
+            flags = Flags.User;
+            static if (is(T == class))
+            {
+                count = UserTypeId!T;
+                alloc = type_detail_index!T();
+                ptr = cast(void*)thing;
+            }
+            else static if (EmbedUserType!T)
+            {
+                alloc = UserTypeId!T;
+                flags |= Flags.Embedded;
 
-            ptr = defaultAllocator().alloc(T.sizeof, T.alignof).ptr;
-            emplace(cast(T*)ptr, forward!thing);
+                if (TypeDetailsFor!T.destroy) // TODO: we should check the same condition that determined if there is a destruct function...
+                    flags |= Flags.NeedDestruction;
+
+                emplace(cast(T*)embed.ptr, forward!thing);
+            }
+            else
+            {
+                count = UserTypeId!T;
+                alloc = type_detail_index!T();
+
+                if (TypeDetailsFor!T.destroy) // TODO: we should check the same condition that determined if there is a destruct function...
+                    flags |= Flags.NeedDestruction;
+
+                ptr = defaultAllocator().alloc(T.sizeof, T.alignof).ptr;
+                emplace(cast(T*)ptr, forward!thing);
+            }
         }
     }
 
@@ -812,23 +817,50 @@ nothrow @nogc:
         else
             return *cast(inout(T)*)ptr;
     }
-    inout(T) asUser(T)() inout pure
+    inout(T) asUser(T)() inout
         if (ValidUserType!(Unqual!T) && !UserTypeReturnByRef!T)
     {
         alias U = Unqual!T;
-        if (!isUser!U)
-            assert(false, "Variant is not a " ~ U.stringof);
-        static if (is(U == class))
-            return cast(inout(T))ptr;
-        else static if (EmbedUserType!U)
+
+        // some hacks for builtin time types...
+        static if (is(U == MonoTime))
+            return cast(MonoTime)asUser!SysTime;
+        else static if (is(T == SysTime))
         {
-            // make a copy on the stack and return by value
-            U r = void;
-            TypeDetailsFor!U.copy_emplace(embed.ptr, &r, false);
-            return r;
+            static assert (EmbedUserType!SysTime && EmbedUserType!DateTime);
+            if (isUser!SysTime)
+                return *cast(inout(SysTime)*)embed.ptr;
+            if (isUser!DateTime)
+                return getSysTime(*cast(DateTime*)embed.ptr);
+            assert(false, "Variant is not a timestamp");
+        }
+        else static if (is(T == DateTime))
+        {
+            static assert (EmbedUserType!SysTime && EmbedUserType!DateTime);
+            if (isUser!DateTime)
+                return *cast(inout(DateTime)*)embed.ptr;
+            if (isUser!SysTime)
+                return getDateTime(*cast(SysTime*)embed.ptr);
+            assert(false, "Variant is not a timestamp");
         }
         else
-            static assert(false, "Should be impossible?");
+        {
+            if (!isUser!U)
+                assert(false, "Variant is not a " ~ U.stringof);
+            static if (is(U == class))
+                return cast(inout(T))ptr;
+            else static if (EmbedUserType!U)
+            {
+                // TODO: it would be nice to support trivial types and just cast/copy rather than copy_emplace(...)
+
+                // make a copy on the stack and return by value
+                U r = void;
+                TypeDetailsFor!U.copy_emplace(cast(U*)embed.ptr, &r, false);
+                return r;
+            }
+            else
+                static assert(false, "Should be impossible?");
+        }
     }
 
     auto as(T)() inout pure
@@ -906,6 +938,21 @@ nothrow @nogc:
 
     bool empty() const pure
         => isObject() ? count == 0 : length() == 0;
+
+    Variant* insert(const(char)[] key, Variant value)
+    {
+        if (flags == Flags.Null)
+            flags = Flags.Map;
+        else
+        {
+            assert(isObject());
+            if (getMember(key))
+                return null;
+        }
+        nodeArray.emplaceBack(key);
+        move(value, nodeArray.pushBack());
+        return &nodeArray.back();
+    }
 
     inout(Variant)* getMember(const(char)[] member) inout pure
     {
@@ -1295,7 +1342,7 @@ template UserTypeId(T)
         enum ushort UserTypeId = cast(ushort)Hash ^ (Hash >> 16);
 }
 enum bool EmbedUserType(T) = is(T == struct) && T.sizeof <= Variant.embed.sizeof - 2 && T.alignof <= Variant.alignof;
-enum bool UserTypeReturnByRef(T) = is(T == struct);
+enum bool UserTypeReturnByRef(T) = is(T == struct) && !EmbedUserType!T;
 
 ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
 {
@@ -1310,6 +1357,8 @@ ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
 template MakeTypeDetails(T)
 {
     static assert(is(Unqual!T == T), "Only instantiate for mutable types");
+
+//    pragma(msg, "Add user type: ", T.stringof, EmbedUserType!T ? " - embedded" : "");
 
     // this is a hack which populates an array of user type details when the program starts
     // TODO: we can probably NOT do this for class types, and just use RTTI instead...
@@ -1344,7 +1393,7 @@ struct TypeDetails
     ptrdiff_t function(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc stringify;
     int function(const void* a, const void* b, int type) pure nothrow @nogc cmp;
 }
-__gshared TypeDetails[8] g_type_details;
+__gshared TypeDetails[16] g_type_details;
 __gshared ushort g_num_type_details = 0;
 
 typeof(g_type_details)* type_details() => &g_type_details;
@@ -1449,16 +1498,13 @@ public template TypeDetailsFor(T)
                     return a.opCmp(b);
                 else static if (__traits(compiles, { b.opCmp(a); }))
                     return -b.opCmp(a);
-                else
+                else static if (is(T == class))
                 {
-                    static if (is(T == class))
-                    {
-                        ptrdiff_t r = cast(ptrdiff_t)pa - cast(ptrdiff_t)pb;
-                        return r < 0 ? -1 : r > 0 ? 1 : 0;
-                    }
-                    else
-                        return a < b ? -1 : a > b ? 1 : 0;
+                    ptrdiff_t r = cast(ptrdiff_t)pa - cast(ptrdiff_t)pb;
+                    return r < 0 ? -1 : r > 0 ? 1 : 0;
                 }
+                else
+                    assert(false, "No comparison!"); // TODO: hash or stringify the values and order that way?
             case 1:
                 static if (is(T == class) || is(T == U*, U) || is(T == V[], V))
                 {

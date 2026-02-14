@@ -34,7 +34,7 @@ else version (Posix)
     import core.sys.posix.netinet.in_ : in6_addr, sockaddr_in6;
 
     alias _bind = urt.internal.os.bind, _listen = urt.internal.os.listen, _connect = urt.internal.os.connect,
-        _accept = urt.internal.os.accept, _send = urt.internal.os.send, _sendto = urt.internal.os.sendto,
+        _accept = urt.internal.os.accept, _send = urt.internal.os.send, _sendto = urt.internal.os.sendto, _sendmsg = urt.internal.os.sendmsg,
         _recv = urt.internal.os.recv, _recvfrom = urt.internal.os.recvfrom, _shutdown = urt.internal.os.shutdown;
     alias _poll = core.sys.posix.poll.poll;
 
@@ -146,10 +146,9 @@ enum SocketOption : ubyte
 enum MsgFlags : ubyte
 {
     none    = 0,
-    oob     = 1 << 0,
-    peek    = 1 << 1,
-    confirm = 1 << 2,
-    no_sig  = 1 << 3,
+    peek    = 1 << 0,
+    confirm = 1 << 1,
+    no_sig  = 1 << 2,
     //...
 }
 
@@ -251,11 +250,11 @@ Result shutdown(Socket socket, SocketShutdownMode how)
 Result bind(Socket socket, ref const InetAddress address)
 {
     ubyte[512] buffer = void;
-    size_t addrLen;
-    sockaddr* sock_addr = make_sockaddr(address, buffer, addrLen);
+    size_t addr_len;
+    sockaddr* sock_addr = make_sockaddr(address, buffer, addr_len);
     assert(sock_addr, "Invalid socket address");
 
-    if (_bind(socket.handle, sock_addr, cast(int)addrLen) < 0)
+    if (_bind(socket.handle, sock_addr, cast(int)addr_len) < 0)
         return socket_getlasterror();
     return Result.success;
 }
@@ -270,11 +269,11 @@ Result listen(Socket socket, uint backlog = -1)
 Result connect(Socket socket, ref const InetAddress address)
 {
     ubyte[512] buffer = void;
-    size_t addrLen;
-    sockaddr* sock_addr = make_sockaddr(address, buffer, addrLen);
+    size_t addr_len;
+    sockaddr* sock_addr = make_sockaddr(address, buffer, addr_len);
     assert(sock_addr, "Invalid socket address");
 
-    if (_connect(socket.handle, sock_addr, cast(int)addrLen) < 0)
+    if (_connect(socket.handle, sock_addr, cast(int)addr_len) < 0)
         return socket_getlasterror();
     return Result.success;
 }
@@ -303,41 +302,114 @@ Result accept(Socket socket, out Socket connection, InetAddress* remote_address 
 }
 
 Result send(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, size_t* bytes_sent = null)
-{
-    Result r = Result.success;
+    => send(socket, flags, bytes_sent, (&message)[0..1]);
 
-    ptrdiff_t sent = _send(socket.handle, message.ptr, cast(int)message.length, map_message_flags(flags));
-    if (sent < 0)
+Result send(Socket socket, MsgFlags flags, size_t* bytes_sent, const void[][] buffers...)
+{
+    version (Windows)
     {
-        r = socket_getlasterror();
-        sent = 0;
+        uint sent = void;
+        WSABUF[32] bufs = void;
+        assert(buffers.length <= bufs.length, "Too many buffers!");
+
+        uint n = 0;
+        foreach(buffer; buffers)
+        {
+            if (buffer.length == 0)
+                continue;
+            assert(buffer.length <= uint.max, "Buffer too large!");
+            bufs[n].buf = cast(char*)buffer.ptr;
+            bufs[n++].len = cast(uint)buffer.length;
+        }
+
+        int rc = WSASend(socket.handle, bufs.ptr, n, &sent, /+map_message_flags(flags)+/ 0, null, null); // there are no meaningful flags on Windows
+        if (rc == SOCKET_ERROR)
+            return socket_getlasterror();
+        if (bytes_sent)
+            *bytes_sent = sent;
+        return Result.success;
     }
-    if (bytes_sent)
-        *bytes_sent = sent;
-    return r;
+    else
+        return sendmsg(socket, null, flags, null, bytes_sent, buffers);
 }
 
 Result sendto(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, const InetAddress* address = null, size_t* bytes_sent = null)
+    => sendmsg(socket, address, flags, null, bytes_sent, (&message)[0..1]);
+
+Result sendto(Socket socket, const InetAddress* address, size_t* bytes_sent, const void[][] buffers...)
+    => sendmsg(socket, address, MsgFlags.none, null, bytes_sent, buffers);
+
+Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(void)[] control, size_t* bytes_sent, const void[][] buffers)
 {
     ubyte[sockaddr_storage.sizeof] tmp = void;
-    size_t addrLen;
+    size_t addr_len;
     sockaddr* sock_addr = null;
     if (address)
     {
-        sock_addr = make_sockaddr(*address, tmp, addrLen);
+        sock_addr = make_sockaddr(*address, tmp, addr_len);
         assert(sock_addr, "Invalid socket address");
     }
 
-    Result r = Result.success;
-    ptrdiff_t sent = _sendto(socket.handle, message.ptr, cast(int)message.length, map_message_flags(flags), sock_addr, cast(int)addrLen);
-    if (sent < 0)
+    version (Windows)
     {
-        r = socket_getlasterror();
-        sent = 0;
+        uint sent = void;
+        WSAMSG msg;
+        WSABUF[32] bufs = void;
+        assert(buffers.length <= bufs.length, "Too many buffers!");
+
+        uint n = 0;
+        foreach(buffer; buffers)
+        {
+            if (buffer.length == 0)
+                continue;
+            assert(buffer.length <= uint.max, "Buffer too large!");
+            bufs[n].buf = cast(char*)buffer.ptr;
+            bufs[n++].len = cast(uint)buffer.length;
+        }
+
+        msg.name = sock_addr;
+        msg.namelen = cast(int)addr_len;
+        msg.lpBuffers = bufs.ptr;
+        msg.dwBufferCount = n;
+        msg.Control.buf = cast(char*)control.ptr;
+        msg.Control.len = cast(uint)control.length;
+        msg.dwFlags = 0;
+
+        int rc = WSASendMsg(socket.handle, &msg, /+map_message_flags(flags)+/ 0, &sent, null, null); // there are no meaningful flags on Windows
+        if (rc == SOCKET_ERROR)
+            return socket_getlasterror();
+    }
+    else
+    {
+        msghdr hdr;
+        iovec[32] iov = void;
+        assert(buffers.length <= iov.length, "Too many buffers!");
+
+        size_t n = 0;
+        foreach(buffer; buffers)
+        {
+            if (buffer.length == 0)
+                continue;
+            assert(buffer.length <= uint.max, "Buffer too large!");
+            iov[n].iov_base = cast(void*)buffer.ptr;
+            iov[n++].iov_len = buffer.length;
+        }
+
+        hdr.msg_name = sock_addr;
+        hdr.msg_namelen = cast(socklen_t)addr_len;
+        hdr.msg_iov = iov.ptr;
+        hdr.msg_iovlen = n;
+        hdr.msg_control = cast(void*)control.ptr;
+        hdr.msg_controllen = control.length;
+        hdr.msg_flags = 0;
+
+        ptrdiff_t sent = _sendmsg(socket.handle, &hdr, map_message_flags(flags));
+        if (sent < 0)
+            return socket_getlasterror();
     }
     if (bytes_sent)
         *bytes_sent = sent;
-    return r;
+    return Result.success;
 }
 
 Result recv(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, size_t* bytes_received)
@@ -1046,7 +1118,7 @@ SocketResult socket_result(Result result)
 }
 
 
-sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_t addrLen)
+sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_t addr_len)
 {
     sockaddr* sock_addr = cast(sockaddr*)buffer.ptr;
 
@@ -1054,7 +1126,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
     {
         case AddressFamily.ipv4:
         {
-            addrLen = sockaddr_in.sizeof;
+            addr_len = sockaddr_in.sizeof;
             if (buffer.length < sockaddr_in.sizeof)
                 return null;
 
@@ -1079,7 +1151,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
         {
             version (HasIPv6)
             {
-                addrLen = sockaddr_in6.sizeof;
+                addr_len = sockaddr_in6.sizeof;
                 if (buffer.length < sockaddr_in6.sizeof)
                     return null;
 
@@ -1107,7 +1179,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
         {
 //            version (HasUnixSocket)
 //            {
-//                addrLen = sockaddr_un.sizeof;
+//                addr_len = sockaddr_un.sizeof;
 //                if (buffer.length < sockaddr_un.sizeof)
 //                    return null;
 //
@@ -1124,7 +1196,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
         default:
         {
             sock_addr = null;
-            addrLen = 0;
+            addr_len = 0;
 
             assert(false, "Unsupported address family");
             break;
@@ -1422,7 +1494,6 @@ else
 int map_message_flags(MsgFlags flags)
 {
     int r = 0;
-    if (flags & MsgFlags.oob) r |= MSG_OOB;
     if (flags & MsgFlags.peek) r |= MSG_PEEK;
     version (linux)
     {
@@ -1471,24 +1542,29 @@ version (Windows)
         // this is truly the worst thing I ever wrote!!
         enum SIO_GET_EXTENSION_FUNCTION_POINTER = 0xC8000006;
         struct GUID { uint Data1; ushort Data2, Data3; ubyte[8] Data4; }
+        __gshared immutable GUID WSAID_WSASENDMSG = GUID(0xA441E712, 0x754F, 0x43CA, [0x84,0xA7,0x0D,0xEE,0x44,0xCF,0x60,0x6D]);
         __gshared immutable GUID WSAID_WSARECVMSG = GUID(0xF689D7C8, 0x6F1F, 0x436B, [0x8A,0x53,0xE5,0x4F,0xE3,0x51,0xC3,0x22]);
 
         Socket dummy;
         uint bytes = 0;
         if (!create_socket(AddressFamily.ipv4, SocketType.datagram, Protocol.udp, dummy))
             goto FAIL;
+        if (WSAIoctl(dummy.handle, SIO_GET_EXTENSION_FUNCTION_POINTER, cast(void*)&WSAID_WSASENDMSG, cast(uint)GUID.sizeof,
+                     &WSASendMsg, cast(uint)WSASendMsgFn.sizeof, &bytes, null, null) != 0)
+            goto FAIL;
+        assert(bytes == WSASendMsgFn.sizeof);
         if (WSAIoctl(dummy.handle, SIO_GET_EXTENSION_FUNCTION_POINTER, cast(void*)&WSAID_WSARECVMSG, cast(uint)GUID.sizeof,
                      &WSARecvMsg, cast(uint)WSARecvMsgFn.sizeof, &bytes, null, null) != 0)
             goto FAIL;
         assert(bytes == WSARecvMsgFn.sizeof);
         dummy.close();
-        if (!WSARecvMsg)
+        if (!WSASendMsg || !WSARecvMsg)
             goto FAIL;
         return;
 
     FAIL:
         import urt.log;
-        writeWarning("Failed to get WSARecvMsg function pointer - recvfrom() won't be able to report the dst address");
+        writeWarning("Failed to get WSASendMsg/WSARecvMsg function pointers - sendmsg() won't work, recvfrom() won't be able to report the dst address");
     }
 
     pragma(crt_destructor)
@@ -1539,7 +1615,9 @@ version (Windows)
     }
     alias LPWSABUF = WSABUF*;
 
+    alias WSASendMsgFn = extern(Windows) int function(SOCKET s, LPWSAMSG lpMsg, uint dwFlags, uint* lpNumberOfBytesSent, LPWSAOVERLAPPED lpOverlapped, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
     alias WSARecvMsgFn = extern(Windows) int function(SOCKET s, LPWSAMSG lpMsg, uint* lpdwNumberOfBytesRecvd, LPWSAOVERLAPPED lpOverlapped, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+    __gshared WSASendMsgFn WSASendMsg;
     __gshared WSARecvMsgFn WSARecvMsg;
 
     struct IN_PKTINFO
@@ -1581,4 +1659,19 @@ version (Windows)
 
     size_t WSA_CMSGDATA_ALIGN(size_t length)
         => (length + size_t.alignof-1) & ~(size_t.alignof-1);
+
+     struct WSAOVERLAPPED
+     {
+        uint Internal;
+        uint InternalHigh;
+        uint Offset;
+        uint OffsetHigh;
+        HANDLE hEvent;
+    }
+    alias LPWSAOVERLAPPED = WSAOVERLAPPED*;
+
+    alias LPWSAOVERLAPPED_COMPLETION_ROUTINE = void function(uint dwError, uint cbTransferred, LPWSAOVERLAPPED lpOverlapped, uint dwFlags);
+
+    extern(Windows) int WSASend(SOCKET s, LPWSABUF lpBuffers, uint dwBufferCount, uint* lpNumberOfBytesSent, uint dwFlags, LPWSAOVERLAPPED lpOverlapped, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+    extern(Windows) int WSASendTo(SOCKET s, LPWSABUF lpBuffers, uint dwBufferCount, uint* lpNumberOfBytesSent, uint dwFlags, const(sockaddr)* lpTo, int iTolen, LPWSAOVERLAPPED lpOverlapped, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 }

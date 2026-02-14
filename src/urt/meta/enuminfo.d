@@ -1,4 +1,4 @@
-module urt.meta.enum_;
+module urt.meta.enuminfo;
 
 import urt.algorithm : binary_search, qsort;
 import urt.traits :EnumType, is_enum, Unqual;

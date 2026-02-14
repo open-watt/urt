@@ -497,3 +497,49 @@ unittest
     assert(DegreesC(100).opEquals!epsilon(DegreesF(212)));
     assert(DegreesF(100).opEquals!epsilon(DegreesC(37.77777777777777)));
 }
+
+
+VarQuantity parse_quantity(const(char)[] text, size_t* bytes_taken = null) nothrow
+{
+    import urt.si.unit;
+    import urt.conv;
+
+    int e;
+    uint base;
+    size_t taken;
+    long raw_value = text.parse_int_with_exponent_and_base(e, base, &taken);
+    if (taken == 0)
+    {
+        if (bytes_taken)
+            *bytes_taken = 0;
+        return VarQuantity(double.nan);
+    }
+
+    // we parsed a number!
+    auto r = VarQuantity(e == 0 ? raw_value : raw_value * double(base)^^e);
+
+    if (taken < text.length)
+    {
+        // try and parse a unit...
+        ScaledUnit su;
+        float pre_scale;
+        ptrdiff_t unit_taken = su.parse_unit(text[taken .. $], pre_scale, false);
+        if (unit_taken > 0)
+        {
+            taken += unit_taken;
+            r = VarQuantity(r.value * pre_scale, su);
+        }
+    }
+    if (bytes_taken)
+        *bytes_taken = taken;
+    return r;
+}
+
+unittest
+{
+    import urt.si.unit;
+
+    size_t taken;
+    assert("10V".parse_quantity(&taken) == Volts(10) && taken == 3);
+    assert("10.2e+2Wh".parse_quantity(&taken) == WattHours(1020) && taken == 9);
+}

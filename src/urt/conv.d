@@ -1,7 +1,6 @@
 module urt.conv;
 
 import urt.meta;
-import urt.si.quantity;
 import urt.string;
 public import urt.string.format : toString;
 
@@ -358,50 +357,6 @@ unittest
     assert(fcmp(parse_float("-123.456e10"), -1.23456e+12));
     assert(fcmp(parse_float("1101.11", &taken, 2), 13.75) && taken == 7);
     assert(parse_float("xyz", &taken) is double.nan && taken == 0);
-}
-
-VarQuantity parse_quantity(const(char)[] text, size_t* bytes_taken = null) nothrow
-{
-    import urt.si.unit;
-
-    int e;
-    uint base;
-    size_t taken;
-    long raw_value = text.parse_int_with_exponent_and_base(e, base, &taken);
-    if (taken == 0)
-    {
-        if (bytes_taken)
-            *bytes_taken = 0;
-        return VarQuantity(double.nan);
-    }
-
-    // we parsed a number!
-    auto r = VarQuantity(e == 0 ? raw_value : raw_value * double(base)^^e);
-
-    if (taken < text.length)
-    {
-        // try and parse a unit...
-        ScaledUnit su;
-        float pre_scale;
-        ptrdiff_t unit_taken = su.parse_unit(text[taken .. $], pre_scale, false);
-        if (unit_taken > 0)
-        {
-            taken += unit_taken;
-            r = VarQuantity(r.value * pre_scale, su);
-        }
-    }
-    if (bytes_taken)
-        *bytes_taken = taken;
-    return r;
-}
-
-unittest
-{
-    import urt.si.unit;
-
-    size_t taken;
-    assert("10V".parse_quantity(&taken) == Volts(10) && taken == 3);
-    assert("10.2e+2Wh".parse_quantity(&taken) == WattHours(1020) && taken == 9);
 }
 
 

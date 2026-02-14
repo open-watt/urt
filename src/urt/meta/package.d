@@ -187,6 +187,12 @@ nothrow @nogc:
         return get_key(_lookup_tables[count*2 + i]);
     }
 
+    const(char)[] key_by_sorted_index(size_t i) const pure
+    {
+        assert(i < count, "Declaration index out of range");
+        return get_key(i);
+    }
+
     const(void)* value_for(const(char)[] key) const pure
     {
         size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
@@ -279,6 +285,9 @@ template EnumInfo(E)
 
             const(char)[] key_by_decl_index(size_t i) const pure
                 => _base.key_by_decl_index(i);
+
+            const(char)[] key_by_sorted_index(size_t i) const pure
+                => _base.key_by_sorted_index(i);
 
             const(UE)* value_for(const(char)[] key) const pure
             {

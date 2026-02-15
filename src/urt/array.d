@@ -878,11 +878,6 @@ struct SharedArray(T)
 
 nothrow @nogc:
 
-    void opAssign(typeof(null))
-    {
-        clear();
-    }
-
     void opAssign(ref typeof(this) val)
     {
         clear();

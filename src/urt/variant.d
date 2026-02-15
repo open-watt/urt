@@ -9,8 +9,10 @@ import urt.map;
 import urt.mem.allocator;
 import urt.si.quantity;
 import urt.si.unit : ScaledUnit, Second, Nanosecond;
+import urt.string;
 import urt.time;
 import urt.traits;
+import urt.util : swap;
 
 nothrow @nogc:
 
@@ -22,7 +24,9 @@ enum ValidUserType(T) = (is(T == struct) || is(T == class)) &&
                         !is(T == Array!U, U) &&
                         !is(T : const(char)[]) &&
                         !is(T == Quantity!(T, U), T, alias U) &&
-                        !is(T == Duration);
+                        !is(T == Duration) &&
+                        !is(T == String) &&
+                        !is(T == MutableString!N, size_t N);
 
 
 alias VariantKVP = KVP!(const(char)[], Variant);
@@ -37,14 +41,28 @@ nothrow @nogc:
         if (rh.type == Type.Map || rh.type == Type.Array)
         {
             Array!Variant arr = rh.nodeArray;
-            takeNodeArray(arr);
+            take_node_array(arr);
+            flags = rh.flags;
+        }
+        else if ((rh.flags & Flags.NeedDestruction) == 0)
+        {
+            __pack = rh.__pack;
+        }
+        else if (rh.isString)
+        {
+            *cast(String*)&value.s = *cast(String*)&rh.value.s;
+            count = rh.count;
+            flags = rh.flags;
+        }
+        else if (rh.isBuffer)
+        {
+            ptr = defaultAllocator.alloc(rh.count).ptr;
+            ptr[0 .. rh.count] = rh.ptr[0 .. rh.count];
+            count = rh.count;
             flags = rh.flags;
         }
         else
-        {
-            assert((rh.flags & Flags.NeedDestruction) == 0);
-            __pack = rh.__pack;
-        }
+            assert(false, "What kind of thing is this?");
     }
 
     version (EnableMoveSemantics) {
@@ -179,9 +197,33 @@ nothrow @nogc:
         count = Nanosecond.pack;
     }
 
-    this(const(char)[] s) // TODO: (S)(S s)
-//        if (is(S : const(char)[]))
+    this(String s)
     {
+        if (s.empty)
+        {
+            flags = Flags.Null;
+            return;
+        }
+        flags = Flags.String;
+        value.s = s.ptr;
+        count = s.length;
+        if (s.has_rc())
+            flags |= Flags.NeedDestruction;
+        s.ptr = null;
+    }
+
+    this(size_t N)(MutableString!N s)
+    {
+        this(String(s.move));
+    }
+
+    this(const(char)[] s)
+    {
+        if (s.length == 0)
+        {
+            flags = Flags.Null;
+            return;
+        }
         if (s.length < embed.length)
         {
             flags = Flags.ShortString;
@@ -190,13 +232,20 @@ nothrow @nogc:
             return;
         }
         flags = Flags.String;
-        value.s = s.ptr;
+        flags |= Flags.NeedDestruction;
+        String t = s.makeString(defaultAllocator);
+        value.s = t.ptr.swap(null);
         count = cast(uint)s.length;
     }
 
     this(T)(T[] buffer)
         if (is(Unqual!T == void))
     {
+        if (buffer.length == 0)
+        {
+            flags = Flags.Null;
+            return;
+        }
         if (buffer.length < embed.length)
         {
             flags = Flags.ShortBuffer;
@@ -205,7 +254,10 @@ nothrow @nogc:
             return;
         }
         flags = Flags.Buffer;
-        value.s = cast(char*)buffer.ptr;
+        flags |= Flags.NeedDestruction;
+        void[] mem = defaultAllocator.alloc(buffer.length);
+        mem[] = buffer[];
+        ptr = mem.ptr;
         count = cast(uint)buffer.length;
     }
 
@@ -226,7 +278,7 @@ nothrow @nogc:
 
     this(Array!Variant a)
     {
-        takeNodeArray(a);
+        take_node_array(a);
         flags = Flags.Array;
     }
 
@@ -386,10 +438,10 @@ nothrow @nogc:
             // TODO: should we also do string key comparisons?
             return opEquals(cast(E)rhs);
         }
-        else static if (is(T : const(char)[]))
+        else static if (is(T : const(char)[]) || is(T : const String) || is(T : const MutableString!N, size_t N))
             return isString && asString() == rhs[];
         else static if (ValidUserType!T)
-            return asUser!T == rhs;
+            return isUser!T && asUser!T == rhs;
         else
             static assert(false, "TODO: variant comparison with '", T.stringof, "' not supported");
     }
@@ -777,7 +829,7 @@ nothrow @nogc:
         assert(isBuffer);
         if (flags & Flags.Embedded)
             return embed[0 .. embed[$-1]];
-        return value.s[0 .. count];
+        return ptr[0 .. count];
     }
 
     const(char)[] asString() const pure
@@ -863,72 +915,97 @@ nothrow @nogc:
         }
     }
 
-    auto as(T)() inout pure
-        if (!ValidUserType!(Unqual!T) || !UserTypeReturnByRef!T)
+    template as(T)
     {
-        static if (is_some_int!T)
+        static if (!is(T == Unqual!T))
+            alias as = as!(Unqual!T);
+        else static if (is_boolean!T)
+            alias as = asBool;
+        else static if (is(T == long))
+            alias as = asLong;
+        else static if (is(T == int))
+            alias as = asInt;
+        else static if (is(T == ulong))
+            alias as = asUlong;
+        else static if (is(T == uint))
+            alias as = asUint;
+        else static if (is_some_int!T)
         {
-            static if (is_signed_int!T)
+            T as() const pure
             {
-                static if (is(T == long))
-                    return asLong();
-                else
+                static if (is_signed_int!T)
                 {
                     int i = asInt();
-                    static if (!is(T == int))
-                        assert(i >= T.min && i <= T.max, "Value out of range for " ~ T.stringof);
-                    return cast(T)i;
+                    assert(i >= T.min && i <= T.max, "Value out of range for " ~ T.stringof);
                 }
-            }
-            else
-            {
-                static if (is(T == ulong))
-                    return asUlong();
                 else
                 {
-                    uint u = asUint();
-                    static if (!is(T == uint))
-                        assert(u <= T.max, "Value out of range for " ~ T.stringof);
-                    return cast(T)u;
+                    uint i = asUint();
+                    assert(i <= T.max, "Value out of range for " ~ T.stringof);
                 }
+                return cast(T)i;
             }
         }
-        else static if (is_some_float!T)
-        {
-            static if (is(T == float))
-                return asFloat();
-            else
-                return asDouble();
-        }
+        else static if (is(T == float))
+            alias as = asFloat;
+        else static if (is(T == double))
+            alias as = asDouble;
+        else static if (is(T == real))
+            real as() const pure => asDouble;
         else static if (is(T == Quantity!(U, _U), U, ScaledUnit _U))
-        {
-            return asQuantity!U();
-        }
+            alias as = asQuantity!U;
         else static if (is(T == Duration))
+            alias as = asDuration;
+        else static if (is(const(char)[] : T))
+            alias as = asString;
+        else static if (is(T == String))
         {
-            return asDuration;
-        }
-        else static if (is(T : const(char)[]))
-        {
-            static if (is(T == struct)) // for String/MutableString/etc
-                return T(asString); // TODO: error? shouldn't this NRVO?!
-            else
-                return asString;
+            String as() const pure
+            {
+                if (isNull)
+                    return String();
+                assert(isString);
+                if (flags & Flags.Embedded)
+                    return embed[0 .. embed[$-1]].makeString(defaultAllocator);
+                return *cast(String*)&value.s;
+            }
         }
         else static if (ValidUserType!(Unqual!T))
-            return asUser!T;
+            alias as = asUser!T;
         else
             static assert(false, "TODO!");
     }
-    ref inout(T) as(T)() inout pure
-        if (ValidUserType!(Unqual!T) && UserTypeReturnByRef!T)
-        => asUser!T;
+
+    Array!Variant take_array()
+    {
+        if (flags == Flags.Null)
+            return Array!Variant();
+        assert(isArray());
+        Array!Variant r;
+        swap(r, nodeArray);
+        flags = Flags.Null;
+        return r;
+    }
+
+    String take_string()
+    {
+        if (flags == Flags.Null)
+            return String();
+        assert(isString);
+        if (flags & Flags.Embedded)
+            return embed[0 .. embed[$-1]].makeString(defaultAllocator);
+        String s;
+        s.ptr = value.s;
+        value.s = null;
+        flags = Flags.Null;
+        return s;
+    }
 
     size_t length() const pure
     {
         if (flags == Flags.Null)
             return 0;
-        else if (isString())
+        else if (isBuffer())
             return (flags & Flags.Embedded) ? embed[$-1] : count;
         else if (isArray())
             return count;
@@ -1212,7 +1289,7 @@ package:
             return alloc; // short id
         return count; // long id
     }
-    inout(void)* userPtr() inout pure
+    inout(void)* user_ptr() inout pure
     {
         if (flags & Flags.Embedded)
             return embed.ptr;
@@ -1221,7 +1298,7 @@ package:
 
     ref inout(Array!Variant) nodeArray() @property inout pure
         => *cast(inout(Array!Variant)*)&value.n;
-    void takeNodeArray(ref Array!Variant arr)
+    void take_node_array(ref Array!Variant arr)
     {
         value.n = arr[].ptr;
         count = cast(uint)arr.length;
@@ -1231,22 +1308,29 @@ package:
     void destroy(bool reset = true)()
     {
         if (flags & Flags.NeedDestruction)
-            doDestroy();
+            do_destroy();
 
         static if (reset)
             __pack[] = 0;
     }
 
-    private void doDestroy()
+    private void do_destroy()
     {
         Type t = type();
-        if ((t == Type.Map || t == Type.Array) && value.n)
+        if (isBuffer)
+        {
+            if (isString)
+                *cast(String*)&value.s = null;
+            else
+                defaultAllocator().free(ptr[0..count]);
+        }
+        else if ((t == Type.Map || t == Type.Array) && value.n)
             nodeArray.destroy!false();
         else if (t == Type.User)
         {
             ref const TypeDetails td = (flags & Flags.Embedded) ? find_type_details(alloc) : g_type_details[alloc];
             if (td.destroy)
-                td.destroy(userPtr);
+                td.destroy(user_ptr);
             if (!(flags & Flags.Embedded))
                 defaultAllocator().free(ptr[0..td.size]);
         }

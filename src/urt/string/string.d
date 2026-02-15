@@ -215,8 +215,7 @@ inout(char)[] as_dstring(inout(char)* s) pure nothrow @nogc
 struct String
 {
 nothrow @nogc:
-
-    alias toString this;
+    alias This = typeof(this);
 
     const(char)* ptr;
 
@@ -225,17 +224,15 @@ nothrow @nogc:
         this.ptr = null;
     }
 
-    this(ref inout typeof(this) rhs) inout pure
+    this(ref inout This rhs) inout pure
     {
         ptr = rhs.ptr;
-        if (ptr)
+        if (!ptr)
+            return;
+        if (ushort* rc = ((cast(ushort*)ptr)[-1] >> 15) ? cast(ushort*)ptr - 2 : null)
         {
-            ushort* rc = ((cast(ushort*)ptr)[-1] >> 15) ? cast(ushort*)ptr - 2 : null;
-            if (rc)
-            {
-                assert((*rc & 0x3FFF) < 0x3FFF, "Reference count overflow");
-                ++*rc;
-            }
+            assert((*rc & 0x3FFF) < 0x3FFF, "Reference count overflow");
+            ++*rc;
         }
     }
 
@@ -293,6 +290,9 @@ nothrow @nogc:
             return ptr ? ((cast(ushort*)ptr)[-1] & 0x7FFF) : 0;
     }
 
+    bool empty() const pure
+        => length() == 0;
+
     bool opCast(T : bool)() const pure
         => ptr != null && ((cast(ushort*)ptr)[-1] & 0x7FFF) != 0;
 
@@ -321,7 +321,6 @@ nothrow @nogc:
         ptr = cs.ptr;
     }
 
-
     bool opEquals(const(char)[] rhs) const pure
     {
         if (!ptr)
@@ -329,6 +328,15 @@ nothrow @nogc:
         ushort len = (cast(ushort*)ptr)[-1] & 0x7FFF;
         return len == rhs.length && (ptr == rhs.ptr || ptr[0 .. len] == rhs[]);
     }
+
+    int opEquals(ref const String rhs) const pure
+        => opEquals(rhs[]);
+
+    int opEquals(size_t N)(ref const MutableString!N rhs) const pure
+        => opEquals(rhs[]);
+
+    int opEquals(size_t N)(ref const Array!N rhs) const pure
+        => opEquals(rhs[]);
 
     int opCmp(const(char)[] rhs) const pure
     {
@@ -338,14 +346,24 @@ nothrow @nogc:
         return compare(ptr[0 .. length()], rhs);
     }
 
+    int opCmp(ref const String rhs) const pure
+        => opCmp(rhs[]);
+
+    int opCmp(size_t N)(ref const MutableString!N rhs) const pure
+        => opCmp(rhs[]);
+
+    int opCmp(size_t N)(ref const Array!N rhs) const pure
+        => opCmp(rhs[]);
+
     size_t toHash() const pure
     {
         if (!ptr)
             return 0;
+        ushort len = (cast(ushort*)ptr)[-1] & 0x7FFF;
         static if (size_t.sizeof == 4)
-            return fnv1a(cast(ubyte[])ptr[0 .. length]);
+            return fnv1a(cast(ubyte[])ptr[0 .. len]);
         else
-            return fnv1a64(cast(ubyte[])ptr[0 .. length]);
+            return fnv1a64(cast(ubyte[])ptr[0 .. len]);
     }
 
     const(char)[] opIndex() const pure
@@ -365,6 +383,9 @@ nothrow @nogc:
 
     size_t opDollar() const pure
         => length();
+
+    bool has_rc() const pure
+        => ptr && ((cast(ushort*)ptr)[-1] >> 15) != 0;
 
 private:
     auto __debugOverview() const pure { debug return ptr[0 .. length].debugExcapeString(); else return ptr[0 .. length]; }
@@ -517,8 +538,6 @@ nothrow @nogc:
 
     static assert(Embed == 0, "Not without move semantics!");
 
-    alias toString this;
-
     char* ptr;
 
     // TODO: DELETE POSTBLIT!
@@ -590,8 +609,56 @@ nothrow @nogc:
     ushort length() const pure
         => ptr ? ((cast(ushort*)ptr)[-1] & 0x7FFF) : 0;
 
+    bool empty() const pure
+        => length() == 0;
+
     bool opCast(T : bool)() const pure
         => ptr != null && ((cast(ushort*)ptr)[-1] & 0x7FFF) != 0;
+
+    bool opEquals(const(char)[] rhs) const pure
+    {
+        if (!ptr)
+            return rhs.length == 0;
+        ushort len = (cast(ushort*)ptr)[-1] & 0x7FFF;
+        return len == rhs.length && (ptr == rhs.ptr || ptr[0 .. len] == rhs[]);
+    }
+
+    int opEquals(ref const String rhs) const pure
+        => opEquals(rhs[]);
+
+    int opEquals(size_t N)(ref const MutableString!N rhs) const pure
+        => opEquals(rhs[]);
+
+    int opEquals(size_t N)(ref const Array!N rhs) const pure
+        => opEquals(rhs[]);
+
+    int opCmp(const(char)[] rhs) const pure
+    {
+        import urt.algorithm : compare;
+        if (!ptr)
+            return rhs.length == 0 ? 0 : -1;
+        return compare(ptr[0 .. length], rhs);
+    }
+
+    int opCmp(ref const String rhs) const pure
+        => opCmp(rhs[]);
+
+    int opCmp(size_t N)(ref const MutableString!N rhs) const pure
+        => opCmp(rhs[]);
+
+    int opCmp(size_t N)(ref const Array!N rhs) const pure
+        => opCmp(rhs[]);
+
+    size_t toHash() const pure
+    {
+        if (!ptr)
+            return 0;
+        ushort len = (cast(ushort*)ptr)[-1] & 0x7FFF;
+        static if (size_t.sizeof == 4)
+            return fnv1a(cast(ubyte[])ptr[0 .. len]);
+        else
+            return fnv1a64(cast(ubyte[])ptr[0 .. len]);
+    }
 
     void opAssign(ref const typeof(this) rh)
     {
@@ -600,11 +667,6 @@ nothrow @nogc:
     void opAssign(size_t E)(ref const MutableString!E rh)
     {
         opAssign(rh[]);
-    }
-
-    void opAssign(typeof(null))
-    {
-        clear();
     }
 
     void opAssign(char c)
@@ -894,6 +956,9 @@ unittest
     s.append(", world!\n");
     assert(s == "Hello, world!\n");
     assert(s.length == 14);
+
+    s = null;
+    assert(s.length == 0);
 
     MutableString!0 s_long;
     s_long.reserve(4567);

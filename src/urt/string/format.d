@@ -68,7 +68,7 @@ char[] concat(Args...)(char[] buffer, auto ref Args args)
         }
         return buffer.ptr[0 .. offset];
     }
-    static if (allAreStrings!Args)
+    else static if (allAreStrings!Args)
     {
         // TODO: why can't inline this?!
 //        pragma(inline, true);
@@ -242,468 +242,473 @@ struct DefInt(T)
 ptrdiff_t defToString(T)(ref const(T) value, char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc
     => (cast(DefFormat!T*)&value).toString(buffer, format, formatArgs);
 
-struct DefFormat(T)
+template DefFormat(T)
 {
-    T value;
-
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const nothrow @nogc
+    static if (is(T == const U, U) || is(T == immutable U, U))
+        alias DefFormat = DefFormat!U;
+    else static if (is(T == const(U)[], U) || is(T == immutable(U)[], U))
+        alias DefFormat = DefFormat!(U[]);
+    else struct DefFormat
     {
-        static if (is(T == typeof(null)))
+        static assert(!is(T == const), "How did this slip through?");
+
+        const T value;
+
+        ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const nothrow @nogc
         {
-            if (!buffer.ptr)
-                return 4;
-            if (buffer.length < 4)
-                return -1;
-            buffer[0 .. 4] = "null";
-            return 4;
-        }
-        else static if (is(T == bool))
-        {
-            size_t len = value ? 4 : 5;
-            if (!buffer.ptr)
-                return len;
-            if (buffer.length < len)
-                return -1;
-            buffer[0 .. len] = value ? "true" : "false";
-            return len;
-        }
-        else static if (is(T == char) || is(T == wchar) || is(T == dchar))
-        {
-            if (is(T == char) || value <= 0x7F)
+            static if (is(T == U[N], U, size_t N))
+                return defToString!(U[])(value[], buffer, format, formatArgs);
+            else static if (is(T : String) || is(T : MutableString!N, size_t N) || is(T : Array!(char, N), size_t N))
+                return defToString!(char[])(value[], buffer, format, formatArgs);
+            else static if (is(T == typeof(null)))
             {
+                if (!buffer.ptr)
+                    return 4;
+                if (buffer.length < 4)
+                    return -1;
+                buffer[0 .. 4] = "null";
+                return 4;
+            }
+            else static if (is(T == bool))
+            {
+                size_t len = value ? 4 : 5;
+                if (!buffer.ptr)
+                    return len;
+                if (buffer.length < len)
+                    return -1;
+                buffer[0 .. len] = value ? "true" : "false";
+                return len;
+            }
+            else static if (is(T == char) || is(T == wchar) || is(T == dchar))
+            {
+                if (is(T == char) || value <= 0x7F)
+                {
+                    if (buffer.ptr)
+                    {
+                        if (buffer.length < 1)
+                            return -1;
+                        buffer[0] = cast(char)value;
+                    }
+                    return 1;
+                }
+                else if (value <= 0x7FF)
+                {
+                    if (buffer.ptr)
+                    {
+                        if (buffer.length < 2)
+                            return -1;
+                        buffer[0] = cast(char)(0xC0 | (value >> 6));
+                        buffer[1] = cast(char)(0x80 | (value & 0x3F));
+                    }
+                    return 2;
+                }
+                else if (value <= 0xFFFF)
+                {
+                    if (buffer.ptr)
+                    {
+                        if (buffer.length < 3)
+                            return -1;
+                        buffer[0] = cast(char)(0xE0 | (value >> 12));
+                        buffer[1] = cast(char)(0x80 | ((value >> 6) & 0x3F));
+                        buffer[2] = cast(char)(0x80 | (value & 0x3F));
+                    }
+                    return 3;
+                }
+                else if (value <= 0x10FFFF)
+                {
+                    if (buffer.ptr)
+                    {
+                        if (buffer.length < 4)
+                            return -1;
+                        buffer[0] = cast(char)(0xF0 | (value >> 18));
+                        buffer[1] = cast(char)(0x80 | ((value >> 12) & 0x3F));
+                        buffer[2] = cast(char)(0x80 | ((value >> 6) & 0x3F));
+                        buffer[3] = cast(char)(0x80 | (value & 0x3F));
+                    }
+                    return 4;
+                }
+                else
+                {
+                    assert(false, "Invalid code point");
+                    return 0;
+                }
+            }
+            else static if (is(T == double) || is(T == float))
+            {
+                import urt.conv : format_float, format_int;
+
+                char[16] tmp = void;
+                if (format.length && format[0] == '*')
+                {
+                    bool success;
+                    size_t arg = format[1..$].parse_int_fast(success);
+                    if (!success || !formatArgs[arg].canInt)
+                        return -2;
+                    size_t width = formatArgs[arg].getInt;
+                    size_t len = width.format_int(tmp);
+                    format = tmp[0..len];
+                }
+                return format_float(value, buffer, format);
+            }
+            else static if (is(T == ulong) || is(T == long))
+            {
+                import urt.conv : format_int, format_uint;
+
+                // TODO: what formats are interesting for ints?
+
+                bool leadingZeroes = false;
+                bool to_lower = false;
+                bool varLen = false;
+                ptrdiff_t padding = 0;
+                uint base = 10;
+
+                static if (is(T == long))
+                {
+                    bool show_sign = false;
+                    if (format.length && format[0] == '+')
+                    {
+                        show_sign = true;
+                        format.popFront;
+                    }
+                }
+                if (format.length && format[0] == '0')
+                {
+                    leadingZeroes = true;
+                    format.popFront;
+                }
+                if (format.length && format[0] == '*')
+                {
+                    varLen = true;
+                    format.popFront;
+                }
+                if (format.length && format[0].is_numeric)
+                {
+                    bool success;
+                    padding = format.parse_int_fast(success);
+                    if (varLen)
+                    {
+                        if (padding < 0 || !formatArgs[padding].canInt)
+                            return -2;
+                        padding = formatArgs[padding].getInt;
+                    }
+                }
+                if (format.length)
+                {
+                    char b = format[0] | 0x20;
+                    if (b == 'x')
+                    {
+                        base = 16;
+                        to_lower = format[0] == 'x' && buffer.ptr;
+                    }
+                    else if (b == 'b')
+                        base = 2;
+                    else if (b == 'o')
+                        base = 8;
+                    else if (b == 'd')
+                        base = 10;
+                    format.popFront;
+                }
+
+                static if (is(T == long))
+                    ptrdiff_t len = format_int(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ', show_sign);
+                else
+                    ptrdiff_t len = format_uint(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ');
+
+                if (to_lower && len > 0)
+                {
+                    for (size_t i = 0; i < len; ++i)
+                        if (cast(uint)(buffer.ptr[i] - 'A') < 26)
+                            buffer.ptr[i] |= 0x20;
+                }
+
+                return len;
+            }
+            else static if (is(T == ubyte) || is(T == ushort) || is(T == uint))
+            {
+                return defToString(ulong(value), buffer, format, formatArgs);
+            }
+            else static if (is(T == byte) || is(T == short) || is(T == int))
+            {
+                return defToString(long(value), buffer, format, formatArgs);
+            }
+            else static if (is(T == const(char)*))
+            {
+                const char[] t = value[0 .. value.strlen];
+                return t.defToString(buffer, format, formatArgs);
+            }
+            else static if (is(T : const(U)*, U))
+            {
+                static assert(size_t.sizeof == 4 || size_t.sizeof == 8);
+                enum Fmt = "0" ~ (size_t.sizeof == 4 ? "8" : "16") ~ "X";
+                size_t p = cast(size_t)value;
+                return p.defToString(buffer, Fmt, null);
+            }
+            else static if (is(T == char[]))
+            {
+                bool leftJustify = false;
+                bool varLen = false;
+                ptrdiff_t width = value.length;
+                if (format.length && format[0] == '-')
+                {
+                    leftJustify = true;
+                    format.popFront;
+                }
+                if (format.length && format[0] == '*')
+                {
+                    varLen = true;
+                    format.popFront;
+                }
+                if (varLen && (!format.length || !format[0].is_numeric))
+                    return -2;
+                if (format.length && format[0].is_numeric)
+                {
+                    bool success;
+                    width = format.parse_int_fast(success);
+                    if (varLen)
+                    {
+                        if (width < 0 || !formatArgs[width].canInt)
+                            return -2;
+                        width = formatArgs[width].getInt;
+                    }
+                    if (width < value.length)
+                        width = value.length;
+                }
+
+                if (!buffer.ptr)
+                    return width;
+                if (buffer.length < width)
+                    return -1;
+
+                // TODO: accept padd string in the formatSpec?
+
+                size_t padding = width - value.length;
+                size_t pad = 0, len = 0;
+                if (!leftJustify && padding > 0)
+                {
+                    pad = buffer.length < padding ? buffer.length : padding;
+                    buffer[0 .. pad] = ' ';
+                    buffer.takeFront(pad);
+                }
+                len = buffer.length < value.length ? buffer.length : value.length;
+                buffer[0 .. len] = value[0 .. len];
+                if (padding > 0 && leftJustify)
+                {
+                    buffer.takeFront(len);
+                    pad = buffer.length < padding ? buffer.length : padding;
+                    buffer[0 .. pad] = ' ';
+                }
+                return pad + len;
+            }
+//            else static if (is(T == wchar[]))
+//            {
+//            }
+//            else static if (is (T == U[], U : dchar))
+//            {
+//                // TODO: UTF ENCODE...
+//            }
+            else static if (is(T == void[]))
+            {
+                if (!value.length)
+                    return 0;
+
+                int grp1 = 1, grp2 = 0;
+                if (format.length && format[0].is_numeric)
+                {
+                    bool success;
+                    grp1 = cast(int)format.parse_int_fast(success);
+                    if (success && format.length > 0 && format[0] == ':' &&
+                                   format.length > 1 && format[1].is_numeric)
+                    {
+                        format.popFront();
+                        grp2 = cast(int)format.parse_int_fast(success);
+                    }
+                    if (!success)
+                        return -2;
+                }
+
+                if (!buffer.ptr)
+                {
+                    size_t len = value.length*2;
+                    if (grp1)
+                        len += (value.length-1) / grp1;
+                    return len;
+                }
+
+                char[] hex = toHexString(cast(ubyte[])value, buffer, grp1, grp2);
+                if (!hex.ptr)
+                    return -1;
+                return hex.length;
+            }
+            else static if (is(T : const U[], U))
+            {
+                // arrays of other stuff
+                size_t len = 1;
                 if (buffer.ptr)
                 {
                     if (buffer.length < 1)
                         return -1;
-                    buffer[0] = cast(char)value;
+                    buffer[0] = '[';
                 }
-                return 1;
-            }
-            else if (value <= 0x7FF)
-            {
-                if (buffer.ptr)
+
+                for (size_t i = 0; i < value.length; ++i)
                 {
-                    if (buffer.length < 2)
-                        return -1;
-                    buffer[0] = cast(char)(0xC0 | (value >> 6));
-                    buffer[1] = cast(char)(0x80 | (value & 0x3F));
-                }
-                return 2;
-            }
-            else if (value <= 0xFFFF)
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < 3)
-                        return -1;
-                    buffer[0] = cast(char)(0xE0 | (value >> 12));
-                    buffer[1] = cast(char)(0x80 | ((value >> 6) & 0x3F));
-                    buffer[2] = cast(char)(0x80 | (value & 0x3F));
-                }
-                return 3;
-            }
-            else if (value <= 0x10FFFF)
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < 4)
-                        return -1;
-                    buffer[0] = cast(char)(0xF0 | (value >> 18));
-                    buffer[1] = cast(char)(0x80 | ((value >> 12) & 0x3F));
-                    buffer[2] = cast(char)(0x80 | ((value >> 6) & 0x3F));
-                    buffer[3] = cast(char)(0x80 | (value & 0x3F));
-                }
-                return 4;
-            }
-            else
-            {
-                assert(false, "Invalid code point");
-                return 0;
-            }
-        }
-        else static if (is(T == double) || is(T == float))
-        {
-            import urt.conv : format_float, format_int;
+                    if (i > 0)
+                    {
+                        if (buffer.ptr)
+                        {
+                            if (len == buffer.length)
+                                return -1;
+                            buffer[len] = ',';
+                        }
+                        ++len;
+                    }
 
-            char[16] tmp = void;
-            if (format.length && format[0] == '*')
-            {
-                bool success;
-                size_t arg = format[1..$].parse_int_fast(success);
-                if (!success || !formatArgs[arg].canInt)
-                    return -2;
-                size_t width = formatArgs[arg].getInt;
-                size_t len = width.format_int(tmp);
-                format = tmp[0..len];
-            }
-            return format_float(value, buffer, format);
-        }
-        else static if (is(T == ulong) || is(T == long))
-        {
-            import urt.conv : format_int, format_uint;
-
-            // TODO: what formats are interesting for ints?
-
-            bool leadingZeroes = false;
-            bool to_lower = false;
-            bool varLen = false;
-            ptrdiff_t padding = 0;
-            uint base = 10;
-
-            static if (is(T == long))
-            {
-                bool show_sign = false;
-                if (format.length && format[0] == '+')
-                {
-                    show_sign = true;
-                    format.popFront;
-                }
-            }
-            if (format.length && format[0] == '0')
-            {
-                leadingZeroes = true;
-                format.popFront;
-            }
-            if (format.length && format[0] == '*')
-            {
-                varLen = true;
-                format.popFront;
-            }
-            if (format.length && format[0].is_numeric)
-            {
-                bool success;
-                padding = format.parse_int_fast(success);
-                if (varLen)
-                {
-                    if (padding < 0 || !formatArgs[padding].canInt)
-                        return -2;
-                    padding = formatArgs[padding].getInt;
-                }
-            }
-            if (format.length)
-            {
-                char b = format[0] | 0x20;
-                if (b == 'x')
-                {
-                    base = 16;
-                    to_lower = format[0] == 'x' && buffer.ptr;
-                }
-                else if (b == 'b')
-                    base = 2;
-                else if (b == 'o')
-                    base = 8;
-                else if (b == 'd')
-                    base = 10;
-                format.popFront;
-            }
-
-            static if (is(T == long))
-                ptrdiff_t len = format_int(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ', show_sign);
-            else
-                ptrdiff_t len = format_uint(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ');
-
-            if (to_lower && len > 0)
-            {
-                for (size_t i = 0; i < len; ++i)
-                    if (cast(uint)(buffer.ptr[i] - 'A') < 26)
-                        buffer.ptr[i] |= 0x20;
-            }
-
-            return len;
-        }
-        else static if (is(T == ubyte) || is(T == ushort) || is(T == uint))
-        {
-            return defToString(ulong(value), buffer, format, formatArgs);
-        }
-        else static if (is(T == byte) || is(T == short) || is(T == int))
-        {
-            return defToString(long(value), buffer, format, formatArgs);
-        }
-        else static if (is(T == const(char)*) || is(T == const(char*)))
-        {
-            const char[] t = value[0 .. value.strlen];
-            return t.defToString(buffer, format, formatArgs);
-        }
-        else static if (is(T : const(U)*, U))
-        {
-            static assert(size_t.sizeof == 4 || size_t.sizeof == 8);
-            enum Fmt = "0" ~ (size_t.sizeof == 4 ? "8" : "16") ~ "X";
-            size_t p = cast(size_t)value;
-            return p.defToString(buffer, Fmt, null);
-        }
-        else static if (is(T == const char[]))
-        {
-            bool leftJustify = false;
-            bool varLen = false;
-            ptrdiff_t width = value.length;
-            if (format.length && format[0] == '-')
-            {
-                leftJustify = true;
-                format.popFront;
-            }
-            if (format.length && format[0] == '*')
-            {
-                varLen = true;
-                format.popFront;
-            }
-            if (varLen && (!format.length || !format[0].is_numeric))
-                return -2;
-            if (format.length && format[0].is_numeric)
-            {
-                bool success;
-                width = format.parse_int_fast(success);
-                if (varLen)
-                {
-                    if (width < 0 || !formatArgs[width].canInt)
-                        return -2;
-                    width = formatArgs[width].getInt;
-                }
-                if (width < value.length)
-                    width = value.length;
-            }
-
-            if (!buffer.ptr)
-                return width;
-            if (buffer.length < width)
-                return -1;
-
-            // TODO: accept padd string in the formatSpec?
-
-            size_t padding = width - value.length;
-            size_t pad = 0, len = 0;
-            if (!leftJustify && padding > 0)
-            {
-                pad = buffer.length < padding ? buffer.length : padding;
-                buffer[0 .. pad] = ' ';
-                buffer.takeFront(pad);
-            }
-            len = buffer.length < value.length ? buffer.length : value.length;
-            buffer[0 .. len] = value[0 .. len];
-            if (padding > 0 && leftJustify)
-            {
-                buffer.takeFront(len);
-                pad = buffer.length < padding ? buffer.length : padding;
-                buffer[0 .. pad] = ' ';
-            }
-            return pad + len;
-        }
-        else static if (is(T : const char[]))
-        {
-            return defToString!(const char[])(cast(const char[])value[], buffer, format, formatArgs);
-        }
-//        else static if (is(T : const(wchar)[]))
-//        {
-//        }
-//        else static if (is (T : const(U)[], U : dchar))
-//        {
-//            // TODO: UTF ENCODE...
-//        }
-        else static if (is(T == void[]) || is(T == const(void)[]))
-        {
-            if (!value.length)
-                return 0;
-
-            int grp1 = 1, grp2 = 0;
-            if (format.length && format[0].is_numeric)
-            {
-                bool success;
-                grp1 = cast(int)format.parse_int_fast(success);
-                if (success && format.length > 0 && format[0] == ':' &&
-                               format.length > 1 && format[1].is_numeric)
-                {
-                    format.popFront();
-                    grp2 = cast(int)format.parse_int_fast(success);
-                }
-                if (!success)
-                    return -2;
-            }
-
-            if (!buffer.ptr)
-            {
-                size_t len = value.length*2;
-                if (grp1)
-                    len += (value.length-1) / grp1;
-                return len;
-            }
-
-            char[] hex = toHexString(cast(ubyte[])value, buffer, grp1, grp2);
-            if (!hex.ptr)
-                return -1;
-            return hex.length;
-        }
-        else static if (is(T : const U[], U))
-        {
-            // arrays of other stuff
-            size_t len = 1;
-            if (buffer.ptr)
-            {
-                if (buffer.length < 1)
-                    return -1;
-                buffer[0] = '[';
-            }
-
-            for (size_t i = 0; i < value.length; ++i)
-            {
-                if (i > 0)
-                {
+                    FormatArg arg = FormatArg(value[i]);
                     if (buffer.ptr)
                     {
-                        if (len == buffer.length)
-                            return -1;
-                        buffer[len] = ',';
+                        ptrdiff_t argLen = arg.getString(buffer.ptr[len .. buffer.length], format, formatArgs);
+                        if (argLen < 0)
+                            return argLen;
+                        len += argLen;
                     }
-                    ++len;
+                    else
+                        len += arg.getLength(format, formatArgs);
                 }
 
-                FormatArg arg = FormatArg(value[i]);
                 if (buffer.ptr)
                 {
-                    ptrdiff_t argLen = arg.getString(buffer.ptr[len .. buffer.length], format, formatArgs);
-                    if (argLen < 0)
-                        return argLen;
-                    len += argLen;
+                    if (len == buffer.length)
+                        return -1;
+                    buffer[len] = ']';
                 }
-                else
-                    len += arg.getLength(format, formatArgs);
+                return ++len;
             }
-
-            if (buffer.ptr)
+            else static if (is(T B == enum))
             {
-                if (len == buffer.length)
-                    return -1;
-                buffer[len] = ']';
-            }
-            return ++len;
-        }
-        else static if (is(T B == enum))
-        {
-            // TODO: optimise short enums with a TABLE!
+                // TODO: optimise short enums with a TABLE!
 
-            // TODO: should probably return FQN ???
-            string key = null;
-            val: switch (value)
-            {
-                static foreach (i, KeyName; __traits(allMembers, T))
+                // TODO: should probably return FQN ???
+                string key = null;
+                val: switch (value)
                 {
-                    static if (!EnumKeyIsDuplicate!(T, i))
+                    static foreach (i, KeyName; __traits(allMembers, T))
                     {
-                        case __traits(getMember, T, KeyName):
-                            key = KeyName;
-                            break val;
+                        static if (!EnumKeyIsDuplicate!(T, i))
+                        {
+                            case __traits(getMember, T, KeyName):
+                                key = KeyName;
+                                break val;
+                        }
                     }
-                }
-                default:
-                    if (!buffer.ptr)
-                        return T.stringof.length + 2 + defToString!B(cast(B)value, null, null, null);
+                    default:
+                        if (!buffer.ptr)
+                            return T.stringof.length + 2 + defToString!B(cast(B)value, null, null, null);
 
+                        if (buffer.length < T.stringof.length + 2)
+                            return -1;
+                        buffer[0 .. T.stringof.length] = T.stringof;
+                        buffer[T.stringof.length] = '(';
+                        ptrdiff_t len = defToString!B(*cast(B*)&value, buffer[T.stringof.length + 1 .. $], null, null);
+                        if (len < 0)
+                            return len;
+                        len = T.stringof.length + 2 + len;
+                        if (buffer.length < len)
+                            return -1;
+                        buffer[len - 1] = ')';
+                        return len;
+                }
+
+                size_t len = T.stringof.length + 1 + key.length;
+                if (!buffer.ptr)
+                    return len;
+
+                if (buffer.length < len)
+                    return -1;
+                buffer[0 .. T.stringof.length] = T.stringof;
+                buffer[T.stringof.length] = '.';
+                buffer[T.stringof.length + 1 .. len] = key[];
+                return len;
+            }
+            else static if (is(T == class))
+            {
+                // HACK: class toString is not @nogc, so we'll just stringify the pointer for right now...
+                return defToString(cast(void*)value, buffer, format, formatArgs);
+/+
+                try
+                {
+                    const(char)[] t = (cast()value).toString();
+                    if (!buffer.ptr)
+                        return t.length;
+                    if (buffer.length < t.length)
+                        return -1;
+                    buffer[0 .. t.length] = t[];
+                    return t.length;
+                }
+                catch (Exception)
+                    return -1;
++/
+            }
+            else static if (is(T == struct))
+            {
+                static assert(!__traits(hasMember, T, "toString"), "Struct with custom toString not properly selected!");
+
+                // general structs
+                if (buffer.ptr)
+                {
                     if (buffer.length < T.stringof.length + 2)
                         return -1;
                     buffer[0 .. T.stringof.length] = T.stringof;
                     buffer[T.stringof.length] = '(';
-                    ptrdiff_t len = defToString!B(*cast(B*)&value, buffer[T.stringof.length + 1 .. $], null, null);
-                    if (len < 0)
-                        return len;
-                    len = T.stringof.length + 2 + len;
-                    if (buffer.length < len)
-                        return -1;
-                    buffer[len - 1] = ')';
-                    return len;
-            }
+                }
 
-            size_t len = T.stringof.length + 1 + key.length;
-            if (!buffer.ptr)
-                return len;
+                size_t len = T.stringof.length + 1;
+                static foreach (i; 0 .. value.tupleof.length)
+                {{
+                    static if (i > 0)
+                    {
+                        if (buffer.ptr)
+                        {
+                            if (len + 2 > buffer.length)
+                                return -1;
+                            buffer[len .. len + 2] = ", ";
+                        }
+                        len += 2;
+                    }
 
-            if (buffer.length < len)
-                return -1;
-            buffer[0 .. T.stringof.length] = T.stringof;
-            buffer[T.stringof.length] = '.';
-            buffer[T.stringof.length + 1 .. len] = key[];
-            return len;
-        }
-        else static if (is(T == class))
-        {
-            // HACK: class toString is not @nogc, so we'll just stringify the pointer for right now...
-            return defToString(cast(void*)value, buffer, format, formatArgs);
-/+
-            try
-            {
-                const(char)[] t = (cast()value).toString();
-                if (!buffer.ptr)
-                    return t.length;
-                if (buffer.length < t.length)
-                    return -1;
-                buffer[0 .. t.length] = t[];
-                return t.length;
-            }
-            catch (Exception)
-                return -1;
-+/
-        }
-        else static if (is(T == const))
-        {
-            return defToString!(Unqual!T)(cast()value, buffer, format, formatArgs);
-        }
-        else static if (is(T == struct))
-        {
-            static assert(!__traits(hasMember, T, "toString"), "Struct with custom toString not properly selected!");
-
-            // general structs
-            if (buffer.ptr)
-            {
-                if (buffer.length < T.stringof.length + 2)
-                    return -1;
-                buffer[0 .. T.stringof.length] = T.stringof;
-                buffer[T.stringof.length] = '(';
-            }
-
-            size_t len = T.stringof.length + 1;
-            static foreach (i; 0 .. value.tupleof.length)
-            {{
-                static if (i > 0)
-                {
+                    FormatArg arg = FormatArg(value.tupleof[i]);
                     if (buffer.ptr)
                     {
-                        if (len + 2 > buffer.length)
-                            return -1;
-                        buffer[len .. len + 2] = ", ";
+                        ptrdiff_t argLen = arg.getString(buffer.ptr[len .. buffer.length], null, null);
+                        if (argLen < 0)
+                            return argLen;
+                        len += argLen;
                     }
-                    len += 2;
-                }
+                    else
+                        len += arg.getLength(null, null);
 
-                FormatArg arg = FormatArg(value.tupleof[i]);
+                }}
+
                 if (buffer.ptr)
                 {
-                    ptrdiff_t argLen = arg.getString(buffer.ptr[len .. buffer.length], null, null);
-                    if (argLen < 0)
-                        return argLen;
-                    len += argLen;
+                    if (len == buffer.length)
+                        return -1;
+                    buffer[len] = ')';
                 }
-                else
-                    len += arg.getLength(null, null);
-
-            }}
-
-            if (buffer.ptr)
-            {
-                if (len == buffer.length)
-                    return -1;
-                buffer[len] = ')';
+                return ++len;
             }
-            return ++len;
+            else static if (is(T == function))
+            {
+                assert(false, "TODO");
+                return 0;
+            }
+            else static if (is(T == delegate))
+            {
+                assert(false, "TODO");
+                return 0;
+            }
+            else
+                static assert(false, "Not implemented for type: ", T.stringof);
         }
-        else static if (is(T == function))
-        {
-            assert(false, "TODO");
-            return 0;
-        }
-        else static if (is(T == delegate))
-        {
-            assert(false, "TODO");
-            return 0;
-        }
-        else
-            static assert(false, "Not implemented for type: ", T.stringof);
     }
 }
 

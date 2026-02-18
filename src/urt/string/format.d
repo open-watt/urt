@@ -18,7 +18,7 @@ debug
 alias StringifyFunc = ptrdiff_t delegate(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc;
 
 
-ptrdiff_t toString(T)(auto ref T value, char[] buffer, const(char)[] format = null, const(FormatArg)[] formatArgs = null)
+ptrdiff_t toString(T)(ref const T value, char[] buffer, const(char)[] format = null, const(FormatArg)[] formatArgs = null)
 {
     debug InFormatFunction = true;
     ptrdiff_t r = get_to_string_func(value)(buffer, null, null);
@@ -28,65 +28,83 @@ ptrdiff_t toString(T)(auto ref T value, char[] buffer, const(char)[] format = nu
 
 alias formatValue = toString; // TODO: remove me?
 
-char[] concat(Args...)(char[] buffer, auto ref Args args)
+char[] concat(Args...)(char[] buffer, ref const Args args)
 {
+    alias NormalisedArgs = NormaliseArgs!Args;
+    static if (Args.length == 1)
+        enum is_normalised = is(Args[0] == NormalisedArgs);
+    else
+        enum is_normalised = is(Args == NormalisedArgs);
+
     static if (Args.length == 0)
     {
         return buffer.ptr[0 .. 0];
     }
-    else static if ((Args.length == 1 && allAreStrings!Args) || allConstCorrectStrings!Args)
+    else static if (!is_normalised)
     {
-        // this implementation handles pure string concatenations
-        if (!buffer.ptr)
-        {
-            size_t length = 0;
-            static foreach (i, s; args)
-            {
-                static if (is(typeof(s) : char))
-                    length += 1;
-                else
-                    length += s.length;
-            }
-            return (cast(char*)null)[0 .. length];
-        }
-        size_t offset = 0;
-        static foreach (i, s; args)
-        {
-            static if (is(typeof(s) : char))
-            {
-                if (buffer.length < offset + 1)
-                    return null;
-                buffer.ptr[offset++] = s;
-            }
-            else
-            {
-                if (buffer.length < offset + s.length)
-                    return null;
-                buffer.ptr[offset .. offset + s.length] = s.ptr[0 .. s.length];
-                offset += s.length;
-            }
-        }
-        return buffer.ptr[0 .. offset];
-    }
-    else static if (allAreStrings!Args)
-    {
-        // TODO: why can't inline this?!
-//        pragma(inline, true);
-
-        // avoid duplicate instantiations with different attributes...
-        return concat!(constCorrectedStrings!Args)(buffer, args);
+        pragma(inline, true);
+        return concat!(NormalisedArgs)(buffer, args);
     }
     else
     {
-        // this implementation handles all the other kinds of things!
+        enum n = num_string_args!Args;
 
-        debug if (!__ctfe) InFormatFunction = true;
-        StringifyFunc[Args.length] arg_funcs = void;
-        static foreach(i, arg; args)
-            arg_funcs[i] = get_to_string_func(arg);
-        char[] r = concatImpl(buffer, arg_funcs);
-        debug if (!__ctfe) InFormatFunction = false;
-        return r;
+        static if (n == Args.length)
+        {
+            size_t[Args.length + 1] offsets = void;
+            size_t[Args.length] lens = void;
+            offsets[0] = 0;
+            static foreach (i; 0 .. Args.length)
+            {
+                static if (is(Args[i] == char))
+                    offsets[i + 1] = offsets[i] + 1;
+                else
+                {
+                    lens[i] = args[i].length;
+                    offsets[i + 1] = offsets[i] + lens[i];
+                }
+            }
+            if (!buffer.ptr)
+                return buffer.ptr[0 .. offsets[Args.length]];
+            if (offsets[Args.length] > buffer.length)
+                return null;
+            static foreach (i; 0 .. Args.length)
+            {
+                static if (is(Args[i] == char))
+                    buffer.ptr[offsets[i]] = args[i];
+                else
+                    buffer.ptr[offsets[i] .. offsets[i + 1]] = args[i].ptr[0..lens[i]];
+            }
+            return buffer.ptr[0 .. offsets[Args.length]];
+        }
+        else static if (Args.length == 1)
+        {
+            ptrdiff_t r = get_to_string_func(args[0])(buffer, null, null);
+            if (r < 0)
+                return null;
+            return buffer.ptr[0..r];
+        }
+        else static if (n > 2)
+        {
+            char[] r = concat(buffer, args[0 .. n]);
+            if (buffer.ptr && !r.ptr)
+                return null;
+            char[] r2 = concat(buffer.ptr ? buffer.ptr[r.length .. buffer.length] : null, args[n .. $]);
+            if (buffer.ptr && !r2.ptr)
+                return null;
+            return buffer.ptr[0 .. r.length + r2.length];
+        }
+        else
+        {
+            // this implementation handles all the other kinds of things!
+            debug if (!__ctfe) InFormatFunction = true;
+            StringifyFunc[Args.length] arg_funcs = void;
+            static foreach(i; 0 .. args.length)
+                arg_funcs[i] = get_to_string_func(args[i]);
+            char[] r = concat_impl(buffer, arg_funcs);
+            debug if (!__ctfe) InFormatFunction = false;
+            return r;
+        }
     }
 }
 
@@ -134,6 +152,42 @@ private:
 
 
 private:
+
+import urt.array;
+enum is_some_string(T) = is_some_char!T || is(T : const char[]) || is(T : const(String)) || is(T : const(MutableString!N), size_t N) || is(T : const(Array!(char, N)), size_t N);
+
+template num_string_args(Args...)
+{
+    static if (Args.length == 0)
+        enum num_string_args = 0;
+    else static if (is_some_string!(Args[0]))
+        enum num_string_args = 1 + num_string_args!(Args[1 .. $]);
+    else
+        enum num_string_args = 0;
+}
+
+template NormaliseArgs(Args...)
+{
+    import urt.meta : AliasSeq;
+    static if (Args.length == 0)
+        alias NormaliseArgs = AliasSeq!();
+    else static if (Args.length == 1)
+        alias NormaliseArgs = NormaliseConst!(Args[0]);
+    else
+        alias NormaliseArgs = AliasSeq!(NormaliseConst!(Args[0]), NormaliseArgs!(Args[1 .. $]));
+}
+
+template NormaliseConst(T)
+{
+    static if (is(T == const(U), U) || is(T == immutable(U), U))
+        alias NormaliseConst = NormaliseConst!U;
+    else static if (is(T == U[], U))
+        alias NormaliseConst = const(U)[];
+    else static if (is(T == U[N], U, size_t N))
+        alias NormaliseConst = const(U)[N];
+    else
+        alias NormaliseConst = T;
+}
 
 alias StringifyFuncReduced = ptrdiff_t delegate(char[] buffer, const(char)[] format) nothrow @nogc;
 alias StringifyFuncReduced2 = ptrdiff_t delegate(char[] buffer) nothrow @nogc;
@@ -712,7 +766,7 @@ template DefFormat(T)
     }
 }
 
-char[] concatImpl(char[] buffer, const(StringifyFunc)[] args) nothrow @nogc
+char[] concat_impl(char[] buffer, const(StringifyFunc)[] args) nothrow @nogc
 {
     size_t len = 0;
     foreach (a; args)
@@ -983,40 +1037,6 @@ unittest
     else
         assert(r == "00 00 00 01 00 00 00 02 00 00 00 1E");
 
-}
-
-
-
-// a template that tests is all template args are a char array, or a char
-template allAreStrings(Args...)
-{
-    static if (Args.length == 1)
-        enum allAreStrings = is(Args[0] : const(char[])) || is(is_some_char!(Args[0]));
-    else
-        enum allAreStrings = (is(Args[0] : const(char[])) || is(is_some_char!(Args[0]))) && allAreStrings!(Args[1 .. $]);
-}
-
-template allConstCorrectStrings(Args...)
-{
-    static if (Args.length == 1)
-        enum allConstCorrectStrings = is(Args[0] == const(char[])) || is(Args[0] == const char);
-    else
-        enum allConstCorrectStrings = (is(Args[0] == const(char[])) || is(Args[0] == const char)) && allConstCorrectStrings!(Args[1 .. $]);
-}
-
-template constCorrectedStrings(Args...)
-{
-    import urt.meta : AliasSeq;
-    alias constCorrectedStrings = AliasSeq!();
-    static foreach (Ty; Args)
-    {
-        static if (is(Ty : const(char)[]))
-            constCorrectedStrings = AliasSeq!(constCorrectedStrings, const(char[]));
-        else static if (is_some_char!Ty)
-            constCorrectedStrings = AliasSeq!(constCorrectedStrings, const(char));
-        else
-            static assert(false, "Argument must be a char array or a char: ", T);
-    }
 }
 
 template EnumKeyIsDuplicate(Enum, size_t item)

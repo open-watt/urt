@@ -64,7 +64,7 @@ nothrow @nogc:
         if (i == count)
             return Variant();
         i = _lookup_tables[i];
-        return _get_value(_values + i*stride);
+        return _get_value(_values + i*stride, &this);
     }
 
     bool contains(const(char)[] key) const pure
@@ -74,8 +74,6 @@ nothrow @nogc:
     }
 
 private:
-    alias GetFun = Variant function(const(void)*) pure;
-
     const void* _values;
     const ushort* _keys;
     const char* _string_buffer;
@@ -83,7 +81,7 @@ private:
     // these tables map between indices of keys and values
     const ubyte* _lookup_tables;
 
-    GetFun _get_value;
+    const GetFun _get_value;
 
     this(ubyte count, ushort stride, uint type_hash, inout void* values, inout ushort* keys, inout char* strings, inout ubyte* lookup, GetFun get_value) inout pure
     {
@@ -106,9 +104,9 @@ private:
 
 template EnumInfo(E)
 {
-    alias UE = Unqual!E;
+    static assert (is(E == Unqual!E), "EnumInfo can only be instantiated with unqualified types!");
 
-    static if (is(UE == void))
+    static if (is(E == void))
         alias EnumInfo = VoidEnumInfo;
     else
     {
@@ -119,7 +117,7 @@ template EnumInfo(E)
 
             static assert (EnumInfo.sizeof == EnumInfo.sizeof, "Template EnumInfo must not add any members!");
 
-            static if (is(UE T == enum))
+            static if (is(E T == enum))
                 alias V = T;
             else
                 static assert(false, E.string ~ " is not an enum type!");
@@ -129,7 +127,7 @@ template EnumInfo(E)
                 VoidEnumInfo _base;
                 struct {
                     ubyte[VoidEnumInfo._values.offsetof] _pad;
-                    const UE* _values; // shadows the _values in _base with a typed version
+                    const E* _values; // shadows the _values in _base with a typed version
                 }
             }
             alias _base this;
@@ -137,12 +135,12 @@ template EnumInfo(E)
             inout(VoidEnumInfo*) make_void() inout pure
                 => &_base;
 
-            this(ubyte count, uint type_hash, inout UE* values, inout ushort* keys, inout char* strings, inout ubyte* lookup) inout pure
+            this(ubyte count, uint type_hash, inout(E)* values, inout ushort* keys, inout char* strings, inout ubyte* lookup) inout pure
             {
-                _base = inout(VoidEnumInfo)(count, UE.sizeof, type_hash, values, keys, strings, lookup, cast(VoidEnumInfo.GetFun)&get_value!UE);
+                _base = inout(VoidEnumInfo)(count, E.sizeof, type_hash, values, keys, strings, lookup, cast(GetFun)&get_value!V);
             }
 
-            const(UE)[] values() const pure
+            const(E)[] values() const pure
                 => _values[0 .. count];
 
             const(char)[] key_for(V value) const pure
@@ -159,7 +157,7 @@ template EnumInfo(E)
             const(char)[] key_by_sorted_index(size_t i) const pure
                 => _base.key_by_sorted_index(i);
 
-            const(UE)* value_for(const(char)[] key) const pure
+            const(E)* value_for(const(char)[] key) const pure
             {
                 size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
                 if (i == count)
@@ -174,16 +172,16 @@ template EnumInfo(E)
 }
 
 template enum_info(E)
-    if (is(Unqual!E == enum))
+    if (is(E == enum))
 {
-    alias UE = Unqual!E;
+    static assert (is(E == Unqual!E), "EnumInfo can only be instantiated with unqualified types!");
 
     enum ubyte num_items = enum_members.length;
     static assert(num_items <= ubyte.max, "Too many enum items!");
 
-    __gshared immutable enum_info = immutable(EnumInfo!UE)(
+    __gshared immutable enum_info = immutable(EnumInfo!E)(
         num_items,
-        fnv1a(cast(ubyte[])UE.stringof),
+        fnv1a(cast(ubyte[])E.stringof),
         _values.ptr,
         _keys.ptr,
         _strings.ptr,
@@ -196,7 +194,7 @@ private:
     import urt.string.uni : uni_compare;
 
     // keys and values are sorted for binary search
-    __gshared immutable UE[num_items] _values = [ STATIC_MAP!(GetValue, iota) ];
+    __gshared immutable E[num_items] _values = [ STATIC_MAP!(GetValue, iota) ];
 
     // keys are stored as offsets info the string buffer
     __gshared immutable ushort[num_items] _keys = () {
@@ -251,7 +249,7 @@ private:
     }
     struct VI
     {
-        UE v;
+        E v;
         ubyte i;
     }
 
@@ -361,14 +359,16 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     }
 
     // build and return the object
-    return new(*result) VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), value_ptr, key_ptr, str_data, lookup, cast(VoidEnumInfo.GetFun)&get_value!T);
+    return new(*result) VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), value_ptr, key_ptr, str_data, lookup, cast(GetFun)&get_value!T);
 }
 
 
 private:
 
-Variant get_value(E)(const(void)* ptr)
-    => Variant(*cast(const(E)*)ptr);
+alias GetFun = Variant function(const(void)*, const(VoidEnumInfo)*) pure;
+
+Variant get_value(T)(const(void)* ptr, const(VoidEnumInfo)* info)
+    => Variant(*cast(T*)ptr, info);
 
 import urt.string : trim;
 enum trim_key(string key) = key.trim!(c => c == '_');

@@ -65,7 +65,7 @@ ulong parse_uint(const(char)[] str, size_t* bytes_taken = null, uint base = 10) 
         for (; s < e; ++s)
         {
             uint digit = *s - '0';
-            if (digit > 9)
+            if (digit >= base)
                 break;
             value = value*base + digit;
         }

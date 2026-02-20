@@ -7,6 +7,7 @@ import urt.kvp;
 import urt.lifetime;
 import urt.map;
 import urt.mem.allocator;
+import urt.meta.enuminfo : enum_info, VoidEnumInfo;
 import urt.si.quantity;
 import urt.si.unit : ScaledUnit, Second, Nanosecond;
 import urt.time;
@@ -152,14 +153,28 @@ nothrow @nogc:
         }
     }
 
-    this(E)(E e)
+    this(E)(const E e)
         if (is(E == enum))
     {
         static if (is(E T == enum))
+            this(T(e), enum_info!E.make_void());
+    }
+
+    this(T)(T value, const(VoidEnumInfo)* e)
+    {
+        static assert(!is(T == enum), "T should be a numeric type");
+
+        this(value);
+        static if (size_t.sizeof == 8)
         {
-            this(T(e));
-            // TODO: do we keep a record of the enum keys for stringification?
+            size_t ptr = cast(size_t)e;
+            assert((ptr >> 48) == 0, "Uh on! High ptr bits set... we must be in the distant future!");
+            count = cast(uint)ptr;
+            alloc = cast(ushort)(ptr >> 32);
         }
+        else
+            count = cast(size_t)e;
+        flags |= Flags.Enum;
     }
 
     this(U, ScaledUnit _U)(Quantity!(U, _U) q)
@@ -589,9 +604,11 @@ nothrow @nogc:
     bool isDouble() const pure
         => (flags & Flags.DoubleFlag) != 0;
     bool isQuantity() const pure
-        => isNumber && count != 0;
+        => isNumber && count != 0 && !is_enum;
     bool isDuration() const pure
         => isNumber && (count & 0xFFFFFF) == Second.pack;
+    bool is_enum() const pure
+        => (flags & Flags.Enum) != 0;
     bool isBuffer() const pure
         => type == Type.Buffer;
     bool isString() const pure
@@ -900,6 +917,15 @@ nothrow @nogc:
     ref inout(T) as(T)() inout pure
         if (ValidUserType!(Unqual!T) && UserTypeReturnByRef!T)
         => asUser!T;
+
+    const(VoidEnumInfo)* get_enum_info() const pure
+    {
+        assert(is_enum);
+        static if (size_t.sizeof == 8)
+            return cast(VoidEnumInfo*)(count | (size_t(alloc) << 32));
+        else
+            return cast(VoidEnumInfo*)count;
+    }
 
     size_t length() const pure
     {
@@ -1261,6 +1287,7 @@ package:
         Uint64Flag      = 1 << (TypeBits + 6),
         FloatFlag       = 1 << (TypeBits + 7),
         DoubleFlag      = 1 << (TypeBits + 8),
+        Enum            = 1 << (TypeBits + 9),
         Embedded        = 1 << (TypeBits + 10),
         NeedDestruction = 1 << (TypeBits + 11),
 //        CopyFlag        = 1 << (TypeBits + 12), // maybe we want to know if a thing is a copy, or a reference to an external one?

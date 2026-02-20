@@ -165,17 +165,12 @@ nothrow @nogc:
     this(U, ScaledUnit _U)(Quantity!(U, _U) q)
     {
         this(q.value);
-        if (q.unit.pack)
-        {
-            flags |= Flags.IsQuantity;
-            count = q.unit.pack;
-        }
+        count = q.unit.pack;
     }
 
     this(Duration dur)
     {
         this(dur.as!"nsecs");
-        flags |= Flags.IsQuantity;
         count = Nanosecond.pack;
     }
 
@@ -367,12 +362,10 @@ nothrow @nogc:
         }
         else static if (is_some_int!T || is_some_float!T)
         {
-            if (!isNumber)
+            if (!isNumber || isQuantity)
                 return false;
             static if (is_some_int!T) if (!canFitInt!T)
                 return false;
-            if (isQuantity)
-                return asQuantity!double() == Quantity!T(rhs);
             return as!T == rhs;
         }
         else static if (is(T == Quantity!(U, _U), U, ScaledUnit _U))
@@ -431,8 +424,8 @@ nothrow @nogc:
                     static double asDoubleWithBool(ref const Variant v)
                         => v.isBool() ? double(v.asBool()) : v.asDouble();
 
-                    uint aunit = a.isQuantity ? a.count : 0;
-                    uint bunit = b.isQuantity ? b.count : 0;
+                    uint aunit = a.count;
+                    uint bunit = b.count;
                     if (aunit || bunit)
                     {
                         // we can't compare different units
@@ -445,8 +438,8 @@ nothrow @nogc:
                         // matching units, but we'll only do quantity comparison if there is some scaling
                         if ((aunit >> 24) != (bunit >> 24))
                         {
-                            Quantity!double aq = a.isQuantity ? a.asQuantity!double() : Quantity!double(asDoubleWithBool(*a));
-                            Quantity!double bq = b.isQuantity ? b.asQuantity!double() : Quantity!double(asDoubleWithBool(*b));
+                            VarQuantity aq = a.isNumber ? a.asQuantity!double() : VarQuantity(double(a.asBool()));
+                            VarQuantity bq = b.isNumber ? b.asQuantity!double() : VarQuantity(double(b.asBool()));
                             r = aq.opCmp(bq);
                             break;
                         }
@@ -596,9 +589,9 @@ nothrow @nogc:
     bool isDouble() const pure
         => (flags & Flags.DoubleFlag) != 0;
     bool isQuantity() const pure
-        => (flags & Flags.IsQuantity) != 0;
+        => isNumber && count != 0;
     bool isDuration() const pure
-        => isQuantity && (count & 0xFFFFFF) == Second.pack;
+        => isNumber && (count & 0xFFFFFF) == Second.pack;
     bool isBuffer() const pure
         => type == Type.Buffer;
     bool isString() const pure
@@ -729,15 +722,14 @@ nothrow @nogc:
     }
 
     Quantity!T asQuantity(T = double)() const pure @property
-        if (is_some_float!T || isSomeInt!T)
+        if (is_some_float!T || is_some_int!T)
     {
         if (isNull)
             return Quantity!T(0);
         assert(isNumber);
         Quantity!T r;
         r.value = as!T;
-        if (isQuantity)
-            r.unit.pack = count;
+        r.unit.pack = count;
         return r;
     }
 
@@ -747,26 +739,11 @@ nothrow @nogc:
         alias Nanoseconds = Quantity!(long, Nanosecond);
         Nanoseconds ns;
         if (size_t.sizeof < 8 && isFloat) // TODO: better way to detect if double is NOT supported in hardware?
-        {
-            Quantity!float q;
-            q.value = asFloat;
-            q.unit.pack = count;
-            ns = cast(Nanoseconds)q;
-        }
+            ns = cast(Nanoseconds)asQuantity!float();
         else if (isDouble)
-        {
-            Quantity!double q;
-            q.value = asDouble;
-            q.unit.pack = count;
-            ns = cast(Nanoseconds)q;
-        }
+            ns = cast(Nanoseconds)asQuantity!double();
         else
-        {
-            Quantity!long q;
-            q.value = asLong;
-            q.unit.pack = count;
-            ns = q;
-        }
+            ns = asQuantity!long();
         return ns.value.dur!"nsecs";
     }
 
@@ -969,10 +946,6 @@ nothrow @nogc:
     {
         assert(isNumber());
         count = unit.pack;
-        if (count != 0)
-            flags |= Flags.IsQuantity;
-        else
-            flags &= ~Flags.IsQuantity;
     }
 
     // TODO: this seems to interfere with UFCS a lot...
@@ -1103,7 +1076,7 @@ nothrow @nogc:
             assert(false, "String has no closing quote");
         }
 
-        if (s[0].is_numeric)
+        if (s[0].is_numeric || ((s[0] == '+' || s[0] == '-') && s.length > 1 && s[1].is_numeric))
         {
             size_t taken;
             ScaledUnit unit;
@@ -1121,11 +1094,7 @@ nothrow @nogc:
                     this = i * 10.0^^e;
                 else
                     this = i;
-                if (unit.pack)
-                {
-                    flags |= Flags.IsQuantity;
-                    count = unit.pack;
-                }
+                count = unit.pack;
                 return taken;
             }
         }
@@ -1292,7 +1261,6 @@ package:
         Uint64Flag      = 1 << (TypeBits + 6),
         FloatFlag       = 1 << (TypeBits + 7),
         DoubleFlag      = 1 << (TypeBits + 8),
-        IsQuantity      = 1 << (TypeBits + 9),
         Embedded        = 1 << (TypeBits + 10),
         NeedDestruction = 1 << (TypeBits + 11),
 //        CopyFlag        = 1 << (TypeBits + 12), // maybe we want to know if a thing is a copy, or a reference to an external one?

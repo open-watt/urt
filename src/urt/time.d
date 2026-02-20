@@ -621,10 +621,13 @@ pure nothrow @nogc:
             return offset + 1;
         }
 
-        if (s[offset] != '-' && s[offset] != '+')
+        size_t tz_offset = offset;
+        if (s[offset] == ' ')
+            ++tz_offset;
+        if (s[tz_offset] != '-' && s[tz_offset] != '+')
             return offset;
-
-        size_t tz_offset = offset + 1;
+        bool tz_neg = s[tz_offset] == '-';
+        tz_offset += 1;
 
         // parse timezone (00:00)
         int tz_hr, tz_min;
@@ -664,7 +667,7 @@ pure nothrow @nogc:
             }
         }
 
-        if (s[offset] == '-')
+        if (tz_neg)
             tz_hr = -tz_hr;
 
 //        assert(false, "TODO: we need to know our local timezone...");

@@ -334,10 +334,50 @@ Result send(Socket socket, MsgFlags flags, size_t* bytes_sent, const void[][] bu
 }
 
 Result sendto(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.none, const InetAddress* address = null, size_t* bytes_sent = null)
-    => sendmsg(socket, address, flags, null, bytes_sent, (&message)[0..1]);
+{
+    version (Windows)
+        return sendto(socket, address, bytes_sent, (&message)[0..1]);
+    else
+        return sendmsg(socket, address, flags, null, bytes_sent, (&message)[0..1]);
+}
 
 Result sendto(Socket socket, const InetAddress* address, size_t* bytes_sent, const void[][] buffers...)
-    => sendmsg(socket, address, MsgFlags.none, null, bytes_sent, buffers);
+{
+    version (Windows)
+    {
+        ubyte[sockaddr_storage.sizeof] tmp = void;
+        size_t addr_len;
+        sockaddr* sock_addr = null;
+        if (address)
+        {
+            sock_addr = make_sockaddr(*address, tmp, addr_len);
+            assert(sock_addr, "Invalid socket address");
+        }
+
+        uint sent = void;
+        WSABUF[32] bufs = void;
+        assert(buffers.length <= bufs.length, "Too many buffers!");
+
+        uint n = 0;
+        foreach(buffer; buffers)
+        {
+            if (buffer.length == 0)
+                continue;
+            assert(buffer.length <= uint.max, "Buffer too large!");
+            bufs[n].buf = cast(char*)buffer.ptr;
+            bufs[n++].len = cast(uint)buffer.length;
+        }
+
+        int r = WSASendTo(socket.handle, bufs.ptr, n, &sent, /+map_message_flags(flags)+/ 0, sock_addr, cast(int)addr_len, null, null); // there are no meaningful flags on Windows
+        if (r == SOCKET_ERROR)
+            return socket_getlasterror();
+        if (bytes_sent)
+            *bytes_sent = sent;
+        return Result.success;
+    }
+    else
+        return sendmsg(socket, address, MsgFlags.none, null, bytes_sent, buffers);
+}
 
 Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(void)[] control, size_t* bytes_sent, const void[][] buffers)
 {

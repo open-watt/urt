@@ -213,6 +213,10 @@ struct Array(T, size_t EmbedCount = 0)
 {
     static assert(EmbedCount == 0, "Not without move semantics!");
 
+    alias This = typeof(this);
+
+    T* ptr;
+
     // constructors
 
     // TODO: DELETE POSTBLIT!
@@ -225,7 +229,7 @@ struct Array(T, size_t EmbedCount = 0)
         this = t[];
     }
 
-    this(ref typeof(this) val)
+    this(ref This val)
     {
         this(val[]);
     }
@@ -796,7 +800,6 @@ nothrow @nogc:
 private:
     enum copy_elements = is(T == class) || is(T == interface) || is_primitive!T || is_trivial!T;
 
-    T* ptr;
     uint _length;
 
     static if (EmbedCount > 0)

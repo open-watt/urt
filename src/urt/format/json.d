@@ -5,6 +5,7 @@ import urt.conv;
 import urt.lifetime;
 import urt.kvp;
 import urt.mem.allocator;
+import urt.si.unit;
 import urt.string;
 import urt.string.format;
 
@@ -197,18 +198,47 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
         case Variant.Type.Number:
             import urt.conv;
 
-            if (val.isQuantity())
-                assert(false, "TODO: implement quantity formatting for JSON");
+            char[] number_buffer = buffer;
+            bool is_q = val.isQuantity();
+            size_t u_len = 0;
+            float pre_scale = void;
+            if (is_q)
+            {
+                if (buffer.ptr)
+                {
+                    if (buffer.length < 15) // {"q":x,"u":"x"}
+                        return -1;
+                    number_buffer = buffer[5..$];
+                }
+                u_len = val.get_unit.format_unit(null, pre_scale, true); // TODO: should we give false (force pre-scale) here?
+                if (u_len <= 0)
+                    return u_len;
 
+                // TODO: apply the prescale... (if we change the above bool to false)
+            }
+
+            size_t len = 0;
             if (val.isDouble())
-                return val.asDouble().format_float(buffer);
+                len += val.asDouble().format_float(number_buffer);
+            else if (val.isUlong())
+                len += val.asUlong().format_uint(number_buffer);
+            else
+                len += val.asLong().format_int(number_buffer);
+            if (len <= 0 || !is_q)
+                return len;
 
-            // TODO: parse args?
-            //format
+            size_t result_len = 5 + len + 6 + u_len + 2; // {"q":x,"u":"x"}
+            if (!buffer.ptr)
+                return result_len;
+            if (buffer.length < result_len)
+                return -1;
 
-            if (val.isUlong())
-                return val.asUlong().format_uint(buffer);
-            return val.asLong().format_int(buffer);
+            size_t offset = 5 + len;
+            buffer[0..5] = "{\"q\":";
+            buffer[offset..offset + 6] = ",\"u\":\"";
+            val.get_unit.format_unit(buffer[offset + 6..$], pre_scale, true); // TODO: should we give false (force pre-scale) here?
+            buffer[result_len-2..result_len] = "\"}";
+            return result_len;
 
         case Variant.Type.User:
             // for custom types, we'll use the type's regular string format into a json string

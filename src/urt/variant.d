@@ -66,6 +66,37 @@ nothrow @nogc:
             assert(false, "What kind of thing is this?");
     }
 
+    this(ref const Variant rh) inout
+    {
+        if (rh.type == Type.Map || rh.type == Type.Array)
+        {
+            auto arr = Array!Variant(Reserve, rh.nodeArray.length);
+            foreach (ref i; rh.nodeArray)
+                arr.pushBack(i);
+            flags = rh.flags;
+        }
+        else if ((rh.flags & Flags.NeedDestruction) == 0)
+        {
+            __pack = rh.__pack;
+        }
+        else if (rh.isString)
+        {
+            *cast(String*)&value.s = *cast(String*)&rh.value.s;
+            count = rh.count;
+            flags = rh.flags;
+        }
+        else if (rh.isBuffer)
+        {
+            void* mem = defaultAllocator.alloc(rh.count).ptr;
+            mem[0 .. rh.count] = rh.ptr[0 .. rh.count];
+            ptr = cast(inout(void)*)mem;
+            count = rh.count;
+            flags = rh.flags;
+        }
+        else
+            assert(false, "What kind of thing is this?");
+    }
+
     version (EnableMoveSemantics) {
     this(Variant rh)
     {
@@ -368,6 +399,15 @@ nothrow @nogc:
         destroy!false();
         new(this) Variant(value);
     }
+
+    void opAssign(ref const Variant value)
+    {
+        if (&this is &value)
+            return; // TODO: should this be an assert instead of a graceful handler?
+        destroy!false();
+        new(this) Variant(value);
+    }
+
     version (EnableMoveSemantics) {
     void opAssign(Variant value)
     {
@@ -993,6 +1033,12 @@ nothrow @nogc:
         value.s = null;
         flags = Flags.Null;
         return s;
+    }
+
+    ScaledUnit get_unit() const pure
+    {
+        assert(isQuantity());
+        return *cast(ScaledUnit*)&count;
     }
 
     const(VoidEnumInfo)* get_enum_info() const pure

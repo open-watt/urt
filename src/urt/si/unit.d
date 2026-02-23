@@ -689,8 +689,11 @@ nothrow:
     }
 
     import urt.string.format : FormatArg;
-    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const pure
+    ptrdiff_t format_unit(char[] buffer, out float pre_scale, bool allow_unit_scale = true) const pure
     {
+        assert(allow_unit_scale == true, "TODO: support for no-scale formatting (require pre-scale)");
+        pre_scale = 1;
+
         if (!unit.pack)
         {
             if (siScale && exp == -2)
@@ -800,6 +803,15 @@ nothrow:
             }
         }
         return len;
+    }
+
+    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const pure
+    {
+        float pre_scale;
+        ptrdiff_t r = format_unit(buffer, pre_scale, true);
+        if (pre_scale != 1)
+            return -1;
+        return r;
     }
 
     ptrdiff_t fromString(const(char)[] s) pure

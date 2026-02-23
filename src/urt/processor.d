@@ -1,9 +1,24 @@
 module urt.processor;
 
+enum Endian : byte
+{
+    Native = -1, // specifies the native/working endian
+    Little = 0,
+    Big = 1
+}
+
 version (LittleEndian)
+{
     enum LittleEndian = true;
+    enum BigEndian = false;
+    enum Endian proc_endian = Endian.Little;
+}
 else
+{
     enum LittleEndian = false;
+    enum BigEndian = true;
+    enum Endian proc_endian = Endian.Big;
+}
 
 version (X86_64)
 {

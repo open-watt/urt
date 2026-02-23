@@ -99,26 +99,35 @@ wchar* twstringz(const(wchar)[] str) nothrow @nogc
     return r;
 }
 
-char[] tstring(T)(auto ref T value)
+const(char)[] tstring(T)(auto ref T value)
 {
-    import urt.string.format : toString;
-    ptrdiff_t r = toString(value, cast(char[])tempMem[alloc_offset..$]);
-    if (r < 0)
+    import urt.string, urt.array;
+    static if (is(T : const(char)[]) || is(T : const String) || is(T : const MutableString!N, size_t N) || is(T : const Array!char))
     {
-        alloc_offset = 0;
-        r = toString(value, cast(char[])tempMem[0..TempMemSize / 2]);
+        pragma(inline, true);
+        return value[];
+    }
+    else
+    {
+        import urt.string.format : toString;
+        ptrdiff_t r = toString(value, cast(char[])tempMem[alloc_offset..$]);
         if (r < 0)
         {
-//            assert(false, "Formatted string is too large for the temp buffer!");
-            return null;
+            alloc_offset = 0;
+            r = toString(value, cast(char[])tempMem[0..TempMemSize / 2]);
+            if (r < 0)
+            {
+//                assert(false, "Formatted string is too large for the temp buffer!");
+                return null;
+            }
         }
+        const(char)[] result = cast(char[])tempMem[alloc_offset .. alloc_offset + r];
+        alloc_offset += r;
+        return result;
     }
-    char[] result = cast(char[])tempMem[alloc_offset .. alloc_offset + r];
-    alloc_offset += r;
-    return result;
 }
 
-dchar[] tdstring(T)(auto ref T value) nothrow @nogc
+const(dchar)[] tdstring(T)(auto ref T value) nothrow @nogc
 {
     static if (is(T : const(char)[]) || is(T : const(wchar)[]) || is(T : const(dchar)[]))
         alias s = value;
@@ -130,17 +139,26 @@ dchar[] tdstring(T)(auto ref T value) nothrow @nogc
     return r[0 .. len];
 }
 
-char[] tconcat(Args...)(ref Args args)
+const(char)[] tconcat(Args...)(ref Args args)
 {
-    import urt.string.format : concat;
-    char[] r = concat(cast(char[])tempMem[alloc_offset..$], args);
-    if (!r)
+    import urt.string, urt.array;
+    static if (Args.length == 1 && (is(Args[0] : const(char)[]) || is(Args[0] : const String) || is(Args[0] : const MutableString!N, size_t N) || is(Args[0] : const Array!char)))
     {
-        alloc_offset = 0;
-        r = concat(cast(char[])tempMem[0..TempMemSize / 2], args);
+        pragma(inline, true);
+        return args[0][];
     }
-    alloc_offset += r.length;
-    return r;
+    else
+    {
+        import urt.string.format : concat;
+        const(char)[] r = concat(cast(char[])tempMem[alloc_offset..$], args);
+        if (!r)
+        {
+            alloc_offset = 0;
+            r = concat(cast(char[])tempMem[0..TempMemSize / 2], args);
+        }
+        alloc_offset += r.length;
+        return r;
+    }
 }
 
 char[] tformat(Args...)(const(char)[] fmt, ref Args args)

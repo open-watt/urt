@@ -154,7 +154,7 @@ private:
 private:
 
 import urt.array;
-enum is_some_string(T) = is_some_char!T || is(T : const char[]) || is(T : const(String)) || is(T : const(MutableString!N), size_t N) || is(T : const(Array!(char, N)), size_t N);
+enum is_some_string(T) = is(T == char) || is(T : const char[]) || is(T : const(String)) || is(T : const(MutableString!N), size_t N) || is(T : const(Array!(char, N)), size_t N);
 
 template num_string_args(Args...)
 {

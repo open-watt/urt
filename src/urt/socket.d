@@ -587,12 +587,12 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
         version (Windows)
         {
             uint opt = value ? 1 : 0;
-            r.systemCode = ioctlsocket(socket.handle, FIONBIO, &opt);
+            r.system_code = ioctlsocket(socket.handle, FIONBIO, &opt);
         }
         else version (Posix)
         {
             int flags = fcntl(socket.handle, F_GETFL, 0);
-            r.systemCode = fcntl(socket.handle, F_SETFL, value ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
+            r.system_code = fcntl(socket.handle, F_SETFL, value ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
         }
         else
             assert(false, "Not implemented!");
@@ -664,7 +664,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
     }
 
     // set the option
-    r.systemCode = setsockopt(socket.handle, s_sockOptLevel[level], opt_info.option, cast(const(char)*)arg, s_optTypePlatformSize[opt_info.platform_type]);
+    r.system_code = setsockopt(socket.handle, s_sockOptLevel[level], opt_info.option, cast(const(char)*)arg, s_optTypePlatformSize[opt_info.platform_type]);
 
     return r;
 }
@@ -757,7 +757,7 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
 
     socklen_t writtenLen = s_optTypePlatformSize[opt_info.platform_type];
     // get the option
-    r.systemCode = getsockopt(socket.handle, s_sockOptLevel[level], opt_info.option, cast(char*)arg, &writtenLen);
+    r.system_code = getsockopt(socket.handle, s_sockOptLevel[level], opt_info.option, cast(char*)arg, &writtenLen);
 
     if (opt_info.rt_type != opt_info.platform_type)
     {
@@ -1096,10 +1096,10 @@ Result socket_getlasterror()
 Result get_socket_error(Socket socket)
 {
     Result r;
-    socklen_t optlen = r.systemCode.sizeof;
-    int callResult = getsockopt(socket.handle, SOL_SOCKET, SO_ERROR, cast(char*)&r.systemCode, &optlen);
+    socklen_t optlen = r.system_code.sizeof;
+    int callResult = getsockopt(socket.handle, SOL_SOCKET, SO_ERROR, cast(char*)&r.system_code, &optlen);
     if (callResult)
-        r.systemCode = callResult;
+        r.system_code = callResult;
     return r;
 }
 
@@ -1109,49 +1109,49 @@ SocketResult socket_result(Result result)
 {
     if (result)
         return SocketResult.success;
-    if (result.systemCode == ConnectionClosedResult.systemCode)
+    if (result.system_code == ConnectionClosedResult.system_code)
         return SocketResult.connection_closed;
     version (Windows)
     {
-        if (result.systemCode == WSAEWOULDBLOCK)
+        if (result.system_code == WSAEWOULDBLOCK)
             return SocketResult.would_block;
-        if (result.systemCode == WSAEINPROGRESS)
+        if (result.system_code == WSAEINPROGRESS)
             return SocketResult.would_block;
-        if (result.systemCode == WSAENOBUFS)
+        if (result.system_code == WSAENOBUFS)
             return SocketResult.no_buffer;
-        if (result.systemCode == WSAENETDOWN)
+        if (result.system_code == WSAENETDOWN)
             return SocketResult.network_down;
-        if (result.systemCode == WSAECONNREFUSED)
+        if (result.system_code == WSAECONNREFUSED)
             return SocketResult.connection_refused;
-        if (result.systemCode == WSAECONNRESET)
+        if (result.system_code == WSAECONNRESET)
             return SocketResult.connection_reset;
-        if (result.systemCode == WSAEINTR)
+        if (result.system_code == WSAEINTR)
             return SocketResult.interrupted;
-        if (result.systemCode == WSAENOTSOCK)
+        if (result.system_code == WSAENOTSOCK)
             return SocketResult.invalid_socket;
-        if (result.systemCode == WSAEINVAL)
+        if (result.system_code == WSAEINVAL)
             return SocketResult.invalid_argument;
     }
     else version (Posix)
     {
         static if (EAGAIN != EWOULDBLOCK)
-            if (result.systemCode == EAGAIN)
+            if (result.system_code == EAGAIN)
                 return SocketResult.would_block;
-        if (result.systemCode == EWOULDBLOCK)
+        if (result.system_code == EWOULDBLOCK)
             return SocketResult.would_block;
-        if (result.systemCode == EINPROGRESS)
+        if (result.system_code == EINPROGRESS)
             return SocketResult.would_block;
-        if (result.systemCode == ENOMEM)
+        if (result.system_code == ENOMEM)
             return SocketResult.no_buffer;
-        if (result.systemCode == ENETDOWN)
+        if (result.system_code == ENETDOWN)
             return SocketResult.network_down;
-        if (result.systemCode == ECONNREFUSED)
+        if (result.system_code == ECONNREFUSED)
             return SocketResult.connection_refused;
-        if (result.systemCode == ECONNRESET)
+        if (result.system_code == ECONNRESET)
             return SocketResult.connection_reset;
-        if (result.systemCode == EINTR)
+        if (result.system_code == EINTR)
             return SocketResult.interrupted;
-        if (result.systemCode == EINVAL)
+        if (result.system_code == EINVAL)
             return SocketResult.invalid_argument;
     }
     return SocketResult.failure;

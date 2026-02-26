@@ -288,13 +288,13 @@ size_t uni_convert(const(wchar)[] s, dchar[] buffer)
     {
         if (b >= bend)
             return 0; // End of output buffer
-        if (p[0] >= 0xD800 && p[0] < 0xE000)
+        if ((p[0] >> 11) == 0x1B)
         {
             if (p + 1 >= pend)
                 return 0; // Unexpected end of input
-            if (p[0] < 0xDC00) // Surrogate pair: 110110xxxxxxxxxx 110111xxxxxxxxxx
+            if (p[0] < 0xDC00 && (p[1] >> 10) == 0x37) // Surrogate pair: 110110xxxxxxxxxx 110111xxxxxxxxxx
             {
-                *b++ = 0x10000 + ((p[0] - 0xD800) << 10) + (p[1] - 0xDC00);
+                *b++ = 0x10000 + ((p[0] & 0x3FF) << 10 | (p[1] & 0x3FF));
                 p += 2;
                 continue;
             }

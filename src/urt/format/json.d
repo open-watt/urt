@@ -370,20 +370,56 @@ Variant parse_node(ref const(char)[] text)
     {
         assert(text.length > 1);
         size_t i = 1;
+        Array!(char, 0) tmp; // TODO: needs a generous stack buffer!
         while (i < text.length && text[i] != '"')
         {
-            // TODO: we need to collapse the escape sequence, so we need to copy the string somewhere >_<
-            //       ...overwrite the source buffer?
             if (text[i] == '\\')
             {
-                assert(i + 1 < text.length);
-                i += 2;
+                if (tmp.empty)
+                {
+                    tmp.reserve(256);
+                    tmp = text[1 .. i];
+                }
+                if (++i == text.length)
+                    break;
+                if (text[i] == 'u')
+                {
+                    import urt.conv : parse_uint;
+                    if (++i + 4 >= text.length)
+                        break;
+                    size_t taken;
+                    ulong code = text[i .. i + 4].parse_uint(&taken, 16);
+                    if (taken != 4)
+                        break;
+                    i += 4;
+                    dchar c = cast(dchar)code;
+                    if ((c >> 11) == 0x1B)
+                    {
+                        if (code >= 0xDC00)
+                            break; // low surrogate without preceding high surrogate
+                        if (i + 6 >= text.length || text[i] != '\\' || text[i+1] != 'u')
+                            break;
+                        code = text[i + 2 .. i + 6].parse_uint(&taken, 16);
+                        if (taken != 4 || (code >> 10) != 0x37)
+                            break;
+                        c = 0x10000 + ((c & 0x3FF) << 10 | (cast(uint)code & 0x3FF));
+                        i += 6;
+                    }
+                    tmp ~= c;
+                }
+                else
+                    goto do_concat;
+            }
+            else if (!tmp.empty)
+            {
+            do_concat:
+                tmp ~= text[i++];
             }
             else
-                i++;
+                ++i;
         }
         assert(i < text.length);
-        Variant node = Variant(text[1 .. i]);
+        Variant node = Variant(tmp.empty ? text[1 .. i] : tmp[]);
         text = text[i + 1 .. $];
         return node;
     }

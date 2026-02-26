@@ -785,7 +785,7 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
     else version (Posix)
     {
         // Construct a format string which will be the supplied dir with prefix and 8 generated random characters
-        char[] fn = tconcat(dstDir, (dstDir.length && dstDir[$-1] != '/') ? "/" : "", prefix, "XXXXXX\0");
+        char[] fn = cast(char[])tconcat(dstDir, (dstDir.length && dstDir[$-1] != '/') ? "/" : "", prefix, "XXXXXX\0");
         File file;
         file.fd = mkstemp(fn.ptr);
         if (file.fd == -1)

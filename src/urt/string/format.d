@@ -31,10 +31,7 @@ alias formatValue = toString; // TODO: remove me?
 char[] concat(Args...)(char[] buffer, ref const Args args)
 {
     alias NormalisedArgs = NormaliseArgs!Args;
-    static if (Args.length == 1)
-        enum is_normalised = is(Args[0] == NormalisedArgs);
-    else
-        enum is_normalised = is(Args == NormalisedArgs);
+    enum is_normalised = is(Args == NormalisedArgs);
 
     static if (Args.length == 0)
     {
@@ -51,31 +48,35 @@ char[] concat(Args...)(char[] buffer, ref const Args args)
 
         static if (n == Args.length)
         {
-            size_t[Args.length + 1] offsets = void;
             size_t[Args.length] lens = void;
-            offsets[0] = 0;
+            size_t length = 0;
             static foreach (i; 0 .. Args.length)
             {
                 static if (is(Args[i] == char))
-                    offsets[i + 1] = offsets[i] + 1;
+                    length += 1;
                 else
                 {
                     lens[i] = args[i].length;
-                    offsets[i + 1] = offsets[i] + lens[i];
+                    length += lens[i];
                 }
             }
-            if (!buffer.ptr)
-                return buffer.ptr[0 .. offsets[Args.length]];
-            if (offsets[Args.length] > buffer.length)
-                return null;
-            static foreach (i; 0 .. Args.length)
+            if (buffer.ptr)
             {
-                static if (is(Args[i] == char))
-                    buffer.ptr[offsets[i]] = args[i];
-                else
-                    buffer.ptr[offsets[i] .. offsets[i + 1]] = args[i].ptr[0..lens[i]];
+                if (length > buffer.length)
+                    return null;
+                char* p = buffer.ptr;
+                static foreach (i; 0 .. Args.length)
+                {
+                    static if (is(Args[i] == char))
+                        *p++ = args[i];
+                    else
+                    {
+                        p[0..lens[i]] = args[i].ptr[0..lens[i]];
+                        p += lens[i];
+                    }
+                }
             }
-            return buffer.ptr[0 .. offsets[Args.length]];
+            return buffer.ptr[0 .. length];
         }
         else static if (Args.length == 1)
         {
@@ -169,19 +170,16 @@ template num_string_args(Args...)
 template NormaliseArgs(Args...)
 {
     import urt.meta : AliasSeq;
-    static if (Args.length == 0)
-        alias NormaliseArgs = AliasSeq!();
-    else static if (Args.length == 1)
-        alias NormaliseArgs = NormaliseConst!(Args[0]);
-    else
-        alias NormaliseArgs = AliasSeq!(NormaliseConst!(Args[0]), NormaliseArgs!(Args[1 .. $]));
+    alias NormaliseArgs = AliasSeq!();
+    static foreach (Arg; Args)
+        NormaliseArgs = AliasSeq!(NormaliseArgs, NormaliseConst!Arg);
 }
 
 template NormaliseConst(T)
 {
     static if (is(T == const(U), U) || is(T == immutable(U), U))
         alias NormaliseConst = NormaliseConst!U;
-    else static if (is(T == U[], U))
+    else static if (is(T == immutable(U)[], U) || is(T == U[], U))
         alias NormaliseConst = const(U)[];
     else static if (is(T == U[N], U, size_t N))
         alias NormaliseConst = const(U)[N];

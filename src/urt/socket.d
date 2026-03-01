@@ -11,8 +11,8 @@ version (Windows)
     // TODO: this is in core.sys.windows.winsock2; why do I need it here?
     pragma(lib, "ws2_32");
 
-    import core.sys.windows.windows;
-    import core.sys.windows.winsock2 :
+    import urt.internal.sys.windows;
+    import urt.internal.sys.windows.winsock2 :
         _bind = bind, _listen = listen, _connect = connect, _accept = accept,
         _send = send, _sendto = sendto, _recv = recv, _recvfrom = recvfrom,
         _shutdown = shutdown;
@@ -26,11 +26,10 @@ version (Windows)
 }
 else version (Posix)
 {
-    import core.stdc.errno;
+    import urt.internal.os; // use ImportC to import system C headers...
     import core.sys.posix.fcntl;
     import core.sys.posix.poll;
     import core.sys.posix.unistd : close, gethostname;
-    import urt.internal.os; // use ImportC to import system C headers...
     import core.sys.posix.netinet.in_ : in6_addr, sockaddr_in6;
 
     alias _bind = urt.internal.os.bind, _listen = urt.internal.os.listen, _connect = urt.internal.os.connect,
@@ -1090,7 +1089,7 @@ Result socket_getlasterror()
     version (Windows)
         return Result(WSAGetLastError());
     else
-        return Result(errno);
+        return errno_result();
 }
 
 Result get_socket_error(Socket socket)
@@ -1576,7 +1575,7 @@ version (Windows)
     void crt_bootup()
     {
         WSADATA wsaData;
-        int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+        int result = WSAStartup(0x0202, &wsaData);
         // what if this fails???
 
         // this is truly the worst thing I ever wrote!!

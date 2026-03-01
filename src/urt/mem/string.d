@@ -4,12 +4,6 @@ import urt.mem;
 import urt.string;
 
 
-// TODO: THIS IS TEMP!! REMOVE ME!!
-shared static this()
-{
-    initStringHeap(ushort.max);
-}
-
 
 struct CacheString
 {
@@ -77,12 +71,12 @@ private:
     auto __debugStringView() => toString;
 }
 
-void initStringHeap(uint stringHeapSize) nothrow
+void init_string_heap(uint string_heap_size) nothrow @nogc
 {
     assert(stringHeapInitialised == false, "String heap already initialised!");
-    assert(stringHeapSize <= ushort.max, "String heap too large!");
+    assert(string_heap_size <= ushort.max, "String heap too large!");
 
-    stringHeap = defaultAllocator.allocArray!char(stringHeapSize);
+    stringHeap = defaultAllocator.allocArray!char(string_heap_size);
 
     // write the null string to the start
     stringHeap[0..2] = 0;
@@ -91,8 +85,9 @@ void initStringHeap(uint stringHeapSize) nothrow
     stringHeapInitialised = true;
 }
 
-void deinitStringHeap() nothrow
+void deinit_string_heap() nothrow @nogc
 {
+    defaultAllocator.freeArray(stringHeap);
 }
 
 uint getStringHeapAllocated() nothrow @nogc

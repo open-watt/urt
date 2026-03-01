@@ -40,7 +40,7 @@ nothrow @nogc:
 
 version (Windows)
 {
-    import core.sys.windows.windows;
+    import urt.internal.sys.windows;
 
     enum InternalResult : Result
     {
@@ -58,7 +58,14 @@ version (Windows)
 }
 else version (Posix)
 {
-    import core.stdc.errno;
+    import urt.internal.stdc;
+
+    extern (C) private int* __errno_location() nothrow @nogc;
+
+    @property int errno() nothrow @nogc @trusted
+    {
+        return *__errno_location();
+    }
 
     enum InternalResult : Result
     {

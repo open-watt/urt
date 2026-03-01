@@ -92,7 +92,7 @@ constructors etc.
 void emplaceInitializer(T)(scope ref T chunk) nothrow pure @trusted
     if (!is(T == const) && !is(T == immutable) && !is(T == inout))
 {
-    import core.internal.traits : hasElaborateAssign;
+    import urt.internal.traits : hasElaborateAssign;
 
     static if (__traits(isZeroInit, T))
     {

@@ -4,7 +4,7 @@ import urt.traits : is_some_float;
 
 version (Windows)
 {
-    import core.sys.windows.windows;
+    import urt.internal.sys.windows;
 
     extern (Windows) void GetSystemTimePreciseAsFileTime(FILETIME* lpSystemTimeAsFileTime) nothrow @nogc;
 }
@@ -843,7 +843,7 @@ package(urt) void init_clock()
 
     version (Windows)
     {
-        import core.sys.windows.windows;
+        import urt.internal.sys.windows;
         import urt.util : min;
 
         LARGE_INTEGER freq;

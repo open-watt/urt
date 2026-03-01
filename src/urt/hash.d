@@ -9,24 +9,25 @@ nothrow @nogc:
 alias fnv1a = fnv1!(uint, true);
 alias fnv1a64 = fnv1!(ulong, true);
 
-T fnv1(T, bool alternate)(const ubyte[] s) pure nothrow @nogc
+template fnv1_initial(T)
+{
+    static if (is(T == ushort))
+        enum T fnv1_initial = 0x811C;
+    else static if (is(T == uint))
+        enum T fnv1_initial = 0x811C9DC5;
+    else static if (is(T == ulong))
+        enum T fnv1_initial = 0XCBF29CE484222325;
+}
+
+T fnv1(T, bool alternate)(const ubyte[] s, T hash = fnv1_initial!T) pure nothrow @nogc
     if (is(T == ushort) || is(T == uint) || is(T == ulong))
 {
     static if (is(T == ushort))
-    {
-        enum T prime = 0x0101; // 16-bit FNV prime
-        T hash = 0x811C; // 16-bit FNV offset basis
-    }
+        enum T prime = 0x0101;
     else static if (is(T == uint))
-    {
-        enum T prime = 0x01000193; // 32-bit FNV prime
-        T hash = 0x811C9DC5; // 32-bit FNV offset basis
-    }
+        enum T prime = 0x01000193;
     else static if (is(T == ulong))
-    {
-        enum T prime = 0x100000001B3; // 64-bit FNV prime
-        T hash = 0XCBF29CE484222325; // 64-bit FNV offset basis
-    }
+        enum T prime = 0x100000001B3;
 
     const ubyte* p = s.ptr;
     for (size_t i = 0; i < s.length; ++i)
@@ -49,17 +50,21 @@ unittest
 {
     enum hash = fnv1a(cast(ubyte[])"hello world");
     static assert(hash == 0xD58B3FA7);
+
+    enum h1 = fnv1a(cast(ubyte[])"hello ");
+    enum h2 = fnv1a(cast(ubyte[])"world", h1);
+    static assert(h2 == hash);
 }
 
 
-uint adler32(const void[] data)
+uint adler32(const void[] data, uint init = 1)
 {
     enum A32_BASE = 65521;
 
     assert(data.length <= int.max, "Data length must be less than or equal to int.max");
 
-    uint s1 = 1;
-    uint s2 = 0;
+    uint s1 = init & 0xFFFF;
+    uint s2 = (init >> 16) & 0xFFFF;
 
     version (SmallSize)
     {
@@ -147,6 +152,9 @@ uint adler32(const void[] data)
 }
 
 
+// NOTE: progressive accumulation via `initial` works only when prior chunks have even length!!!
+// odd-length chunks misalign the 16-bit word pairing. fixing this requires carrying a pending byte between calls :/
+// maybe there's some way to protect against misuse?
 ushort internet_checksum(const void[] data, ushort initial = 0xFFFF)
 {
     auto bytes = cast(const(const ubyte)[])data;

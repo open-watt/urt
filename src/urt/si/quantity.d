@@ -352,7 +352,7 @@ nothrow @nogc:
 
         if (u.pack)
         {
-            ptrdiff_t l2 = u.toString(buffer[l .. $], null, null);
+            ptrdiff_t l2 = u.toString(buffer.ptr ? buffer.ptr[l .. buffer.length] : null, null, null);
             if (l2 < 0)
                 return l2;
             l += l2;

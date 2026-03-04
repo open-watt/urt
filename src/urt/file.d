@@ -647,7 +647,7 @@ Result read_at(ref File file, void[] buffer, ulong offset, out size_t bytesRead)
         if (!ReadFile(file.handle, buffer.ptr, cast(DWORD)buffer.length, &dwBytesRead, &o))
         {
             Result error = getlasterror_result();
-            if (error.systemCode != ERROR_HANDLE_EOF)
+            if (error.system_code != ERROR_HANDLE_EOF)
                 return error;
         }
         bytesRead = dwBytesRead;
@@ -734,7 +734,7 @@ FileResult file_result(Result result)
 {
     version (Windows)
     {
-        switch (result.systemCode)
+        switch (result.system_code)
         {
             case ERROR_SUCCESS:         return FileResult.Success;
             case ERROR_DISK_FULL:       return FileResult.DiskFull;
@@ -749,7 +749,7 @@ FileResult file_result(Result result)
     else version (Posix)
     {
         static assert(EAGAIN == EWOULDBLOCK, "Expect EGAIN and EWOULDBLOCK are the same value");
-        switch (result.systemCode)
+        switch (result.system_code)
         {
             case 0:         return FileResult.Success;
             case ENOSPC:    return FileResult.DiskFull;

@@ -344,7 +344,7 @@ alias coentry_t = void function() @nogc;
 
 version (UseWindowsFibreAPI)
 {
-    import core.sys.windows.winbase;
+    import urt.internal.sys.windows.winbase;
 
     version (X86_64)
     {

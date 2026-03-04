@@ -12,10 +12,10 @@ alias SystemTime = void;
 
 version(Windows)
 {
-    import core.sys.windows.winbase;
-    import core.sys.windows.windows;
-    import core.sys.windows.windef : MAX_PATH;
-    import core.sys.windows.winnt;
+    import urt.internal.sys.windows.winbase;
+    import urt.internal.sys.windows;
+    import urt.internal.sys.windows.windef : MAX_PATH;
+    import urt.internal.sys.windows.winnt;
     import urt.string : twstringz;
 
     // TODO: remove this when LDC/GDC are up to date...
@@ -26,7 +26,7 @@ version(Windows)
 }
 else version (Posix)
 {
-    import core.stdc.errno;
+    import urt.internal.stdc;
     import core.sys.posix.dirent;
     import core.sys.posix.fcntl;
     import core.sys.posix.stdlib;

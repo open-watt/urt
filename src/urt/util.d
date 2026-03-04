@@ -30,12 +30,12 @@ pure:
 
 auto min(T, U)(auto ref inout T a, auto ref inout U b)
 {
-    return a < b ? a : b;
+    return b < a ? b : a;
 }
 
 auto max(T, U)(auto ref inout T a, auto ref inout U b)
 {
-    return a > b ? a : b;
+    return b > a ? b : a;
 }
 
 template Align(size_t value, size_t alignment = size_t.sizeof)
@@ -108,6 +108,42 @@ bool is_aligned(T)(T value, size_t alignment)
 {
     static assert(T.sizeof <= size_t.sizeof, "TODO");
     return (cast(size_t)value & (alignment - 1)) == 0;
+}
+
+T rol(T)(const T value, const uint count) pure
+    if (__traits(isIntegral, T) && __traits(isUnsigned, T))
+{
+    assert(count < 8 * T.sizeof);
+    if (count == 0)
+        return cast(T)value;
+    return cast(T)((value << count) | (value >> (T.sizeof * 8 - count)));
+}
+
+T ror(T)(const T value, const uint count) pure
+    if (__traits(isIntegral, T) && __traits(isUnsigned, T))
+{
+    assert(count < 8 * T.sizeof);
+    if (count == 0)
+        return cast(T)value;
+    return cast(T)((value >> count) | (value << (T.sizeof * 8 - count)));
+}
+
+T rol(uint count, T)(const T value) pure
+    if (__traits(isIntegral, T) && __traits(isUnsigned, T))
+{
+    static assert(count < 8 * T.sizeof);
+    static if (count == 0)
+        return cast(T)value;
+    return cast(T)((value << count) | (value >> (T.sizeof * 8 - count)));
+}
+
+T ror(uint count, T)(const T value) pure
+    if (__traits(isIntegral, T) && __traits(isUnsigned, T))
+{
+    static assert(count < 8 * T.sizeof);
+    static if (count == 0)
+        return cast(T)value;
+    return cast(T)((value >> count) | (value << (T.sizeof * 8 - count)));
 }
 
 /+
@@ -460,7 +496,7 @@ T bit_reverse(T)(T x)
             // TODO: these may be inferior on platforms where mul is slow...
             static if (size_t.sizeof == 8)
             {
-                //                return cast(ubyte)((b*0x0202020202ULL & 0x010884422010ULL) % 1023; // only 3 ops, but uses div!
+//                return cast(ubyte)((b*0x0202020202ULL & 0x010884422010ULL) % 1023; // only 3 ops, but uses div!
                 return cast(ubyte)(cast(ulong)(x*0x80200802UL & 0x0884422110)*0x0101010101 >> 32);
             }
             else
@@ -479,6 +515,83 @@ T bit_reverse(T)(T x)
                 return x;
             else
                 return byte_reverse(x);
+        }
+    }
+    else static if (false) // TODO: DMD, x86, 4 or 8 bytes...
+    {
+        static if (T.sizeof == 4)
+        {
+            asm pure nothrow @nogc { naked; }
+
+            version (D_InlineAsm_X86_64)
+            {
+                version (Win64)
+                    asm pure nothrow @nogc { mov EAX, ECX; }
+                else
+                    asm pure nothrow @nogc { mov EAX, EDI; }
+            }
+
+            asm pure nothrow @nogc
+            {
+                mov EDX, EAX;
+                shr EAX, 1;
+                and EDX, 0x5555_5555;
+                and EAX, 0x5555_5555;
+                shl EDX, 1;
+                or  EAX, EDX;
+                mov EDX, EAX;
+                shr EAX, 2;
+                and EDX, 0x3333_3333;
+                and EAX, 0x3333_3333;
+                shl EDX, 2;
+                or  EAX, EDX;
+                mov EDX, EAX;
+                shr EAX, 4;
+                and EDX, 0x0f0f_0f0f;
+                and EAX, 0x0f0f_0f0f;
+                shl EDX, 4;
+                or  EAX, EDX;
+                bswap EAX;
+                ret;
+            }
+        }
+        else
+        {
+            asm pure nothrow @nogc { naked; }
+
+            version (Win64)
+                asm pure nothrow @nogc { mov RAX, RCX; }
+            else
+                asm pure nothrow @nogc { mov RAX, RDI; }
+
+            asm pure nothrow @nogc
+            {
+                mov RDX, RAX;
+                shr RAX, 1;
+                mov RCX, 0x5555_5555_5555_5555L;
+                and RDX, RCX;
+                and RAX, RCX;
+                shl RDX, 1;
+                or  RAX, RDX;
+
+                mov RDX, RAX;
+                shr RAX, 2;
+                mov RCX, 0x3333_3333_3333_3333L;
+                and RDX, RCX;
+                and RAX, RCX;
+                shl RDX, 2;
+                or  RAX, RDX;
+
+                mov RDX, RAX;
+                shr RAX, 4;
+                mov RCX, 0x0f0f_0f0f_0f0f_0f0fL;
+                and RDX, RCX;
+                and RAX, RCX;
+                shl RDX, 4;
+                or  RAX, RDX;
+                bswap RAX;
+                ret;
+            }
         }
     }
     else

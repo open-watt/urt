@@ -334,6 +334,49 @@ void[] load_file(const(char)[] path, NoGCAllocator allocator = defaultAllocator(
     return buffer[0..bytesRead];
 }
 
+Result save_file(const(char)[] path, const(void)[] data)
+{
+    File f;
+    Result r = f.open(path, FileOpenMode.WriteTruncate);
+    if (!r)
+        return r;
+    size_t written;
+    r = f.write(data, written);
+    f.close();
+    if (!r)
+        return r;
+    if (written != data.length)
+        return InternalResult.failed;
+    return Result.success;
+}
+
+Result create_directory(const(char)[] path)
+{
+    version (Windows)
+    {
+        if (!CreateDirectoryW(path.twstringz, null))
+        {
+            DWORD err = GetLastError();
+            if (err == ERROR_ALREADY_EXISTS)
+                return Result.success;
+            return getlasterror_result();
+        }
+        return Result.success;
+    }
+    else version (Posix)
+    {
+        if (core.sys.posix.sys.stat.mkdir(tconcat(path, "\0").ptr, 493 /* 0755 */) != 0)
+        {
+            if (core.stdc.errno.errno == core.stdc.errno.EEXIST)
+                return Result.success;
+            return errno_result();
+        }
+        return Result.success;
+    }
+    else
+        static assert(0, "Not implemented");
+}
+
 Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags openFlags = FileOpenFlags.None)
 {
     version (Windows)

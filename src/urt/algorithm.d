@@ -84,7 +84,7 @@ size_t binary_search(Pred)(const void[] arr, size_t stride, const void* value, a
     return count;
 }
 
-size_t binary_search(alias pred = void, T, Cmp...)(T[] arr, auto ref Cmp cmp_args)
+size_t binary_search(alias pred = void, bool insert_pos = false, T, Cmp...)(T[] arr, auto ref Cmp cmp_args)
     if (!is(Unqual!T == void))
 {
     static if (is(pred == void))
@@ -107,26 +107,33 @@ size_t binary_search(alias pred = void, T, Cmp...)(T[] arr, auto ref Cmp cmp_arg
         else
         {
             // should we chase the first in a sequence of same values?
-            int cmp = pred(p[mid], cmp_args);
+            auto cmp = pred(p[mid], cmp_args);
             if (cmp < 0)
                 low = mid + 1;
             else
                 high = mid;
         }
     }
-    if (low == arr.length)
-        return arr.length;
-    static if (is(pred == void))
+    static if (insert_pos)
     {
-        if (p[low] == cmp_args[0])
-            return low;
+        return low;
     }
     else
     {
-        if (pred(p[low], cmp_args) == 0)
-            return low;
+        if (low == arr.length)
+            return arr.length;
+        static if (is(pred == void))
+        {
+            if (p[low] == cmp_args[0])
+                return low;
+        }
+        else
+        {
+            if (pred(p[low], cmp_args) == 0)
+                return low;
+        }
+        return arr.length;
     }
-    return arr.length;
 }
 
 

@@ -121,6 +121,7 @@ String makeString(const(char)[] s) nothrow
 {
     if (s.length == 0)
         return String(null);
+    assert(__ctfe, "only for compile-time use");
     return makeString(s, new char[2 + s.length]);
 }
 
@@ -439,7 +440,8 @@ unittest
     assert(!emptyLit); // opCast!bool
 
     // Test makeString (default allocator)
-    String s1 = makeString("World");
+//    String s1 = makeString("World");
+    String s1 = StringLit!"World";
     assert(s1.length == 5);
     assert(s1 == "World");
 
@@ -471,7 +473,7 @@ unittest
     assert(s3.length == 5);
 
     // Test equality
-    String s4 = makeString("World");
+    String s4 = StringLit!"World";
     assert(s3 == s4); // Different allocations, same content
     assert(s3 != "world"); // Case sensitive
     assert(s3 != "Worl");

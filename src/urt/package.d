@@ -21,8 +21,8 @@ private:
 pragma(crt_constructor)
 void crt_bootup()
 {
-    import urt.time : initClock;
-    initClock();
+    import urt.time : init_clock;
+    init_clock();
 
     import urt.rand;
     init_rand();

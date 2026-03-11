@@ -67,9 +67,9 @@ pure nothrow @nogc:
         static if (is(T == Time!c, Clock c) && c != clock)
         {
             static if (clock == Clock.Monotonic && c == Clock.SystemTime)
-                return SysTime(ticks + ticksSinceBoot);
+                return SysTime(ticks + ticks_since_boot);
             else
-                return MonoTime(ticks - ticksSinceBoot);
+                return MonoTime(ticks - ticks_since_boot);
         }
         else
             static assert(false, "constraint out of sync");
@@ -88,9 +88,9 @@ pure nothrow @nogc:
         static if (clock != c)
         {
             static if (clock == Clock.Monotonic)
-                t1 += ticksSinceBoot;
+                t1 += ticks_since_boot;
             else
-                t2 += ticksSinceBoot;
+                t2 += ticks_since_boot;
         }
         return Duration(t1 - t2);
     }
@@ -168,7 +168,7 @@ pure nothrow @nogc:
         => ticks != 0;
 
     T opCast(T)() const if (is_some_float!T)
-        => cast(T)ticks / cast(T)ticksPerSecond;
+        => cast(T)ticks / cast(T)ticks_per_second;
 
     bool opEquals(Duration b) const
         => ticks == b.ticks;
@@ -191,21 +191,21 @@ pure nothrow @nogc:
     long as(string base)() const
     {
         static if (base == "nsecs")
-            return ticks*nsecMultiplier;
+            return ticks*nsec_multiplier;
         else static if (base == "usecs")
-            return ticks*nsecMultiplier / 1_000;
+            return ticks*nsec_multiplier / 1_000;
         else static if (base == "msecs")
-            return ticks*nsecMultiplier / 1_000_000;
+            return ticks*nsec_multiplier / 1_000_000;
         else static if (base == "seconds")
-            return ticks*nsecMultiplier / 1_000_000_000;
+            return ticks*nsec_multiplier / 1_000_000_000;
         else static if (base == "minutes")
-            return ticks*nsecMultiplier / 60_000_000_000;
+            return ticks*nsec_multiplier / 60_000_000_000;
         else static if (base == "hours")
-            return ticks*nsecMultiplier / 3_600_000_000_000;
+            return ticks*nsec_multiplier / 3_600_000_000_000;
         else static if (base == "days")
-            return ticks*nsecMultiplier / 86_400_000_000_000;
+            return ticks*nsec_multiplier / 86_400_000_000_000;
         else static if (base == "weeks")
-            return ticks*nsecMultiplier / 604_800_000_000_000;
+            return ticks*nsec_multiplier / 604_800_000_000_000;
         else
             static assert(false, "Invalid base");
     }
@@ -303,7 +303,7 @@ pure nothrow @nogc:
         if (last_unit == 8)
             return -1;
 
-        ticks = total_nsecs / nsecMultiplier;
+        ticks = total_nsecs / nsec_multiplier;
         return offset;
     }
 
@@ -679,21 +679,21 @@ pure nothrow @nogc:
 Duration dur(string base)(long value) pure
 {
     static if (base == "nsecs")
-        return Duration(value / nsecMultiplier);
+        return Duration(value / nsec_multiplier);
     else static if (base == "usecs")
-        return Duration(value*1_000 / nsecMultiplier);
+        return Duration(value*1_000 / nsec_multiplier);
     else static if (base == "msecs")
-        return Duration(value*1_000_000 / nsecMultiplier);
+        return Duration(value*1_000_000 / nsec_multiplier);
     else static if (base == "seconds")
-        return Duration(value*1_000_000_000 / nsecMultiplier);
+        return Duration(value*1_000_000_000 / nsec_multiplier);
     else static if (base == "minutes")
-        return Duration(value*60_000_000_000 / nsecMultiplier);
+        return Duration(value*60_000_000_000 / nsec_multiplier);
     else static if (base == "hours")
-        return Duration(value*3_600_000_000_000 / nsecMultiplier);
+        return Duration(value*3_600_000_000_000 / nsec_multiplier);
     else static if (base == "days")
-        return Duration(value*86_400_000_000_000 / nsecMultiplier);
+        return Duration(value*86_400_000_000_000 / nsec_multiplier);
     else static if (base == "weeks")
-        return Duration(value*604_800_000_000_000 / nsecMultiplier);
+        return Duration(value*604_800_000_000_000 / nsec_multiplier);
     else
         static assert(false, "Invalid base");
 }
@@ -746,10 +746,11 @@ SysTime getSysTime()
 SysTime getSysTime(DateTime time) pure
 {
     version (Windows)
-        return dateTimeToFileTime(time);
+        return datetime_to_filetime(time);
     else version (Posix)
     {
-        assert(false, "TODO");
+        timespec ts = datetime_to_realtime(time);
+        return SysTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
     else
         static assert(false, "TODO");
@@ -758,12 +759,12 @@ SysTime getSysTime(DateTime time) pure
 DateTime getDateTime()
 {
     version (Windows)
-        return fileTimeToDateTime(getSysTime());
+        return filetime_to_datetime(getSysTime());
     else version (Posix)
     {
         timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        return realtimeToDateTime(ts);
+        return realtime_to_datetime(ts);
     }
     else
         static assert(false, "TODO");
@@ -772,13 +773,13 @@ DateTime getDateTime()
 DateTime getDateTime(SysTime time) pure
 {
     version (Windows)
-        return fileTimeToDateTime(time);
+        return filetime_to_datetime(time);
     else version (Posix)
     {
         timespec ts;
         ts.tv_sec = cast(time_t)(time.ticks / 1_000_000_000);
         ts.tv_nsec = cast(uint)(time.ticks % 1_000_000_000);
-        return realtimeToDateTime(ts);
+        return realtime_to_datetime(ts);
     }
     else
         static assert(false, "TODO");
@@ -825,18 +826,18 @@ __gshared immutable uint[9] digit_multipliers = [ 100_000_000, 10_000_000, 1_000
 
 version (Windows)
 {
-    immutable uint ticksPerSecond;
-    immutable uint nsecMultiplier;
-    immutable ulong ticksSinceBoot;
+    immutable uint ticks_per_second;
+    immutable uint nsec_multiplier;
+    immutable ulong ticks_since_boot;
 }
 else version (Posix)
 {
-    enum uint ticksPerSecond = 1_000_000_000;
-    enum uint nsecMultiplier = 1;
-    immutable ulong ticksSinceBoot;
+    enum uint ticks_per_second = 1_000_000_000;
+    enum uint nsec_multiplier = 1;
+    immutable ulong ticks_since_boot;
 }
 
-package(urt) void initClock()
+package(urt) void init_clock()
 {
     cast()startTime = getTime();
 
@@ -847,8 +848,8 @@ package(urt) void initClock()
 
         LARGE_INTEGER freq;
         QueryPerformanceFrequency(&freq);
-        cast()ticksPerSecond = cast(uint)freq.QuadPart;
-        cast()nsecMultiplier = 1_000_000_000 / ticksPerSecond;
+        cast()ticks_per_second = cast(uint)freq.QuadPart;
+        cast()nsec_multiplier = 1_000_000_000 / ticks_per_second;
 
         // we want the ftime for QPC 0; which should be the boot time
         // we'll repeat this 100 times and take the minimum, and we should be within probably nanoseconds of the correct value
@@ -860,7 +861,7 @@ package(urt) void initClock()
             GetSystemTimePreciseAsFileTime(cast(FILETIME*)&ftime);
             bootTime = min(bootTime, ftime - qpc.QuadPart);
         }
-        cast()ticksSinceBoot = bootTime;
+        cast()ticks_since_boot = bootTime;
     }
     else version (Posix)
     {
@@ -875,7 +876,7 @@ package(urt) void initClock()
             clock_gettime(CLOCK_REALTIME, &rt);
             bootTime = min(bootTime, rt.tv_sec*1_000_000_000 + rt.tv_nsec - mt.tv_sec*1_000_000_000 - mt.tv_nsec);
         }
-        cast()ticksSinceBoot = bootTime;
+        cast()ticks_since_boot = bootTime;
     }
     else
         static assert(false, "TODO");
@@ -1010,7 +1011,7 @@ unittest
 
 version (Windows)
 {
-    DateTime fileTimeToDateTime(SysTime ftime) pure
+    DateTime filetime_to_datetime(SysTime ftime) pure
     {
         version (BigEndian)
             static assert(false, "Only works in little endian!");
@@ -1034,7 +1035,7 @@ version (Windows)
         return dt;
     }
 
-    SysTime dateTimeToFileTime(DateTime dt) pure
+    SysTime datetime_to_filetime(ref DateTime dt) pure
     {
         version (BigEndian)
             static assert(false, "Only works in little endian!");
@@ -1062,7 +1063,7 @@ version (Windows)
 }
 else version (Posix)
 {
-    DateTime realtimeToDateTime(timespec ts) pure
+    DateTime realtime_to_datetime(timespec ts) pure
     {
         tm t;
         alias PureHACK = extern(C) tm* function(time_t* timer, tm* buf) pure nothrow @nogc;
@@ -1079,5 +1080,24 @@ else version (Posix)
         dt.ns = cast(uint)ts.tv_nsec;
 
         return dt;
+    }
+
+    timespec datetime_to_realtime(ref DateTime time) pure
+    {
+        tm t;
+        t.tm_year = time.year - 1900;
+        t.tm_mon = cast(int)time.month - 1;
+        t.tm_mday = time.day;
+        t.tm_hour = time.hour;
+        t.tm_min = time.minute;
+        t.tm_sec = time.second;
+
+        alias PureHACK = extern(C) time_t function(tm* timer) pure nothrow @nogc;
+        time_t sec = (cast(PureHACK)&mktime)(&t);
+
+        timespec ts;
+        ts.tv_sec = sec;
+        ts.tv_nsec = time.ns;
+        return ts;
     }
 }

@@ -11,6 +11,10 @@ extern(C)
 nothrow @nogc:
     void* alloca(size_t size);
 
+    void* calloc(size_t num, size_t size);
+    void* malloc(size_t size);
+    void free(void *ptr);
+
     void* memcpy(void* dest, const void* src, size_t n) pure;
     void* memmove(void* dest, const void* src, size_t n) pure;
     void* memset(void* s, int c, size_t n) pure;

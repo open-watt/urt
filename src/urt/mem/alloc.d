@@ -1,6 +1,6 @@
 module urt.mem.alloc;
 
-import core.stdc.stdlib;
+import urt.internal.stdc;
 
 nothrow @nogc:
 
@@ -57,7 +57,7 @@ void[] alloc_aligned(size_t size, size_t alignment) nothrow @nogc
 void[] realloc(void[] mem, size_t newSize) nothrow @nogc
 {
     // TODO: we might pin the length to a debug table somewhere...
-    return core.stdc.stdlib.realloc(mem.ptr, newSize)[0 .. newSize];
+    return urt.mem.realloc(mem.ptr, newSize)[0 .. newSize];
 }
 
 void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) nothrow @nogc
@@ -104,7 +104,7 @@ void free(void[] mem) nothrow @nogc
     // maybe check the length passed to free matches the alloc?
     // ... or you know, just don't do that.
 
-    core.stdc.stdlib.free(mem.ptr);
+    urt.mem.free(mem.ptr);
 }
 
 void free_aligned(void[] mem) nothrow @nogc
@@ -114,10 +114,10 @@ void free_aligned(void[] mem) nothrow @nogc
         if (mem.ptr is null)
             return;
         void* p = (cast(void**)mem.ptr)[-1];
-        core.stdc.stdlib.free(p);
+        urt.mem.free(p);
     }
     else
-        core.stdc.stdlib.free(mem.ptr);
+        urt.mem.free(mem.ptr);
 }
 
 size_t memsize(void* ptr) nothrow @nogc

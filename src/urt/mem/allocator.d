@@ -434,7 +434,10 @@ unittest
         }
     }
 
-    Allocator a = new Mallocator;
+    import urt.util;
+    auto mallocator = InPlace!Mallocator(Default);
+
+    Allocator a = mallocator;
     S* s = a.allocT!S(10);
     a.freeT(s);
     C c = a.allocT!C();

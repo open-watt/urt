@@ -18,7 +18,7 @@ T* emplace(T, Args...)(T* chunk, auto ref Args args)
 T emplace(T, Args...)(T chunk, auto ref Args args)
     if (is(T == class))
 {
-    import core.internal.traits : isInnerClass;
+    import urt.internal.traits : isInnerClass;
 
     static assert(!__traits(isAbstractClass, T), T.stringof ~
         " is abstract and it can't be emplaced");
@@ -83,7 +83,7 @@ T* emplace(T, Args...)(void[] chunk, auto ref Args args)
 void copyEmplace(S, T)(ref S source, ref T target) @system
     if (is(immutable S == immutable T))
 {
-    import core.internal.traits : BaseElemOf, hasElaborateCopyConstructor, Unconst, Unqual;
+    import urt.internal.traits : BaseElemOf, hasElaborateCopyConstructor, Unconst, Unqual;
 
     // cannot have the following as simple template constraint due to nested-struct special case...
     static if (!__traits(compiles, (ref S src) { T tgt = src; }))
@@ -95,7 +95,7 @@ void copyEmplace(S, T)(ref S source, ref T target) @system
 
     void blit()
     {
-        import core.stdc.string : memcpy;
+        import urt.mem : memcpy;
         memcpy(cast(Unqual!(T)*) &target, cast(Unqual!(T)*) &source, T.sizeof);
     }
 
@@ -198,7 +198,7 @@ T move(T)(return scope ref T source) nothrow @nogc
 
 private void moveImpl(T)(scope ref T target, return scope ref T source) nothrow @nogc
 {
-    import core.internal.traits : hasElaborateDestructor;
+    import urt.internal.traits : hasElaborateDestructor;
 
     static if (is(T == struct))
     {
@@ -220,7 +220,7 @@ private T moveImpl(T)(return scope ref T source) nothrow @nogc
     return trustedMoveImpl(source);
 }
 
-private T trustedMoveImpl(T)(return scope ref T source) @trusted nothrow @nogc
+private T trustedMoveImpl(T)(return scope ref T source) nothrow @nogc @trusted
 {
     T result = void;
     moveEmplaceImpl(result, source);
@@ -237,7 +237,7 @@ private enum bool hasContextPointers(T) = {
     }
     else static if (is(T == struct))
     {
-        import core.internal.traits : anySatisfy;
+        import urt.internal.traits : anySatisfy;
         return __traits(isNested, T) || anySatisfy!(hasContextPointers, typeof(T.tupleof));
     }
     else return false;
@@ -254,8 +254,8 @@ private void moveEmplaceImpl(T)(scope ref T target, return scope ref T source) @
 //              "Cannot move object with internal pointer unless `opPostMove` is defined.");
 //    }
 
-    import core.internal.traits : hasElaborateAssign, isAssignable, hasElaborateMove,
-                                  hasElaborateDestructor, hasElaborateCopyConstructor;
+    import urt.internal.traits : hasElaborateAssign, isAssignable, hasElaborateMove,
+                                 hasElaborateDestructor, hasElaborateCopyConstructor;
     static if (is(T == struct))
     {
 
@@ -346,7 +346,7 @@ template _d_delstructImpl(T)
      *   `@trusted` until the implementation can be brought up to modern D
      *   expectations.
      */
-    void _d_delstruct(ref T p) @trusted @nogc pure nothrow
+    void _d_delstruct(ref T p) nothrow @nogc pure @trusted
     {
         if (p)
         {
@@ -378,7 +378,7 @@ template _d_delstructImpl(T)
 
 // wipes source after moving
 pragma(inline, true)
-private void wipe(T, Init...)(return scope ref T source, ref const scope Init initializer) @trusted nothrow @nogc
+private void wipe(T, Init...)(return scope ref T source, ref const scope Init initializer) nothrow @nogc @trusted
 if (!Init.length ||
     ((Init.length == 1) && (is(immutable T == immutable Init[0]))))
 {
@@ -392,7 +392,7 @@ if (!Init.length ||
     }
     else static if (is(T == struct) && hasContextPointers!T)
     {
-        import core.internal.traits : anySatisfy;
+        import urt.internal.traits : anySatisfy;
         static if (anySatisfy!(hasContextPointers, typeof(T.tupleof)))
         {
             static foreach (i; 0 .. T.tupleof.length - __traits(isNested, T))
@@ -416,7 +416,7 @@ if (!Init.length ||
     }
     else
     {
-        import core.internal.traits : hasElaborateAssign, isAssignable;
+        import urt.internal.traits : hasElaborateAssign, isAssignable;
         static if (Init.length)
         {
             static if (hasElaborateAssign!T || !isAssignable!T)
@@ -435,7 +435,7 @@ if (!Init.length ||
 T _d_newclassT(T)() @trusted
     if (is(T == class))
 {
-    import core.internal.traits : hasIndirections;
+    import urt.internal.traits : hasIndirections;
     import core.exception : onOutOfMemoryError;
     import core.memory : pureMalloc;
     import core.memory : GC;
@@ -511,7 +511,7 @@ T _d_newclassTTrace(T)(string file, int line, string funcname) @trusted
 T* _d_newitemT(T)() @trusted
 {
     import core.internal.lifetime : emplaceInitializer;
-    import core.internal.traits : hasIndirections;
+    import urt.internal.traits : hasIndirections;
     import core.memory : GC;
 
     auto flags = !hasIndirections!T ? GC.BlkAttr.NO_SCAN : GC.BlkAttr.NONE;
@@ -557,7 +557,7 @@ version (D_ProfileGC)
 
 template TypeInfoSize(T)
 {
-    import core.internal.traits : hasElaborateDestructor;
+    import urt.internal.traits : hasElaborateDestructor;
     enum TypeInfoSize = hasElaborateDestructor!T ? size_t.sizeof : 0;
 }
 +/

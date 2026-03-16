@@ -196,32 +196,6 @@ void run_module_dtors(immutable(ModuleInfo*)[] modules) nothrow @nogc @trusted
     }
 }
 
-// ----------------------------------------------------------------------
-// PE .minfo section scanning - finds compiler-generated ModuleInfo pointers.
-// Inline PE parsing to avoid core.sys.windows struct __init dependencies.
-// ----------------------------------------------------------------------
-
-version (Windows)
-    extern (C) extern __gshared ubyte __ImageBase;
-
-version (linux)
-{
-    // Stashed by _d_dso_registry in object.d from ELF .init_array callback (DMD)
-    extern (C) extern __gshared immutable(ModuleInfo*)* _elf_minfo_beg;
-    extern (C) extern __gshared immutable(ModuleInfo*)* _elf_minfo_end;
-
-    version (LDC)
-    {
-        // LDC emits ModuleInfo pointers into the __minfo ELF section but does
-        // not generate .init_array calls to _d_dso_registry. The linker
-        // generates __start___minfo / __stop___minfo boundary symbols for us.
-        // Declared as the element type (not pointer-to) so &symbol yields the
-        // section address with the correct type for slicing.
-        extern (C) extern __gshared immutable(ModuleInfo*) __start___minfo;
-        extern (C) extern __gshared immutable(ModuleInfo*) __stop___minfo;
-    }
-}
-
 immutable(ModuleInfo*)[] get_module_infos() nothrow @nogc @trusted
 {
     version (Windows)
@@ -248,62 +222,110 @@ immutable(ModuleInfo*)[] get_module_infos() nothrow @nogc @trusted
     }
     else
     {
-        return null;
+        // Freestanding/bare-metal: walk _Dmodule_ref linked list.
+        // Populated by .init_array at startup.
+        if (_Dmodule_ref is null)
+            return null;
+
+        size_t count = 0;
+        for (auto p = _Dmodule_ref; p !is null; p = p.next)
+            ++count;
+
+        import urt.mem.allocator : Mallocator;
+        auto arr = Mallocator.instance.allocArray!(void*)(count);
+        auto p = _Dmodule_ref;
+        foreach (i; 0 .. count) { arr[i] = cast(void*)p.mod; p = p.next; }
+        return cast(immutable(ModuleInfo*)[])arr;
     }
 }
 
+// ----------------------------------------------------------------------
+// PE .minfo section scanning - finds compiler-generated ModuleInfo pointers.
+// Inline PE parsing to avoid core.sys.windows struct __init dependencies.
+// ----------------------------------------------------------------------
+
 version (Windows)
-void[] find_pe_section(void* image_base, string name) nothrow @nogc @trusted
 {
-    if (name.length > 8) return null;
+    extern(C) extern __gshared ubyte __ImageBase;
 
-    auto base = cast(ubyte*) image_base;
-
-    // DOS header: e_magic at offset 0 (2 bytes), e_lfanew at offset 0x3C (4 bytes)
-    if (base[0] != 0x4D || base[1] != 0x5A) // 'MZ'
-        return null;
-
-    auto lfanew = *cast(int*)(base + 0x3C);
-    auto pe = base + lfanew;
-
-    // PE signature check
-    if (pe[0] != 'P' || pe[1] != 'E' || pe[2] != 0 || pe[3] != 0)
-        return null;
-
-    // COFF file header starts at pe+4
-    //   NumberOfSections at offset 2 (2 bytes)
-    //   SizeOfOptionalHeader at offset 16 (2 bytes)
-    auto file_header = pe + 4;
-    ushort num_sections = *cast(ushort*)(file_header + 2);
-    ushort opt_header_size = *cast(ushort*)(file_header + 16);
-
-    // Section headers start after optional header
-    auto sections = file_header + 20 + opt_header_size;
-
-    // Each IMAGE_SECTION_HEADER is 40 bytes:
-    //   Name[8] at offset 0
-    //   VirtualSize at offset 8
-    //   VirtualAddress at offset 12
-    foreach (i; 0 .. num_sections)
+    void[] find_pe_section(void* image_base, string name) nothrow @nogc @trusted
     {
-        auto sec = sections + i * 40;
-        auto sec_name = (cast(char*) sec)[0 .. 8];
+        if (name.length > 8) return null;
 
-        bool match = true;
-        foreach (j; 0 .. name.length)
+        auto base = cast(ubyte*) image_base;
+
+        // DOS header: e_magic at offset 0 (2 bytes), e_lfanew at offset 0x3C (4 bytes)
+        if (base[0] != 0x4D || base[1] != 0x5A) // 'MZ'
+            return null;
+
+        auto lfanew = *cast(int*)(base + 0x3C);
+        auto pe = base + lfanew;
+
+        // PE signature check
+        if (pe[0] != 'P' || pe[1] != 'E' || pe[2] != 0 || pe[3] != 0)
+            return null;
+
+        // COFF file header starts at pe+4
+        //   NumberOfSections at offset 2 (2 bytes)
+        //   SizeOfOptionalHeader at offset 16 (2 bytes)
+        auto file_header = pe + 4;
+        ushort num_sections = *cast(ushort*)(file_header + 2);
+        ushort opt_header_size = *cast(ushort*)(file_header + 16);
+
+        // Section headers start after optional header
+        auto sections = file_header + 20 + opt_header_size;
+
+        // Each IMAGE_SECTION_HEADER is 40 bytes:
+        //   Name[8] at offset 0
+        //   VirtualSize at offset 8
+        //   VirtualAddress at offset 12
+        foreach (i; 0 .. num_sections)
         {
-            if (sec_name[j] != name[j])
+            auto sec = sections + i * 40;
+            auto sec_name = (cast(char*) sec)[0 .. 8];
+
+            bool match = true;
+            foreach (j; 0 .. name.length)
             {
-                match = false;
-                break;
+                if (sec_name[j] != name[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match && (name.length == 8 || sec_name[name.length] == 0))
+            {
+                auto virtual_size = *cast(uint*)(sec + 8);
+                auto virtual_address = *cast(uint*)(sec + 12);
+                return (base + virtual_address)[0 .. virtual_size];
             }
         }
-        if (match && (name.length == 8 || sec_name[name.length] == 0))
-        {
-            auto virtual_size = *cast(uint*)(sec + 8);
-            auto virtual_address = *cast(uint*)(sec + 12);
-            return (base + virtual_address)[0 .. virtual_size];
-        }
+        return null;
     }
-    return null;
+}
+else version (linux)
+{
+    // Stashed by _d_dso_registry in object.d from ELF .init_array callback (DMD)
+    extern(C) extern __gshared immutable(ModuleInfo*)* _elf_minfo_beg;
+    extern(C) extern __gshared immutable(ModuleInfo*)* _elf_minfo_end;
+
+    version (LDC)
+    {
+        // LDC emits ModuleInfo pointers into the __minfo ELF section but does
+        // not generate .init_array calls to _d_dso_registry. The linker
+        // generates __start___minfo / __stop___minfo boundary symbols for us.
+        extern(C) extern __gshared immutable(ModuleInfo*) __start___minfo;
+        extern(C) extern __gshared immutable(ModuleInfo*) __stop___minfo;
+    }
+}
+else
+{
+    // Freestanding/bare-metal: LDC chains ModuleReference structs into
+    // this linked list via .init_array at startup.
+    struct ModuleReference
+    {
+        ModuleReference* next;
+        immutable(ModuleInfo)* mod;
+    }
+    extern(C) extern __gshared ModuleReference* _Dmodule_ref;
 }

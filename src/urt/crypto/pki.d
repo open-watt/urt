@@ -24,6 +24,11 @@ nothrow @nogc:
     {
         mbedtls_pk_context pk;
     }
+    else version (FreeStanding)
+    {
+        // PKI backend not yet implemented for bare-metal
+        void* _stub;
+    }
     else
         static assert(false, "TODO");
 
@@ -33,6 +38,8 @@ nothrow @nogc:
             return hcng !is null;
         else version (Posix)
             return pk.pk_info !is null;
+        else
+            return false;
     }
 }
 
@@ -104,7 +111,7 @@ Result generate_keypair(out KeyPair kp)
         return Result.success;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: generate_keypair not implemented for this platform");
 }
 
 void free_keypair(ref KeyPair kp)
@@ -385,7 +392,7 @@ Result load_certificate(const(ubyte)[] cert_data, out CertRef cert)
         return Result.success;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: not implemented for this platform");
 }
 
 Result associate_key(ref CertRef cert, ref KeyPair key)
@@ -527,7 +534,7 @@ Result associate_key(ref CertRef cert, ref KeyPair key)
         return Result.success;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: not implemented for this platform");
 }
 
 void free_cert(ref CertRef cert)
@@ -629,7 +636,7 @@ Result sign_hash(ref KeyPair kp, const(ubyte)[] hash, out Array!ubyte signature)
         return Result.success;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: not implemented for this platform");
 }
 
 Result export_public_key_raw(ref KeyPair kp, out Array!ubyte x, out Array!ubyte y)
@@ -683,7 +690,7 @@ Result export_public_key_raw(ref KeyPair kp, out Array!ubyte x, out Array!ubyte 
         return Result.success;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: not implemented for this platform");
 }
 
 
@@ -790,7 +797,7 @@ Result export_private_key(ref KeyPair kp, out Array!ubyte key_out)
         return build_ec_sec1_der(d, xy_buf[1 .. 33], xy_buf[33 .. 65], key_out);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: not implemented for this platform");
 }
 
 Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
@@ -866,7 +873,7 @@ Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
         return Result.success;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "PKI: not implemented for this platform");
 }
 
 private:

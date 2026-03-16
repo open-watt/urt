@@ -55,5 +55,38 @@ else version (ARM)
         }
     }
 }
+else version (RISCV64)
+{
+    pragma(inline, true)
+    extern(C) void breakpoint() pure nothrow @nogc
+    {
+        debug asm pure nothrow @nogc
+        {
+            "ebreak";
+        }
+    }
+}
+else version (RISCV32)
+{
+    pragma(inline, true)
+    extern(C) void breakpoint() pure nothrow @nogc
+    {
+        debug asm pure nothrow @nogc
+        {
+            "ebreak";
+        }
+    }
+}
+else version (Xtensa)
+{
+    pragma(inline, true)
+    extern(C) void breakpoint() pure nothrow @nogc
+    {
+        debug asm pure nothrow @nogc
+        {
+            "break 1, 15";
+        }
+    }
+}
 else
     static assert(0, "TODO: Unsupported architecture");

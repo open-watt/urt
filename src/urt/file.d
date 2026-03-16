@@ -44,6 +44,10 @@ else version (Posix)
     enum POSIX_FADV_SEQUENTIAL = 2;
     extern(C) int posix_fadvise(int fd, off_t offset, off_t len, int advice) nothrow @nogc;
 }
+else version (FreeStanding)
+{
+    // No filesystem on bare-metal
+}
 else
 {
     static assert(0, "Not implemented");
@@ -107,8 +111,10 @@ struct File
         void* handle = INVALID_HANDLE_VALUE;
     else version (Posix)
         int fd = -1;
+    else version (FreeStanding)
+        int fd = -1;
     else
-        static assert(0, "Not implemented");
+        static assert(0, "File: not implemented for this platform");
 }
 
 bool file_exists(const(char)[] path)
@@ -125,7 +131,7 @@ bool file_exists(const(char)[] path)
         return stat(path.tstringz, &st) == 0 && S_ISREG(st.st_mode);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 }
 
 Result delete_file(const(char)[] path)
@@ -141,7 +147,7 @@ Result delete_file(const(char)[] path)
             return errno_result();
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 
     return Result.success;
 }
@@ -160,7 +166,7 @@ Result rename_file(const(char)[] oldPath, const(char)[] newPath)
            return posix_result(result);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 
     return Result.success;
 }
@@ -178,7 +184,7 @@ Result copy_file(const(char)[] oldPath, const(char)[] newPath, bool overwriteExi
         assert(false);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 
     return Result.success;
 }
@@ -231,7 +237,7 @@ Result get_path(ref const File file, ref char[] buffer)
         buffer = buffer[0..r];
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -268,7 +274,7 @@ Result get_file_attributes(const(char)[] path, out FileAttributes outAttributes)
         assert(false);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 
     return Result.success;
 }
@@ -312,7 +318,7 @@ Result get_attributes(ref const File file, out FileAttributes outAttributes)
         assert(false);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 
     return InternalResult.unsupported;
 }
@@ -352,20 +358,24 @@ Result save_file(const(char)[] path, const(void)[] data)
 
 Result create_directory(const(char)[] path)
 {
+    Result r;
     version (Windows)
     {
         if (CreateDirectoryW(path.twstringz, null))
             return Result.success;
-        Result r = getlasterror_result();
+        r = getlasterror_result();
     }
     else version (Posix)
     {
         if (!core.sys.posix.sys.stat.mkdir(tconcat(path, "\0").ptr, 493 /* 0755 */) != 0)
             return Result.success;
-        Result r = errno_result();
+        r = errno_result();
     }
     else
-        static assert(0, "Not implemented");
+    {
+        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported;
+    }
 
     if (r == InternalResult.already_exists)
         return Result.success;
@@ -503,7 +513,7 @@ Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags 
             lseek(file.fd, 0, SEEK_END);
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 
     return Result.success;
 }
@@ -515,7 +525,7 @@ bool is_open(ref const File file)
     else version (Posix)
         return file.fd != -1;
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 }
 
 void close(ref File file)
@@ -535,7 +545,7 @@ void close(ref File file)
         file.fd = -1;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 }
 
 ulong get_size(ref const File file)
@@ -555,7 +565,7 @@ ulong get_size(ref const File file)
         return fs.st_size;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 }
 
 Result set_size(ref File file, ulong size)
@@ -604,7 +614,7 @@ Result set_size(ref File file, ulong size)
             return errno_result();
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -621,7 +631,7 @@ ulong get_pos(ref const File file)
     else version (Posix)
         return lseek(file.fd, 0, SEEK_CUR);
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 }
 
 Result set_pos(ref File file, ulong offset)
@@ -640,7 +650,7 @@ Result set_pos(ref File file, ulong offset)
             return errno_result();
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -666,7 +676,7 @@ Result read(ref File file, void[] buffer, out size_t bytesRead)
         bytesRead = n;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -698,7 +708,7 @@ Result read_at(ref File file, void[] buffer, ulong offset, out size_t bytesRead)
         bytesRead = n;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -719,7 +729,7 @@ Result write(ref File file, const(void)[] data, out size_t bytesWritten)
         bytesWritten = n;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -747,7 +757,7 @@ Result write_at(ref File file, const(void)[] data, ulong offset, out size_t byte
         bytesWritten = n;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -764,7 +774,7 @@ Result flush(ref File file)
             return errno_result();
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 
@@ -799,7 +809,7 @@ FileResult file_result(Result result)
         }
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
 }
 
 Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] prefix)
@@ -833,7 +843,7 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
         return r;
     }
     else
-        static assert(0, "Not implemented");
+        assert(0, "File: not implemented for this platform");
     return Result.success;
 }
 

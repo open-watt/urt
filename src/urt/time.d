@@ -12,6 +12,10 @@ else version (Posix)
 {
     import core.sys.posix.time;
 }
+else version (BL808)
+{
+    import sys.bl808.timer;
+}
 
 nothrow @nogc:
 
@@ -67,9 +71,9 @@ pure nothrow @nogc:
         static if (is(T == Time!c, Clock c) && c != clock)
         {
             static if (clock == Clock.Monotonic && c == Clock.SystemTime)
-                return SysTime(ticks + ticks_since_boot);
+                return SysTime(ticks + sys_time_offset);
             else
-                return MonoTime(ticks - ticks_since_boot);
+                return MonoTime(ticks - sys_time_offset);
         }
         else
             static assert(false, "constraint out of sync");
@@ -88,9 +92,9 @@ pure nothrow @nogc:
         static if (clock != c)
         {
             static if (clock == Clock.Monotonic)
-                t1 += ticks_since_boot;
+                t1 += sys_time_offset;
             else
-                t2 += ticks_since_boot;
+                t2 += sys_time_offset;
         }
         return Duration(t1 - t2);
     }
@@ -303,8 +307,11 @@ pure nothrow @nogc:
         return offset;
     }
 
-    auto __debugOverview() const
-        => cast(double)this;
+    version (Windows)
+    {
+        auto __debugOverview() const
+            => cast(double)this;
+    }
 }
 
 alias Timer = FixedTimer!();
@@ -713,6 +720,14 @@ MonoTime getTime()
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return MonoTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
+    else version (BL808)
+    {
+        return MonoTime(mtime_read());
+    }
+    else version (FreeStanding)
+    {
+        assert(0, "getTime: not yet implemented for bare-metal");
+    }
     else
     {
         static assert(false, "TODO");
@@ -733,6 +748,14 @@ SysTime getSysTime()
         clock_gettime(CLOCK_REALTIME, &ts);
         return SysTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
+    else version (BL808)
+    {
+        return SysTime(mtime_read() + sys_time_offset);
+    }
+    else version (FreeStanding)
+    {
+        assert(0, "getSysTime: not yet implemented for bare-metal");
+    }
     else
     {
         static assert(false, "TODO");
@@ -741,44 +764,17 @@ SysTime getSysTime()
 
 SysTime getSysTime(DateTime time) pure
 {
-    version (Windows)
-        return datetime_to_filetime(time);
-    else version (Posix)
-    {
-        timespec ts = datetime_to_realtime(time);
-        return SysTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
-    }
-    else
-        static assert(false, "TODO");
+    return from_unix_time_ns(datetime_to_unix_ns(time));
 }
 
 DateTime getDateTime()
 {
-    version (Windows)
-        return filetime_to_datetime(getSysTime());
-    else version (Posix)
-    {
-        timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        return realtime_to_datetime(ts);
-    }
-    else
-        static assert(false, "TODO");
+    return getDateTime(getSysTime());
 }
 
 DateTime getDateTime(SysTime time) pure
 {
-    version (Windows)
-        return filetime_to_datetime(time);
-    else version (Posix)
-    {
-        timespec ts;
-        ts.tv_sec = cast(time_t)(time.ticks / 1_000_000_000);
-        ts.tv_nsec = cast(uint)(time.ticks % 1_000_000_000);
-        return realtime_to_datetime(ts);
-    }
-    else
-        static assert(false, "TODO");
+    return unix_ns_to_datetime(unixTimeNs(time));
 }
 
 Duration getAppTime()
@@ -792,8 +788,12 @@ Duration appTime(SysTime t) pure
 ulong unixTimeNs(SysTime t) pure
 {
     version (Windows)
-        return (t.ticks - 116444736000000000UL) * 100UL;
+        return (t.ticks - unix_epoch_as_filetime) * 100UL;
     else version (Posix)
+        return t.ticks;
+    else version (BL808)
+        return t.ticks * nsec_multiplier;
+    else version (FreeStanding)
         return t.ticks;
     else
         static assert(false, "TODO");
@@ -802,8 +802,12 @@ ulong unixTimeNs(SysTime t) pure
 SysTime from_unix_time_ns(ulong ns) pure
 {
     version (Windows)
-        return SysTime(ns / 100UL + 116444736000000000UL);
+        return SysTime(ns / 100UL + unix_epoch_as_filetime);
     else version (Posix)
+        return SysTime(ns);
+    else version (BL808)
+        return SysTime(ns / nsec_multiplier);
+    else version (FreeStanding)
         return SysTime(ns);
     else
         static assert(false, "TODO");
@@ -811,6 +815,44 @@ SysTime from_unix_time_ns(ulong ns) pure
 
 Duration abs(Duration d) pure
     => Duration(d.ticks < 0 ? -d.ticks : d.ticks);
+
+bool wall_time_set()
+{
+    return has_wall_time;
+}
+
+void set_utc_time(ulong unix_ns)
+{
+    cast()sys_time_offset = unix_ns / nsec_multiplier - getTime().ticks;
+    has_wall_time = true;
+
+    version (Windows)
+    {
+        import urt.internal.sys.windows;
+
+        ulong ft = unix_ns / 100 + unix_epoch_as_filetime;
+        SYSTEMTIME st;
+        FileTimeToSystemTime(cast(FILETIME*)&ft, &st);
+        SetSystemTime(&st);
+    }
+    else version (Posix)
+    {
+        timespec ts;
+        ts.tv_sec = cast(time_t)(unix_ns / 1_000_000_000);
+        ts.tv_nsec = cast(uint)(unix_ns % 1_000_000_000);
+        clock_settime(CLOCK_REALTIME, &ts);
+    }
+    else version (BL808)
+    {
+        auto p = hbn_persist();
+        ulong mtime_ticks = unix_ns / nsec_multiplier;
+        ulong sec = mtime_ticks / mtime_freq_hz;
+        ulong frac = mtime_ticks % mtime_freq_hz;
+        ulong hbn_ticks = sec * rtc_freq_hz + frac * rtc_freq_hz / mtime_freq_hz;
+        p.utc_offset = cast(long)hbn_ticks - cast(long)rtc_read();
+        p.magic = HbnPersist.HBN_MAGIC;
+    }
+}
 
 
 private:
@@ -822,16 +864,29 @@ __gshared immutable uint[9] digit_multipliers = [ 100_000_000, 10_000_000, 1_000
 
 version (Windows)
 {
+    enum ulong unix_epoch_as_filetime = 116_444_736_000_000_000UL;
+
     immutable uint ticks_per_second;
     immutable uint nsec_multiplier;
-    immutable ulong ticks_since_boot;
 }
 else version (Posix)
 {
     enum uint ticks_per_second = 1_000_000_000;
     enum uint nsec_multiplier = 1;
-    immutable ulong ticks_since_boot;
 }
+else version (BL808)
+{
+    enum uint ticks_per_second = mtime_freq_hz;
+    enum uint nsec_multiplier = 1_000_000_000 / mtime_freq_hz;
+}
+else version (FreeStanding)
+{
+    enum uint ticks_per_second = 1_000_000_000;
+    enum uint nsec_multiplier = 1;
+}
+
+immutable ulong sys_time_offset;
+__gshared bool has_wall_time;
 
 package(urt) void init_clock()
 {
@@ -850,14 +905,15 @@ package(urt) void init_clock()
         // we want the ftime for QPC 0; which should be the boot time
         // we'll repeat this 100 times and take the minimum, and we should be within probably nanoseconds of the correct value
         LARGE_INTEGER qpc;
-        ulong ftime, bootTime = ulong.max;
+        ulong ftime, boot_time = ulong.max;
         foreach (i; 0 .. 100)
         {
             QueryPerformanceCounter(&qpc);
             GetSystemTimePreciseAsFileTime(cast(FILETIME*)&ftime);
-            bootTime = min(bootTime, ftime - qpc.QuadPart);
+            boot_time = min(boot_time, ftime - qpc.QuadPart);
         }
-        cast()ticks_since_boot = bootTime;
+        cast()sys_time_offset = boot_time;
+        has_wall_time = true;
     }
     else version (Posix)
     {
@@ -865,14 +921,25 @@ package(urt) void init_clock()
 
         // this doesn't really give time since boot, since MONOTIME is not guaranteed to be zero at system startup...
         timespec mt, rt;
-        ulong bootTime = ulong.max;
+        ulong boot_time = ulong.max;
         foreach (i; 0 .. 100)
         {
             clock_gettime(CLOCK_MONOTONIC, &mt);
             clock_gettime(CLOCK_REALTIME, &rt);
-            bootTime = min(bootTime, rt.tv_sec*1_000_000_000 + rt.tv_nsec - mt.tv_sec*1_000_000_000 - mt.tv_nsec);
+            boot_time = min(boot_time, rt.tv_sec*1_000_000_000 + rt.tv_nsec - mt.tv_sec*1_000_000_000 - mt.tv_nsec);
         }
-        cast()ticks_since_boot = bootTime;
+        cast()sys_time_offset = boot_time;
+        has_wall_time = true;
+    }
+    else version (BL808)
+    {
+        rtc_enable();
+        recalc_sys_time_offset();
+    }
+    else version (FreeStanding)
+    {
+        // Bare-metal: no wall-clock reference until set_utc_time() is called.
+        cast()sys_time_offset = 0;
     }
     else
         static assert(false, "TODO");
@@ -1002,98 +1069,160 @@ unittest
     assert(dt.fromString("2024-1-1 01:60:56") == -1);
     assert(dt.fromString("2024-1-1 01:01:60") == -1);
     assert(dt.fromString("10000-1-1 1:01:01") == -1);
+
+    // ---- unix_ns_to_datetime / datetime_to_unix_ns ----
+
+    // Unix epoch: 1970-01-01 00:00:00 UTC, Thursday
+    dt = unix_ns_to_datetime(0);
+    assert(dt.year == 1970 && dt.month == Month.January && dt.day == 1);
+    assert(dt.hour == 0 && dt.minute == 0 && dt.second == 0 && dt.ns == 0);
+    assert(dt.wday == Day.Thursday);
+
+    // Round-trip at epoch
+    assert(datetime_to_unix_ns(dt) == 0);
+
+    // 2000-01-01 00:00:00 UTC = 946684800 seconds, Saturday
+    dt = unix_ns_to_datetime(946_684_800UL * 1_000_000_000);
+    assert(dt.year == 2000 && dt.month == Month.January && dt.day == 1);
+    assert(dt.wday == Day.Saturday);
+    assert(datetime_to_unix_ns(dt) == 946_684_800UL * 1_000_000_000);
+
+    // 2024-02-29 (leap year) 12:00:00 = 1709208000 seconds, Thursday
+    dt = unix_ns_to_datetime(1_709_208_000UL * 1_000_000_000);
+    assert(dt.year == 2024 && dt.month == Month.February && dt.day == 29);
+    assert(dt.hour == 12 && dt.minute == 0 && dt.second == 0);
+    assert(dt.wday == Day.Thursday);
+    assert(datetime_to_unix_ns(dt) == 1_709_208_000UL * 1_000_000_000);
+
+    // 1900-03-01 - 1900 is NOT a leap year (century rule)
+    // 1900-03-01 00:00:00 = -2203891200 seconds... negative, skip
+    // Instead test 2100-03-01 (also not a leap year)
+    // 2100-03-01 00:00:00 = 4107542400 seconds, Monday
+    dt = unix_ns_to_datetime(4_107_542_400UL * 1_000_000_000);
+    assert(dt.year == 2100 && dt.month == Month.March && dt.day == 1);
+    assert(dt.wday == Day.Monday);
+
+    // 2000 IS a leap year (400-year rule), Feb 29 exists
+    // 2000-02-29 00:00:00 = 951782400 seconds, Tuesday
+    dt = unix_ns_to_datetime(951_782_400UL * 1_000_000_000);
+    assert(dt.year == 2000 && dt.month == Month.February && dt.day == 29);
+    assert(dt.wday == Day.Tuesday);
+
+    // Sub-second precision: 2025-06-15 08:30:45.123456789
+    dt.year = 2025; dt.month = Month.June; dt.day = 15;
+    dt.hour = 8; dt.minute = 30; dt.second = 45; dt.ns = 123_456_789;
+    ulong ns = datetime_to_unix_ns(dt);
+    auto dt2 = unix_ns_to_datetime(ns);
+    assert(dt2.year == 2025 && dt2.month == Month.June && dt2.day == 15);
+    assert(dt2.hour == 8 && dt2.minute == 30 && dt2.second == 45);
+    assert(dt2.ns == 123_456_789);
+
+    // Dec 31 ? Jan 1 boundary
+    dt = unix_ns_to_datetime(1_735_689_599UL * 1_000_000_000); // 2024-12-31 23:59:59
+    assert(dt.year == 2024 && dt.month == Month.December && dt.day == 31);
+    assert(dt.hour == 23 && dt.minute == 59 && dt.second == 59);
+    dt = unix_ns_to_datetime(1_735_689_600UL * 1_000_000_000); // 2025-01-01 00:00:00
+    assert(dt.year == 2025 && dt.month == Month.January && dt.day == 1);
+    assert(dt.wday == Day.Wednesday);
 }
 
 
-version (Windows)
+DateTime unix_ns_to_datetime(ulong ns) pure
 {
-    DateTime filetime_to_datetime(SysTime ftime) pure
-    {
-        version (BigEndian)
-            static assert(false, "Only works in little endian!");
+    ulong total_sec = ns / 1_000_000_000;
+    uint remainder_ns = cast(uint)(ns % 1_000_000_000);
 
-        SYSTEMTIME stime;
-        alias PureHACK = extern(Windows) BOOL function(const(FILETIME)*, LPSYSTEMTIME) pure nothrow @nogc;
-        (cast(PureHACK)&FileTimeToSystemTime)(cast(FILETIME*)&ftime.ticks, &stime);
+    uint sod = cast(uint)(total_sec % 86_400);
+    long days = cast(long)(total_sec / 86_400);
 
-        DateTime dt;
-        dt.year = stime.wYear;
-        dt.month = cast(Month)stime.wMonth;
-        dt.wday = cast(Day)stime.wDayOfWeek;
-        dt.day = cast(ubyte)stime.wDay;
-        dt.hour = cast(ubyte)stime.wHour;
-        dt.minute = cast(ubyte)stime.wMinute;
-        dt.second = cast(ubyte)stime.wSecond;
-        dt.ns = (ftime.ticks % 10_000_000) * 100;
+    DateTime dt;
+    dt.hour = cast(ubyte)(sod / 3600);
+    dt.minute = cast(ubyte)(sod % 3600 / 60);
+    dt.second = cast(ubyte)(sod % 60);
+    dt.ns = remainder_ns;
 
-        debug assert(stime.wMilliseconds == dt.msec);
+    dt.wday = cast(Day)((days + 4) % 7);
 
-        return dt;
-    }
+    days += 719_468;
+    long era = (days >= 0 ? days : days - 146_096) / 146_097;
+    uint doe = cast(uint)(days - era * 146_097);
+    uint yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    long y = yoe + era * 400;
+    uint doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    uint mp = (5 * doy + 2) / 153;
+    uint d = doy - (153 * mp + 2) / 5 + 1;
+    uint m = mp < 10 ? mp + 3 : mp - 9;
+    if (m <= 2)
+        ++y;
 
-    SysTime datetime_to_filetime(ref DateTime dt) pure
-    {
-        version (BigEndian)
-            static assert(false, "Only works in little endian!");
+    dt.year = cast(short)y;
+    dt.month = cast(Month)m;
+    dt.day = cast(ubyte)d;
 
-        SYSTEMTIME stime;
-        stime.wYear = dt.year;
-        stime.wMonth = cast(ushort)dt.month;
-        stime.wDayOfWeek = cast(ushort)dt.wday;
-        stime.wDay = cast(ushort)dt.day;
-        stime.wHour = cast(ushort)dt.hour;
-        stime.wMinute = cast(ushort)dt.minute;
-        stime.wSecond = cast(ushort)dt.second;
-        stime.wMilliseconds = cast(ushort)(dt.ns / 1_000_000);
-
-        SysTime ftime;
-        alias PureHACK = extern(Windows) BOOL function(const(SYSTEMTIME)*, FILETIME*) pure nothrow @nogc;
-        if (!(cast(PureHACK)&SystemTimeToFileTime)(&stime, cast(FILETIME*)&ftime))
-            assert(false, "TODO: WHAT TO DO?");
-
-        debug assert(ftime.ticks % 10_000_000 == (dt.ns / 1_000_000) * 10_000);
-        ftime.ticks = ftime.ticks - ftime.ticks % 10_000_000 + dt.ns / 100;
-
-        return ftime;
-    }
+    return dt;
 }
-else version (Posix)
+
+ulong datetime_to_unix_ns(DateTime dt) pure
 {
-    DateTime realtime_to_datetime(timespec ts) pure
+    long y = dt.year;
+    uint m = dt.month;
+    uint d = dt.day;
+
+    if (m <= 2)
+        --y;
+    long era = (y >= 0 ? y : y - 399) / 400;
+    uint yoe = cast(uint)(y - era * 400);
+    uint doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    uint doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    long days = era * 146_097 + doe - 719_468;
+
+    ulong total_sec = cast(ulong)(days * 86_400 + dt.hour*3600 + dt.minute*60 + dt.second);
+
+    return total_sec * 1_000_000_000 + dt.ns;
+}
+
+version (BL808)
+{
+    __gshared ulong last_hbn;
+
+    /// call periodically to correct HBN drift against mtime
+    /// also detects 40-bit HBN counter wrap (~388 days) and compensate
+    void correct_drift()
     {
-        tm t;
-        alias PureHACK = extern(C) tm* function(time_t* timer, tm* buf) pure nothrow @nogc;
-        (cast(PureHACK)&gmtime_r)(&ts.tv_sec, &t);
+        auto p = hbn_persist();
+        if (p.magic != HbnPersist.HBN_MAGIC)
+            return;
 
-        DateTime dt;
-        dt.year = cast(short)(t.tm_year + 1900);
-        dt.month = cast(Month)(t.tm_mon + 1);
-        dt.wday = cast(Day)t.tm_wday;
-        dt.day = cast(ubyte)t.tm_mday;
-        dt.hour = cast(ubyte)t.tm_hour;
-        dt.minute = cast(ubyte)t.tm_min;
-        dt.second = cast(ubyte)t.tm_sec;
-        dt.ns = cast(uint)ts.tv_nsec;
+        ulong now_hbn = rtc_read();
 
-        return dt;
+        // detect 40-bit wrap: counter went backwards since last check
+        if (now_hbn < last_hbn)
+            p.utc_offset += ulong(1) << 40;
+        last_hbn = now_hbn;
+
+        ulong sys_mtime = mtime_read() + sys_time_offset;
+
+        // What does HBN + offset think it is (converted to mtime ticks)?
+        ulong hbn_total = now_hbn + p.utc_offset;
+        ulong sys_hbn = hbn_total / rtc_freq_hz * mtime_freq_hz
+                      + hbn_total % rtc_freq_hz * mtime_freq_hz / rtc_freq_hz;
+
+        // difference is accumulated drift; fold into utc_offset
+        long drift_mtime = sys_mtime - sys_hbn;
+        p.utc_offset += drift_mtime * rtc_freq_hz / mtime_freq_hz;
     }
 
-    timespec datetime_to_realtime(ref DateTime time) pure
+    void recalc_sys_time_offset()
     {
-        tm t;
-        t.tm_year = time.year - 1900;
-        t.tm_mon = cast(int)time.month - 1;
-        t.tm_mday = time.day;
-        t.tm_hour = time.hour;
-        t.tm_min = time.minute;
-        t.tm_sec = time.second;
-
-        alias PureHACK = extern(C) time_t function(tm* timer) pure nothrow @nogc;
-        time_t sec = (cast(PureHACK)&mktime)(&t);
-
-        timespec ts;
-        ts.tv_sec = sec;
-        ts.tv_nsec = time.ns;
-        return ts;
+        auto p = hbn_persist();
+        if (p.magic == HbnPersist.HBN_MAGIC)
+        {
+            last_hbn = rtc_read();
+            long hbn_total = cast(long)(last_hbn + p.utc_offset);
+            long hbn_unix_mtime = hbn_total / rtc_freq_hz * mtime_freq_hz
+                                + hbn_total % rtc_freq_hz * mtime_freq_hz / rtc_freq_hz;
+            cast()sys_time_offset = cast(ulong)(hbn_unix_mtime - cast(long)mtime_read());
+            has_wall_time = true;
+        }
     }
 }

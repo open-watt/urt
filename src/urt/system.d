@@ -105,6 +105,10 @@ void set_system_idle_params(IdleParams params)
     {
         // TODO: ...we're not likely to run on a POSIX desktop system any time soon...
     }
+    else version (FreeStanding)
+    {
+        // Bare-metal: no idle state management needed
+    }
     else
         static assert(0, "Not implemented");
 }

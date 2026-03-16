@@ -734,7 +734,10 @@ private T _divrem2x1_impl(T)(T[2] a, T b, out T rem)
 
     static if (is(T == uint))
     {
-        static assert(false, "TODO!");
+        // 32-bit: use 64-bit arithmetic directly
+        ulong dividend = (cast(ulong)a[1] << 32) | a[0];
+        rem = cast(uint)(dividend % b);
+        return cast(uint)(dividend / b);
     }
     else
     {

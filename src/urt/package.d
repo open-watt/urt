@@ -16,6 +16,8 @@ public import urt.processor;
 public import urt.meta : Alias, AliasSeq;
 public import urt.util : min, max, swap;
 
+import urt.io;
+
 version (Windows)
 {
     private enum crt = __traits(getTargetInfo, "cppRuntimeLibrary");
@@ -34,7 +36,7 @@ private:
 // (_Dmain), then run destructors.
 // ----------------------------------------------------------------------
 
-extern (C) int main(int argc, char** argv) nothrow @nogc @trusted
+extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 {
     import urt.mem;
 
@@ -60,7 +62,6 @@ extern (C) int main(int argc, char** argv) nothrow @nogc @trusted
 
     version (unittest)
     {
-        import urt.internal.stdc : fprintf, stderr, fflush;
         import urt.internal.stdc : exit;
 
         size_t executed, passed;
@@ -69,24 +70,22 @@ extern (C) int main(int argc, char** argv) nothrow @nogc @trusted
             if (m is null) continue;
             if (auto fp = cast(void function() nothrow @nogc) m.unitTest)
             {
-                auto mname2 = m.name;
-                fprintf(stderr, "  running: %.*s ... ", cast(int) mname2.length, mname2.ptr);
-                fflush(stderr);
+                write_err("  running: ", m.name, " ... ");
+                flush!(WriteTarget.stderr)();
                 ++executed;
                 if (run_test(fp))
                     ++passed;
                 else
-                    fprintf(stderr, "FAIL\n");
+                    writeln_err("FAIL");
             }
         }
 
         if (executed > 0)
-            fprintf(stderr, "%d/%d modules passed unittests\n",
-                cast(int) passed, cast(int) executed);
+            writeln_err(passed, '/', executed, " modules passed unittests", );
         else
-            fprintf(stderr, "No unittest functions found!\n");
+            writeln_err("No unittest functions found!");
 
-        fflush(stderr);
+        flush!(WriteTarget.stderr)();
         run_module_dtors(modules);
         int result = executed > 0 && passed == executed ? 0 : 1;
     }
@@ -94,8 +93,7 @@ extern (C) int main(int argc, char** argv) nothrow @nogc @trusted
     {
         int result = call_dmain(d_args);
 
-        import urt.internal.stdc : fflush, stdout;
-        fflush(stdout);
+        flush!(WriteTarget.stdout)();
     }
 
     run_module_dtors(modules);
@@ -110,24 +108,22 @@ version (unittest)
     // separated from main() because DMD cannot mix alloca() and exception handling
     bool run_test(void function() nothrow @nogc test) nothrow @nogc @trusted
     {
-        import urt.internal.stdc : fprintf, stderr;
         try
         {
             test();
-            fprintf(stderr, "ok\n");
+            writeln_err("ok");
             return true;
         }
         catch (Throwable t)
         {
-            auto msg = t.msg;
-            fprintf(stderr, "%.*s\n", cast(int) msg.length, msg.ptr);
+            writeln_err(t.msg);
             return false;
         }
     }
 }
 else
 {
-    extern (C) int _Dmain(scope string[] args) @nogc;
+    extern(C) int _Dmain(scope string[] args) @nogc;
 
     int call_dmain(scope string[] args) nothrow @nogc @trusted
     {
@@ -136,9 +132,7 @@ else
             result = _Dmain(args);
         catch (Throwable t)
         {
-            import urt.internal.stdc : fprintf, stderr;
-            auto msg = t.msg;
-            fprintf(stderr, "Uncaught exception: %.*s\n", cast(int) msg.length, msg.ptr);
+            writeln_err("Uncaught exception: ", t.msg);
             result = 1;
         }
         return result;

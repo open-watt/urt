@@ -26,7 +26,7 @@ void sleep(Duration duration)
 
     version (Windows)
     {
-        import core.sys.windows.winbase : Sleep;
+        import urt.internal.sys.windows.winbase : Sleep;
         Sleep(cast(uint)duration.as!"msecs");
     }
     else
@@ -93,7 +93,7 @@ void set_system_idle_params(IdleParams params)
 {
     version (Windows)
     {
-        import core.sys.windows.winbase;
+        import urt.internal.sys.windows.winbase;
 
         enum EXECUTION_STATE ES_SYSTEM_REQUIRED = 0x00000001;
         enum EXECUTION_STATE ES_DISPLAY_REQUIRED = 0x00000002;
@@ -124,7 +124,7 @@ package:
 
 version (Windows)
 {
-    import core.sys.windows.winbase : GlobalMemoryStatusEx, MEMORYSTATUSEX;
+    import urt.internal.sys.windows.winbase : GlobalMemoryStatusEx, MEMORYSTATUSEX;
 
     extern(Windows) ulong GetTickCount64();
 

@@ -339,7 +339,7 @@ double parse_float(const(char)[] str, size_t* bytes_taken = null, uint base = 10
     if (__ctfe)
         return mantissa * double(base)^^e;
     else
-        return mantissa * pow(base, e);
+        return mantissa * pow(double(base), e);
 }
 
 unittest
@@ -589,7 +589,7 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
     // TODO: this function should be oblitereated and implemented natively...
     //       CRT call can't CTFE, which is a shame
 
-    import core.stdc.stdio;
+    import urt.internal.stdc;
     import urt.string.format : concat;
 
     char[16] fmt = void;

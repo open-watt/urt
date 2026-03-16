@@ -440,6 +440,7 @@ unittest
     assert(!emptyLit); // opCast!bool
 
     // Test makeString (default allocator)
+    // TODO: reinstate the GC for debug allocations...
 //    String s1 = makeString("World");
     String s1 = StringLit!"World";
     assert(s1.length == 5);
@@ -464,6 +465,7 @@ unittest
     assert(nullStr == "");
     assert(!nullStr);
 
+    // TODO: reinstate once GC makeString is available
     // Test assignment and reference counting (basic check)
     String s3 = s1; // s3 references the same data as s1
     assert(s3.ptr == s1.ptr);
@@ -1103,7 +1105,7 @@ private:
 __gshared StringAllocator[4] stringAllocators;
 static assert(stringAllocators.length <= 4, "Only 2 bits reserved to store allocator index");
 
-package(urt) void initStringAllocators()
+package(urt) void initStringAllocators() nothrow @nogc
 {
     stringAllocators[StringAlloc.Default].alloc = (ushort bytes, void* userData) {
         char* buffer = cast(char*)defaultAllocator().alloc(bytes + 4, ushort.alignof).ptr;

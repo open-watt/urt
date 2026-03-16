@@ -12,10 +12,10 @@ alias SystemTime = void;
 
 version(Windows)
 {
-    import core.sys.windows.winbase;
-    import core.sys.windows.windows;
-    import core.sys.windows.windef : MAX_PATH;
-    import core.sys.windows.winnt;
+    import urt.internal.sys.windows.winbase;
+    import urt.internal.sys.windows;
+    import urt.internal.sys.windows.windef : MAX_PATH;
+    import urt.internal.sys.windows.winnt;
     import urt.string : twstringz;
 
     // TODO: remove this when LDC/GDC are up to date...
@@ -26,7 +26,7 @@ version(Windows)
 }
 else version (Posix)
 {
-    import core.stdc.errno;
+    import urt.internal.stdc;
     import core.sys.posix.dirent;
     import core.sys.posix.fcntl;
     import core.sys.posix.stdlib;
@@ -354,27 +354,22 @@ Result create_directory(const(char)[] path)
 {
     version (Windows)
     {
-        if (!CreateDirectoryW(path.twstringz, null))
-        {
-            DWORD err = GetLastError();
-            if (err == ERROR_ALREADY_EXISTS)
-                return Result.success;
-            return getlasterror_result();
-        }
-        return Result.success;
+        if (CreateDirectoryW(path.twstringz, null))
+            return Result.success;
+        Result r = getlasterror_result();
     }
     else version (Posix)
     {
-        if (core.sys.posix.sys.stat.mkdir(tconcat(path, "\0").ptr, 493 /* 0755 */) != 0)
-        {
-            if (core.stdc.errno.errno == core.stdc.errno.EEXIST)
-                return Result.success;
-            return errno_result();
-        }
-        return Result.success;
+        if (!core.sys.posix.sys.stat.mkdir(tconcat(path, "\0").ptr, 493 /* 0755 */) != 0)
+            return Result.success;
+        Result r = errno_result();
     }
     else
         static assert(0, "Not implemented");
+
+    if (r == InternalResult.already_exists)
+        return Result.success;
+    return r;
 }
 
 Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags openFlags = FileOpenFlags.None)

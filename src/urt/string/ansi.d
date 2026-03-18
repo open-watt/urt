@@ -84,6 +84,74 @@ size_t parse_ansi_code(const(char)[] text)
     return i + 1;
 }
 
+size_t visible_width(const(char)[] text)
+{
+    import urt.string.uni : uni_seq_len;
+
+    size_t width = 0;
+    size_t i = 0;
+    while (i < text.length)
+    {
+        if (text[i] == '\x1b' && i + 1 < text.length && text[i + 1] == '[')
+        {
+            i += 2;
+            while (i < text.length && text[i] != 'm')
+                ++i;
+            if (i < text.length)
+                ++i;
+        }
+        else
+        {
+            ++width;
+            i += uni_seq_len(text[i .. $]);
+        }
+    }
+    return width;
+}
+
+const(char)[] visible_slice(const(char)[] text, char[] buf, size_t start = 0, size_t end = size_t.max)
+{
+    import urt.string.uni : uni_seq_len;
+
+    size_t out_pos = 0;
+    size_t visible = 0;
+
+    for (size_t i = 0; i < text.length; )
+    {
+        if (text[i] == '\x1b' && i + 1 < text.length && text[i + 1] == '[')
+        {
+            size_t seq_start = i;
+            i += 2;
+            while (i < text.length && text[i] != 'm')
+                ++i;
+            if (i < text.length)
+                ++i;
+            size_t seq_len = i - seq_start;
+            if (out_pos + seq_len <= buf.length)
+            {
+                buf[out_pos .. out_pos + seq_len] = text[seq_start .. i];
+                out_pos += seq_len;
+            }
+        }
+        else
+        {
+            size_t ch_len = uni_seq_len(text[i .. $]);
+            if (visible >= start && visible < end)
+            {
+                if (out_pos + ch_len <= buf.length)
+                {
+                    buf[out_pos .. out_pos + ch_len] = text[i .. i + ch_len];
+                    out_pos += ch_len;
+                }
+            }
+            ++visible;
+            i += ch_len;
+        }
+    }
+
+    return buf[0 .. out_pos];
+}
+
 char[] strip_decoration(char[] text) pure
 {
     return strip_decoration(text, text);

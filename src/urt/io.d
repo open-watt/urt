@@ -9,47 +9,59 @@ enum WriteTarget : ubyte
     debugstring = 2,    // Windows OutputDebugStringA
 }
 
-int write_to(WriteTarget target, bool newline = false)(const(char)[] str)
+template write_to(WriteTarget target, bool newline = false)
 {
-    static if (target == WriteTarget.stdout)
+    int write_to(const(char)[] str)
     {
-        import urt.internal.stdc;
-        return printf("%.*s" ~ (newline ? "\n" : ""), cast(int)str.length, str.ptr);
-    }
-    else static if (target == WriteTarget.stderr)
-    {
-        import urt.internal.stdc;
-        return fprintf(stderr, "%.*s" ~ (newline ? "\n" : ""), cast(int)str.length, str.ptr);
-    }
-    else static if (target == WriteTarget.debugstring)
-    {
-        version (Windows)
+        static if (target == WriteTarget.stdout || target == WriteTarget.stderr)
         {
-            import core.sys.windows.windows;
-            OutputDebugStringA(str.ptr);
-            static if (newline)
-                OutputDebugStringA("\n");
-            return cast(int)str.length + newline;
+            version (FreeStanding)
+            {
+                import sys.bl808.uart : uart0_puts;
+                uart0_puts(str);
+                static if (newline)
+                    uart0_puts("\n");
+                return cast(int) str.length;
+            }
+            else
+            {
+                import urt.internal.stdc;
+                static if (target == WriteTarget.stderr)
+                    return fprintf(stderr, "%.*s" ~ (newline ? "\n" : ""), cast(int)str.length, str.ptr);
+                else
+                    return printf("%.*s" ~ (newline ? "\n" : ""), cast(int)str.length, str.ptr);
+            }
         }
-        else
+        else static if (target == WriteTarget.debugstring)
         {
-            // is stderr the best analogy on other platforms?
-            return write_to!(WriteTarget.stderr, newline)(str);
+            version (Windows)
+            {
+                import core.sys.windows.windows;
+                OutputDebugStringA(str.ptr);
+                static if (newline)
+                    OutputDebugStringA("\n");
+                return cast(int)str.length + newline;
+            }
+            else
+            {
+                // is stderr the best analogy on other platforms?
+                return write_to!(WriteTarget.stderr, newline)(str);
+            }
         }
+         else
+            static assert(0, "Invalid WriteTarget");
     }
-     else
-        static assert(0, "Invalid WriteTarget");
-}
 
-int write_to(WriteTarget target, bool newline = false, Args...)(ref Args args)
-    if (Args.length != 1 || !is(Args[0] : const(char)[]))
-{
-    import urt.string.format;
-    import urt.mem.temp;
+    int write_to(Args...)(ref Args args)
+        if (Args.length != 1 || !is(Args[0] : const(char)[]))
+    {
+        import urt.string.format;
+        import urt.mem.temp;
 
-    size_t len = concat(null, args).length;
-    const(char)[] t = concat(cast(char[])talloc(len), args);
-    return write_to!(target, newline)(t);
+        size_t len = concat(null, args).length;
+        const(char)[] t = concat(cast(char[])talloc(len), args);
+        return write_to(t);
+    }
 }
 
 int writef_to(WriteTarget target, bool newline = false, Args...)(const(char)[] fmt, ref Args args)
@@ -70,12 +82,21 @@ alias writeln_err = write_to!(WriteTarget.stderr, true);
 alias write_debug = write_to!(WriteTarget.debugstring, false);
 alias writeln_debug = write_to!(WriteTarget.debugstring, true);
 
-int write(Args...)(ref Args args)
-    if (Args.length != 1 || !is(Args[0] : const(char)[]))
-    => write_to!(WriteTarget.stdout, false)(args);
-int writeln(Args...)(ref Args args)
-    if (Args.length != 1 || !is(Args[0] : const(char)[]))
-    => write_to!(WriteTarget.stdout, true)(args);
+void flush(WriteTarget target = WriteTarget.stdout)() nothrow @nogc
+{
+    version (FreeStanding)
+    {
+        // UART writes are unbuffered — nothing to flush
+    }
+    else
+    {
+        import urt.internal.stdc : fflush, stdout, stderr;
+        static if (target == WriteTarget.stdout)
+            fflush(stdout);
+        else static if (target == WriteTarget.stderr)
+            fflush(stderr);
+    }
+}
 
 int writef(Args...)(ref Args args)
     => writef_to!(WriteTarget.stdout, false)(args);

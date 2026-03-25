@@ -826,15 +826,15 @@ nothrow:
     size_t toHash() const pure
         => pack;
 
-    auto __debugOverview()
+    version (Windows)
     {
-        debug {
-            char[] buffer = new char[32];
+        auto __debugOverview()
+        {
+            import urt.mem;
+            char[] buffer = debug_alloc!char(32);
             ptrdiff_t len = toString(buffer, null, null);
             return buffer[0 .. len];
         }
-        else
-            return pack;
     }
 
 package:

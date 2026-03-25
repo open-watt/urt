@@ -389,10 +389,6 @@ nothrow @nogc:
         => ptr && ((cast(ushort*)ptr)[-1] >> 15) != 0;
 
 private:
-    auto __debugOverview() const pure { debug return ptr[0 .. length].debugExcapeString(); else return ptr[0 .. length]; }
-    auto __debugExpanded() const pure => ptr[0 .. length];
-    auto __debugStringView() const pure => ptr[0 .. length];
-
     ushort* refCounter() const pure
         => ((cast(ushort*)ptr)[-1] >> 15) ? cast(ushort*)ptr - 2 : null;
 
@@ -421,6 +417,13 @@ private:
         ptr = str;
         if (refCounted)
             *cast(ushort*)(ptr - 2) |= 0x8000;
+    }
+
+    version (Windows)
+    {
+        auto __debugOverview() const pure => ptr ? ptr[0 .. length].debugExcapeString() : null;
+        auto __debugExpanded() const pure => ptr ? ptr[0 .. length] : null;
+        auto __debugStringView() const pure => ptr ? ptr[0 .. length] : null;
     }
 }
 
@@ -942,9 +945,12 @@ private:
         defaultAllocator().free(buffer[0 .. 4 + *cast(ushort*)buffer]);
     }
 
-    auto __debugOverview() const pure { debug return ptr[0 .. length].debugExcapeString(); else return ptr[0 .. length]; }
-    auto __debugExpanded() const pure => ptr[0 .. length];
-    auto __debugStringView() const pure => ptr[0 .. length];
+    version (Windows)
+    {
+        auto __debugOverview() const pure => ptr ? ptr[0 .. length].debugExcapeString() : null;
+        auto __debugExpanded() const pure => ptr ? ptr[0 .. length] : null;
+        auto __debugStringView() const pure => ptr ? ptr[0 .. length] : null;
+    }
 }
 
 unittest
@@ -1134,11 +1140,11 @@ package(urt) void initStringAllocators() nothrow @nogc
     };
 }
 
-debug
+version (Windows)
 {
-    char[] debugExcapeString(const char[] s) pure nothrow
+    char[] debugExcapeString(const char[] s) pure nothrow @nogc
     {
-        char[] t = new char[s.length*2];
+        char[] t = debug_alloc!char(s.length*2);
         int d;
         foreach (i; 0 .. s.length)
         {

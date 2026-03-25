@@ -140,17 +140,13 @@ pure nothrow @nogc:
         }
     }
 
+    version (Windows)
     auto __debugOverview() const
     {
-        debug
-        {
-            import urt.mem.temp;
-            char[] b = cast(char[])talloc(64);
-            ptrdiff_t len = toString(b, null, null);
-            return b[0..len];
-        }
-        else
-            return appTime(this).as!"msecs";
+        import urt.mem;
+        char[] b = debug_alloc!char(64);
+        ptrdiff_t len = toString(b, null, null);
+        return b[0..len];
     }
 }
 

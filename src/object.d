@@ -708,7 +708,9 @@ ref Tarr _d_arrayappendT(Tarr : T[], T)(return ref scope Tarr x, scope Tarr y) @
 
 T[] _d_newarrayT(T)(size_t length, bool isShared = false) @trusted
 {
-    assert(false, "new array requires druntime");
+    import urt.mem : malloc;
+//    assert(false, "new array requires druntime");
+    return (cast(T*)malloc(T.sizeof * length))[0 .. length];
 }
 
 Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared = false) @trusted
@@ -718,7 +720,9 @@ Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared = false) @tru
 
 T* _d_newitemT(T)() @trusted
 {
-    assert(false, "new item requires druntime");
+    import urt.mem : malloc;
+//    assert(false, "new item requires druntime");
+    return cast(T*)malloc(T.sizeof);
 }
 
 T _d_newThrowable(T)() @trusted

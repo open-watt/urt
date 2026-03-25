@@ -16,10 +16,10 @@ extern(C)
 {
 nothrow @nogc:
 
-    void* malloc(size_t size) @trusted;
-    void* calloc(size_t num, size_t size) @trusted;
-    void* realloc(void* ptr, size_t new_size) @trusted;
-    void free(void* ptr) @trusted;
+    void* malloc(size_t size) pure @trusted;
+    void* calloc(size_t num, size_t size) pure @trusted;
+    void* realloc(void* ptr, size_t new_size) pure @trusted;
+    void free(void* ptr) pure @trusted;
 
     void* memcpy(void* dest, const void* src, size_t n) pure;
     void* memmove(void* dest, const void* src, size_t n) pure;
@@ -37,6 +37,24 @@ nothrow @nogc:
 //    wchar_t* wcscat(wchar_t* dest, const wchar_t* src);
 //    wchar_t* wcsncpy(wchar_t* dest, const wchar_t* src, size_t n) pure;
 //    wchar_t* wcsncat(wchar_t* dest, const wchar_t* src, size_t n);
+}
+
+T debug_alloc(T = void)() pure @trusted
+    if (is(T == class))
+{
+    static T gc_alloc(size_t size) pure nothrow => new T;
+    return (cast(T function(size_t) pure nothrow @nogc)&gc_alloc)(size);
+}
+T* debug_alloc(T = void)() pure @trusted
+    if (!is(T == class))
+{
+    static T* gc_alloc(size_t size) pure nothrow => new T;
+    return (cast(T* function(size_t) pure nothrow @nogc)&gc_alloc)(size);
+}
+T[] debug_alloc(T = void)(size_t size) pure @trusted
+{
+    static T[] gc_alloc(size_t size) pure nothrow => new T[size];
+    return (cast(T[] function(size_t) pure nothrow @nogc)&gc_alloc)(size);
 }
 
 

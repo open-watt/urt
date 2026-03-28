@@ -122,3 +122,31 @@ else version (Posix)
     Result errno_result()
         => Result(errno);
 }
+else version (FreeStanding)
+{
+    enum InternalResult : Result
+    {
+        success =           Result.success,
+        failed =            Result(1),
+        buffer_too_small =  Result(2),
+        invalid_parameter = Result(3),
+        data_error =        Result(4),
+        unsupported =       Result(5),
+        out_of_range =      Result(6),
+        already_exists =    Result(7),
+        timeout =           Result(8),
+        aborted =           Result(9),
+        no_memory =         Result(10),
+    }
+
+    // Bare-metal errno support — provided by the IP stack or libc shim
+    extern (C) private int* __errno_location() nothrow @nogc;
+
+    @property int errno() nothrow @nogc @trusted
+    {
+        return *__errno_location();
+    }
+
+    Result errno_result()
+        => Result(errno);
+}

@@ -838,8 +838,10 @@ private:
         // TODO: i'm sure we can imagine a better heuristic...
         return i > 16 ? i * 2 : 16;
     }
-
-    auto __debugExpanded() const pure => ptr[0 .. _length];
+    version (Windows)
+    {
+        auto __debugExpanded() const pure => ptr[0 .. _length];
+    }
 }
 
 // SharedArray is a ref-counted array which can be distributed

@@ -110,6 +110,10 @@ extern(C) void _d_createTrace(Throwable t, void*) nothrow @nogc @trusted
             }
             _tls_trace.length = n;
         }
+        else version (FreeStanding)
+        {
+            // No stack trace on bare-metal
+        }
         else
         {
             // ARM, AArch64, RISC-V, etc. — use _Unwind_Backtrace
@@ -139,6 +143,8 @@ extern(C) void _d_printLastTrace(Throwable t) nothrow @nogc @trusted
 
         version (Windows)
             dbghelp_print_trace(_tls_trace.addrs[0 .. _tls_trace.length]);
+        else version (FreeStanding)
+        {}
         else
             posix_print_trace(_tls_trace.addrs[0 .. _tls_trace.length]);
     }
@@ -449,7 +455,7 @@ version (Windows) debug
 // Ported from druntime's core.internal.backtrace.{dwarf,elf} and
 // core.internal.elf.{io,dl}.
 //
-version (Windows) {} else debug
+version (Windows) {} else version (FreeStanding) {} else debug
 {
     import urt.io : write_err, writeln_err, writef_to, WriteTarget;
     import urt.mem : strlen, memcpy;
@@ -1564,6 +1570,8 @@ private void terminate() nothrow @nogc @trusted
             writeln_err("  stack trace:");
             version (Windows)
                 dbghelp_print_trace(_tls_trace.addrs[0 .. _tls_trace.length]);
+            else version (FreeStanding)
+            {}
             else
                 posix_print_trace(_tls_trace.addrs[0 .. _tls_trace.length]);
         }
@@ -2989,6 +2997,11 @@ else version (RISCV32)
     enum eh_exception_regno = 10;
     enum eh_selector_regno = 11;
 }
+else version (Xtensa)
+{
+    enum eh_exception_regno = 2;  // a2
+    enum eh_selector_regno = 3;  // a3
+}
 else
     static assert(0, "Unknown EH register numbers for this architecture");
 
@@ -3548,33 +3561,43 @@ _Unwind_Reason_Code dwarfeh_personality_common(_Unwind_Action actions, _Unwind_E
 
 // Personality function entry points.
 // ARM EABI uses a different calling convention than the standard Itanium ABI.
+// FreeStanding ARM (bare-metal) uses DWARF EH, not ARM EHABI, so use the standard personality.
 version (ARM)
 {
-    version (LDC)
-    {
-        extern(C) _Unwind_Reason_Code _d_eh_personality(_Unwind_State state, _Unwind_Exception* exception_object, _Unwind_Context* context) nothrow @nogc
-        {
-            _Unwind_Action actions;
-            switch (state & _US_ACTION_MASK)
-            {
-                case _US_VIRTUAL_UNWIND_FRAME:
-                    actions = _UA_SEARCH_PHASE;
-                    break;
-                case _US_UNWIND_FRAME_STARTING:
-                    actions = _UA_CLEANUP_PHASE;
-                    break;
-                case _US_UNWIND_FRAME_RESUME:
-                    return _URC_CONTINUE_UNWIND;
-                default:
-                    dwarf_terminate(__LINE__);
-                    return _URC_FATAL_PHASE1_ERROR;
-            }
-            if (state & _US_FORCE_UNWIND)
-                actions |= _UA_FORCE_UNWIND;
+    version (FreeStanding)
+        enum UseArmEhabi = false;
+    else version (LDC)
+        enum UseArmEhabi = true;
+    else
+        enum UseArmEhabi = false;
+}
+else
+    enum UseArmEhabi = false;
 
-            return dwarfeh_personality_common(actions, exception_object.exception_class,
-                exception_object, context);
+static if (UseArmEhabi)
+{
+    extern(C) _Unwind_Reason_Code _d_eh_personality(_Unwind_State state, _Unwind_Exception* exception_object, _Unwind_Context* context) nothrow @nogc
+    {
+        _Unwind_Action actions;
+        switch (state & _US_ACTION_MASK)
+        {
+            case _US_VIRTUAL_UNWIND_FRAME:
+                actions = _UA_SEARCH_PHASE;
+                break;
+            case _US_UNWIND_FRAME_STARTING:
+                actions = _UA_CLEANUP_PHASE;
+                break;
+            case _US_UNWIND_FRAME_RESUME:
+                return _URC_CONTINUE_UNWIND;
+            default:
+                dwarf_terminate(__LINE__);
+                return _URC_FATAL_PHASE1_ERROR;
         }
+        if (state & _US_FORCE_UNWIND)
+            actions |= _UA_FORCE_UNWIND;
+
+        return dwarfeh_personality_common(actions, exception_object.exception_class,
+            exception_object, context);
     }
 }
 else

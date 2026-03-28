@@ -43,6 +43,8 @@ else version (Posix)
     alias dchar wchar_t;
 else version (WASI)
     alias dchar wchar_t;
+else version (FreeStanding)
+    alias dchar wchar_t;
 
 alias string  = immutable(char)[];
 alias wstring = immutable(wchar)[];
@@ -841,13 +843,13 @@ string _d_assert_fail(A...)(const scope string comp, auto ref const scope A a)
 // These are referenced by compiler-generated code even in debug builds.
 // ──────────────────────────────────────────────────────────────────────
 
-extern (C) void _d_assert_msg(string msg, string file, uint line) nothrow @nogc
+extern(C) void _d_assert_msg(string msg, string file, uint line) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, msg);
 }
 
-extern (C) void _d_assertp(immutable(char)* file, uint line) nothrow @nogc @trusted
+extern(C) void _d_assertp(immutable(char)* file, uint line) nothrow @nogc @trusted
 {
     import urt.mem : strlen;
     import urt.exception : assert_handler;
@@ -855,31 +857,31 @@ extern (C) void _d_assertp(immutable(char)* file, uint line) nothrow @nogc @trus
     assert_handler()(f, line, null);
 }
 
-extern (C) void _d_assert(string file, uint line) nothrow @nogc
+extern(C) void _d_assert(string file, uint line) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, null);
 }
 
-extern (C) void _d_arraybounds_indexp(string file, uint line, size_t index, size_t length) nothrow @nogc
+extern(C) void _d_arraybounds_indexp(string file, uint line, size_t index, size_t length) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, "array index out of bounds");
 }
 
-extern (C) void _d_arraybounds_slicep(string file, uint line, size_t lower, size_t upper, size_t length) nothrow @nogc
+extern(C) void _d_arraybounds_slicep(string file, uint line, size_t lower, size_t upper, size_t length) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, "array slice out of bounds");
 }
 
-extern (C) void _d_arrayboundsp(string file, uint line) nothrow @nogc
+extern(C) void _d_arrayboundsp(string file, uint line) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, "array index out of bounds");
 }
 
-extern (C) void _d_arraybounds(string file, uint line) nothrow @nogc
+extern(C) void _d_arraybounds(string file, uint line) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, "array index out of bounds");
@@ -887,7 +889,7 @@ extern (C) void _d_arraybounds(string file, uint line) nothrow @nogc
 
 // Unittest assert hooks — the compiler generates these for assert() inside
 // unittest blocks instead of the regular _d_assertp/_d_assert_msg.
-extern (C) void _d_unittestp(immutable(char)* file, uint line) nothrow @nogc @trusted
+extern(C) void _d_unittestp(immutable(char)* file, uint line) nothrow @nogc @trusted
 {
     import urt.mem : strlen;
     import urt.exception : assert_handler;
@@ -895,13 +897,13 @@ extern (C) void _d_unittestp(immutable(char)* file, uint line) nothrow @nogc @tr
     assert_handler()(f, line, "unittest assertion failure");
 }
 
-extern (C) void _d_unittest_msg(string msg, string file, uint line) nothrow @nogc @trusted
+extern(C) void _d_unittest_msg(string msg, string file, uint line) nothrow @nogc @trusted
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, msg);
 }
 
-extern (C) void _d_unittest(string file, uint line) nothrow @nogc
+extern(C) void _d_unittest(string file, uint line) nothrow @nogc
 {
     import urt.exception : assert_handler;
     assert_handler()(file, line, "unittest assertion failure");
@@ -910,7 +912,7 @@ extern (C) void _d_unittest(string file, uint line) nothrow @nogc
 // GC allocation hook — compiler lowers `new` to this.  In our @nogc world
 // it should never be called from production code; provided so unittest
 // blocks that accidentally use `new` can at least link.
-extern (C) void* _d_allocmemory(size_t sz) nothrow @nogc @trusted
+extern(C) void* _d_allocmemory(size_t sz) nothrow @nogc @trusted
 {
     import urt.mem : malloc;
     return malloc(sz);
@@ -929,7 +931,7 @@ version (LDC)
 
 // --- Bounds checks (LDC variants without 'p' suffix) -------------------
 
-extern (C) void _d_arraybounds_index(string file, uint line, size_t index, size_t length) nothrow @nogc
+extern(C) void _d_arraybounds_index(string file, uint line, size_t index, size_t length) nothrow @nogc
 {
     import urt.exception : assert_handler;
     if (auto handler = assert_handler)
@@ -938,7 +940,7 @@ extern (C) void _d_arraybounds_index(string file, uint line, size_t index, size_
         _halt();
 }
 
-extern (C) void _d_arraybounds_slice(string file, uint line, size_t lower, size_t upper, size_t length) nothrow @nogc
+extern(C) void _d_arraybounds_slice(string file, uint line, size_t lower, size_t upper, size_t length) nothrow @nogc
 {
     import urt.exception : assert_handler;
     if (auto handler = assert_handler)
@@ -950,7 +952,7 @@ extern (C) void _d_arraybounds_slice(string file, uint line, size_t lower, size_
 // --- Array slice copy (LDC emits this for non-elaborate arr[] = other[]) -
 // Bounds-checked memcpy: verifies dstlen == srclen, then copies raw bytes.
 
-extern (C) void _d_array_slice_copy(void* dst, size_t dstlen, void* src, size_t srclen, size_t elemsize) nothrow @nogc @trusted
+extern(C) void _d_array_slice_copy(void* dst, size_t dstlen, void* src, size_t srclen, size_t elemsize) nothrow @nogc @trusted
 {
     assert(dstlen == srclen, "array slice lengths don't match for copy");
     import urt.mem : memcpy;
@@ -959,7 +961,7 @@ extern (C) void _d_array_slice_copy(void* dst, size_t dstlen, void* src, size_t 
 
 // --- Class allocation and casting (old-style extern C) -----------------
 
-extern (C) void* _d_allocclass(TypeInfo_Class ci) nothrow @nogc @trusted
+extern(C) void* _d_allocclass(TypeInfo_Class ci) nothrow @nogc @trusted
 {
     import urt.mem : malloc, memcpy;
     auto init = ci.initializer;
@@ -969,7 +971,7 @@ extern (C) void* _d_allocclass(TypeInfo_Class ci) nothrow @nogc @trusted
     return p;
 }
 
-extern (C) Object _d_dynamic_cast(Object o, TypeInfo_Class c) nothrow @nogc @trusted
+extern(C) Object _d_dynamic_cast(Object o, TypeInfo_Class c) nothrow @nogc @trusted
 {
     // Traverse classinfo chain to check if o is-a c
     if (o is null) return null;
@@ -983,7 +985,7 @@ extern (C) Object _d_dynamic_cast(Object o, TypeInfo_Class c) nothrow @nogc @tru
     return null;
 }
 
-extern (C) void* _d_interface_cast(void* p, TypeInfo_Class c) nothrow @nogc @trusted
+extern(C) void* _d_interface_cast(void* p, TypeInfo_Class c) nothrow @nogc @trusted
 {
     // TODO: full interface casting requires traversing the Interface[] table
     // in the target object's classinfo to find the right vtable offset.
@@ -993,7 +995,7 @@ extern (C) void* _d_interface_cast(void* p, TypeInfo_Class c) nothrow @nogc @tru
 
 // --- Struct array equality (old-style) ---------------------------------
 
-extern (C) int _adEq2(void[] a1, void[] a2, TypeInfo ti) nothrow @nogc @trusted
+extern(C) int _adEq2(void[] a1, void[] a2, TypeInfo ti) nothrow @nogc @trusted
 {
     if (a1.length != a2.length) return 0;
     import urt.mem : memcmp;
@@ -1004,7 +1006,7 @@ extern (C) int _adEq2(void[] a1, void[] a2, TypeInfo ti) nothrow @nogc @trusted
 
 // --- Old-style array allocation (extern C) ------------------------------
 
-extern (C) void[] _d_newarrayT(const TypeInfo ti, size_t length) nothrow @nogc @trusted
+extern(C) void[] _d_newarrayT(const TypeInfo ti, size_t length) nothrow @nogc @trusted
 {
     import urt.mem : calloc;
     auto elemsize = ti.next ? ti.next.tsize : 1;
@@ -1012,7 +1014,7 @@ extern (C) void[] _d_newarrayT(const TypeInfo ti, size_t length) nothrow @nogc @
     return p[0 .. length * elemsize];
 }
 
-extern (C) void[] _d_newarrayiT(const TypeInfo ti, size_t length) nothrow @nogc @trusted
+extern(C) void[] _d_newarrayiT(const TypeInfo ti, size_t length) nothrow @nogc @trusted
 {
     import urt.mem : calloc;
     auto elemsize = ti.next ? ti.next.tsize : 1;
@@ -1020,7 +1022,7 @@ extern (C) void[] _d_newarrayiT(const TypeInfo ti, size_t length) nothrow @nogc 
     return p[0 .. length * elemsize];
 }
 
-extern (C) void[] _d_newarrayU(const TypeInfo ti, size_t length) nothrow @nogc @trusted
+extern(C) void[] _d_newarrayU(const TypeInfo ti, size_t length) nothrow @nogc @trusted
 {
     import urt.mem : malloc;
     auto elemsize = ti.next ? ti.next.tsize : 1;
@@ -1081,7 +1083,7 @@ template _d_delstructImpl(T)
     }
 }
 
-nothrow @nogc @trusted pure extern (C) void _d_delThrowable(scope Throwable) {}
+nothrow @nogc @trusted pure extern(C) void _d_delThrowable(scope Throwable) {}
 
 // ──────────────────────────────────────────────────────────────────────
 // _arrayOp — compiler hook for vectorized array slice operations.
@@ -1586,14 +1588,12 @@ const:
 
     @property string name() nothrow @nogc @trusted
     {
-        if (flags & MIname)
-        {
-            auto p = cast(immutable char*)addr_of(MIname);
-            size_t len = 0;
-            while (p[len] != 0) ++len;
-            return p[0 .. len];
-        }
-        return null;
+        // LDC always emits the name after the packed fields, even without
+        // setting MIname.  addr_of(MIname) handles this (see `true ||` guard).
+        auto p = cast(immutable char*)addr_of(MIname);
+        size_t len = 0;
+        while (p[len] != 0) ++len;
+        return p[0 .. len];
     }
 }
 
@@ -1671,7 +1671,7 @@ private struct Bits128 { ulong[2] v; }
 private struct Bits80  { ubyte[real.sizeof] v; }
 private struct Bits160 { ubyte[2 * real.sizeof] v; }
 
-extern (C) nothrow @nogc @trusted
+extern(C) nothrow @nogc @trusted
 {
     short* _memset16(short* p, short value, size_t count)
     {

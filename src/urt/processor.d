@@ -24,14 +24,22 @@ version (X86_64)
 {
     version = Intel;
     enum string ProcessorFamily = "x86_64";
+    enum string ProcessorName = "x86_64";
 }
 else version (X86)
 {
     version = Intel;
     enum string ProcessorFamily = "x86";
+    enum string ProcessorName = "x86";
 }
 else version (AArch64)
+{
     enum string ProcessorFamily = "ARM64";
+    version (LDC)
+        enum string ProcessorName = __traits(targetCPU);
+    else
+        enum string ProcessorName = "aarch64";
+}
 else version (ARM)
 {
     enum string ProcessorFamily = "ARM";
@@ -78,11 +86,125 @@ else version (ARM)
     enum ProcFeatures = ProcFeaturesT();
 }
 else version (RISCV64)
+{
     enum string ProcessorFamily = "RISCV64";
+
+    // Synthesize ISA string: "RV64I" + single-letter extensions in canonical order
+    enum string ProcessorName = "RV64I"
+        ~ (ProcFeatures.m ? "M" : "")
+        ~ (ProcFeatures.a ? "A" : "")
+        ~ (ProcFeatures.f ? "F" : "")
+        ~ (ProcFeatures.d ? "D" : "")
+        ~ (ProcFeatures.c ? "C" : "")
+        ~ (ProcFeatures.v ? "V" : "")
+        ~ (ProcFeatures.h ? "H" : "")
+        ~ (ProcFeatures.xtheadba ? " (T-Head)" : "");
+
+    struct ProcFeaturesT
+    {
+        // Standard extensions
+        bool a = __traits(targetHasFeature, "a");             // Atomic instructions
+        bool c = __traits(targetHasFeature, "c");             // Compressed instructions
+        bool d = __traits(targetHasFeature, "d");             // Double-precision float
+        bool f = __traits(targetHasFeature, "f");             // Single-precision float
+        bool h = __traits(targetHasFeature, "h");             // Hypervisor
+        bool m = __traits(targetHasFeature, "m");             // Integer multiply/divide
+        bool v = __traits(targetHasFeature, "v");             // Vector extension (RVV 1.0)
+        // Bit manipulation
+        bool zba = __traits(targetHasFeature, "zba");         // Address generation
+        bool zbb = __traits(targetHasFeature, "zbb");         // Basic bit manipulation
+        bool zbs = __traits(targetHasFeature, "zbs");         // Single-bit instructions
+        // System
+        bool zicsr = __traits(targetHasFeature, "zicsr");     // CSR instructions
+        bool zifencei = __traits(targetHasFeature, "zifencei"); // Instruction-fetch fence
+        // T-Head vendor extensions (BL808 C906, etc.)
+        bool xtheadba = __traits(targetHasFeature, "xtheadba");           // Address calculation
+        bool xtheadbb = __traits(targetHasFeature, "xtheadbb");           // Basic bit manipulation
+        bool xtheadbs = __traits(targetHasFeature, "xtheadbs");           // Single-bit instructions
+        bool xtheadcmo = __traits(targetHasFeature, "xtheadcmo");         // Cache management
+        bool xtheadcondmov = __traits(targetHasFeature, "xtheadcondmov"); // Conditional move
+        bool xtheadmac = __traits(targetHasFeature, "xtheadmac");         // Multiply-accumulate
+        bool xtheadmemidx = __traits(targetHasFeature, "xtheadmemidx");   // Indexed memory ops
+        bool xtheadmempair = __traits(targetHasFeature, "xtheadmempair"); // Paired memory ops
+        bool xtheadsync = __traits(targetHasFeature, "xtheadsync");       // Multicore sync
+        bool xtheadvdot = __traits(targetHasFeature, "xtheadvdot");       // Vector dot product
+    }
+    enum ProcFeatures = ProcFeaturesT();
+}
 else version (RISCV32)
+{
     enum string ProcessorFamily = "RISCV";
+
+    // Synthesize ISA string: "RV32I" or "RV32E" + extensions
+    enum string ProcessorName = "RV32"
+        ~ (ProcFeatures.e ? 'E' : 'I')
+        ~ (ProcFeatures.m ? "M" : "")
+        ~ (ProcFeatures.a ? "A" : "")
+        ~ (ProcFeatures.f ? "F" : "")
+        ~ (ProcFeatures.d ? "D" : "")
+        ~ (ProcFeatures.c ? "C" : "")
+        ~ (ProcFeatures.v ? "V" : "");
+
+    struct ProcFeaturesT
+    {
+        // Standard extensions
+        bool e = __traits(targetHasFeature, "e");             // RV32E: 16 registers only
+        bool a = __traits(targetHasFeature, "a");             // Atomic instructions
+        bool c = __traits(targetHasFeature, "c");             // Compressed instructions
+        bool d = __traits(targetHasFeature, "d");             // Double-precision float
+        bool f = __traits(targetHasFeature, "f");             // Single-precision float
+        bool m = __traits(targetHasFeature, "m");             // Integer multiply/divide
+        bool v = __traits(targetHasFeature, "v");             // Vector extension (RVV 1.0)
+        // Bit manipulation
+        bool zba = __traits(targetHasFeature, "zba");         // Address generation
+        bool zbb = __traits(targetHasFeature, "zbb");         // Basic bit manipulation
+        bool zbs = __traits(targetHasFeature, "zbs");         // Single-bit instructions
+        // System
+        bool zicsr = __traits(targetHasFeature, "zicsr");     // CSR instructions
+        bool zifencei = __traits(targetHasFeature, "zifencei"); // Instruction-fetch fence
+    }
+    enum ProcFeatures = ProcFeaturesT();
+}
 else version (Xtensa)
+{
     enum string ProcessorFamily = "Xtensa";
+
+    // Synthesize name from key features
+    enum string ProcessorName = "Xtensa"
+        ~ (ProcFeatures.windowed ? " Windowed" : " Call0")
+        ~ (ProcFeatures.fp ? (ProcFeatures.dfpaccel ? " DP" : " SP") : "")
+        ~ (ProcFeatures.mac16 ? " MAC16" : "");
+
+    struct ProcFeaturesT
+    {
+        // Core ISA options
+        bool density = __traits(targetHasFeature, "density");       // Density (16-bit) instructions
+        bool loop = __traits(targetHasFeature, "loop");             // Zero-overhead loops
+        bool windowed = __traits(targetHasFeature, "windowed");     // Windowed registers (vs call0 ABI)
+        bool boolean_ = __traits(targetHasFeature, "bool");         // Boolean registers
+        bool sext = __traits(targetHasFeature, "sext");             // Sign extend instruction
+        bool nsa = __traits(targetHasFeature, "nsa");               // Normalization shift amount
+        bool clamps = __traits(targetHasFeature, "clamps");         // Clamp signed
+        bool minmax = __traits(targetHasFeature, "minmax");         // Min/max instructions
+        // Multiply/divide
+        bool mul16 = __traits(targetHasFeature, "mul16");           // 16-bit multiply
+        bool mul32 = __traits(targetHasFeature, "mul32");           // 32-bit multiply
+        bool mul32high = __traits(targetHasFeature, "mul32high");   // 32-bit multiply high
+        bool div32 = __traits(targetHasFeature, "div32");           // 32-bit divide
+        bool mac16 = __traits(targetHasFeature, "mac16");           // 16-bit MAC (ESP32 LX6)
+        // Floating point
+        bool fp = __traits(targetHasFeature, "fp");                 // Single-precision float
+        bool dfpaccel = __traits(targetHasFeature, "dfpaccel");     // Double-precision FP acceleration
+        // System
+        bool exception_ = __traits(targetHasFeature, "exception"); // Exception handling
+        bool interrupt = __traits(targetHasFeature, "interrupt");   // Interrupt handling
+        bool highpriinterrupts = __traits(targetHasFeature, "highpriinterrupts"); // High-priority interrupts
+        bool debug_ = __traits(targetHasFeature, "debug");         // Debug support
+        bool threadptr = __traits(targetHasFeature, "threadptr");   // Thread pointer register
+        bool coprocessor = __traits(targetHasFeature, "coprocessor"); // Coprocessor interface
+    }
+    enum ProcFeatures = ProcFeaturesT();
+}
 else
     static assert(0, "Unsupported processor");
 
@@ -96,10 +218,23 @@ else version (ARM)
 {
     enum SupportUnalignedLoadStore = !ProcFeatures.strict_align;
 }
+else version (RISCV64)
+{
+    enum SupportUnalignedLoadStore = __traits(targetHasFeature, "unaligned-scalar-mem");
+}
+else version (RISCV32)
+{
+    enum SupportUnalignedLoadStore = __traits(targetHasFeature, "unaligned-scalar-mem");
+}
 else
 {
-    // TODO: I think MIPS R6 can do native unalogned loads/stores
-    enum SupportUnalignedLoadStore = false;
+    // No arch-level feature flag available (Xtensa, MIPS, etc.)
+    // Platforms that support unaligned access set -d-version=SupportUnaligned in Makefile
+    // (e.g., ESP32-S3 Xtensa LX7 has hardware unaligned load/store)
+    version (SupportUnaligned)
+        enum SupportUnalignedLoadStore = true;
+    else
+        enum SupportUnalignedLoadStore = false;
 }
 
 // Different arch may define this differently...

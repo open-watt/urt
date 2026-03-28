@@ -66,9 +66,12 @@ private:
         this.offset = offset;
     }
 
-    auto __debugOverview() => toString;
-    auto __debugExpanded() => toString;
-    auto __debugStringView() => toString;
+    version (Windows)
+    {
+        auto __debugOverview() => toString;
+        auto __debugExpanded() => toString;
+        auto __debugStringView() => toString;
+    }
 }
 
 void init_string_heap(uint string_heap_size) nothrow @nogc

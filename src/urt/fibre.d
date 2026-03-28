@@ -753,10 +753,13 @@ else
         pragma(inline, false)
         extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
         {
-            // just for thumb-1, thumb-2 can to the 32bit thing below.. somehow... apparently...?
+            // thumb-mode: compiler is generating Thumb instructions (Cortex-M micros)
+            // thumb2: ISA supports Thumb-2 (true for both Cortex-M4+ and Cortex-A7+)
+            // We check thumb (active mode), not thumb2 (capability), to avoid
+            // using the Thumb path on full ARM cores that can use stmia with sp.
             static if (ProcFeatures.thumb && !ProcFeatures.thumb2)
             {
-                static assert(false, "TODO: this needs to be tested somehow... thumb instructions are offset by 1 byte.");
+                static assert(false, "TODO: Thumb-1 context switch needs testing");
                 asm nothrow @nogc
                 {
                     `
@@ -778,7 +781,29 @@ else
                     ldmia r0!, {r4-r7}
                     ldmia r1!, {pc}
                     `
-    //                bx lr ; TODO: why is this even here? the prior instruction loads `pc`... maybe it's a hint to the branch predictor?
+//                    bx lr ; TODO: why is this even here? the prior instruction loads `pc`... maybe it's a hint to the branch predictor?
+                    : // no outputs
+                    : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
+                    : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "lr", "memory";
+                }
+            }
+            else static if (ProcFeatures.thumb)
+            {
+                // Thumb mode (Cortex-M): SP cannot appear in stm/ldm register lists.
+                // Layout: [r4..r11](0-28), [sp](32), [lr/pc](36) — matches co_init_stack
+                asm nothrow @nogc
+                {
+                    `
+                    stmia r1!, {r4-r11}
+                    mov r2, sp
+                    str r2, [r1]
+                    str lr, [r1, #4]
+                    ldmia r0!, {r4-r11}
+                    ldr r2, [r0]
+                    ldr r3, [r0, #4]
+                    mov sp, r2
+                    bx r3
+                    `
                     : // no outputs
                     : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
                     : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "lr", "memory";
@@ -786,6 +811,7 @@ else
             }
             else
             {
+                // ARM mode: SP can appear in stm/ldm
                 asm nothrow @nogc
                 {
                     `
@@ -849,6 +875,350 @@ else
                 : // no outputs
                 : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
                 : "x16", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory";
+            }
+        }
+    }
+    else version (RISCV64)
+    {
+        // RISC-V 64-bit: callee-saved sp, ra, s0-s11 (14 regs × 8 bytes)
+        // With D extension: also fs0-fs11 (12 regs × 8 bytes)
+        version (D_HardFloat)
+            enum SaveStateLen = 26; // 14 integer + 12 FP
+        else
+            enum SaveStateLen = 14;
+
+        void co_init_stack(void* base, void* top, coentry_t entry)
+        {
+            assert(is_aligned!16(base) && is_aligned!16(top), "Stack must be aligned to 16 bytes");
+
+            void** p = cast(void**)base;
+            p[0] = cast(void*)top;  // starting sp
+            p[1] = entry;           // starting ra (entry point)
+            p[2] = cast(void*)top;  // starting s0 (frame pointer)
+        }
+
+        version (D_HardFloat)
+        {
+            pragma(inline, false)
+            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+            {
+                asm nothrow @nogc
+                {
+                    `
+                    sd sp,    0(a1)
+                    sd ra,    8(a1)
+                    sd s0,   16(a1)
+                    sd s1,   24(a1)
+                    sd s2,   32(a1)
+                    sd s3,   40(a1)
+                    sd s4,   48(a1)
+                    sd s5,   56(a1)
+                    sd s6,   64(a1)
+                    sd s7,   72(a1)
+                    sd s8,   80(a1)
+                    sd s9,   88(a1)
+                    sd s10,  96(a1)
+                    sd s11, 104(a1)
+                    fsd fs0,  112(a1)
+                    fsd fs1,  120(a1)
+                    fsd fs2,  128(a1)
+                    fsd fs3,  136(a1)
+                    fsd fs4,  144(a1)
+                    fsd fs5,  152(a1)
+                    fsd fs6,  160(a1)
+                    fsd fs7,  168(a1)
+                    fsd fs8,  176(a1)
+                    fsd fs9,  184(a1)
+                    fsd fs10, 192(a1)
+                    fsd fs11, 200(a1)
+                    ld sp,    0(a0)
+                    ld s0,   16(a0)
+                    ld s1,   24(a0)
+                    ld s2,   32(a0)
+                    ld s3,   40(a0)
+                    ld s4,   48(a0)
+                    ld s5,   56(a0)
+                    ld s6,   64(a0)
+                    ld s7,   72(a0)
+                    ld s8,   80(a0)
+                    ld s9,   88(a0)
+                    ld s10,  96(a0)
+                    ld s11, 104(a0)
+                    fld fs0,  112(a0)
+                    fld fs1,  120(a0)
+                    fld fs2,  128(a0)
+                    fld fs3,  136(a0)
+                    fld fs4,  144(a0)
+                    fld fs5,  152(a0)
+                    fld fs6,  160(a0)
+                    fld fs7,  168(a0)
+                    fld fs8,  176(a0)
+                    fld fs9,  184(a0)
+                    fld fs10, 192(a0)
+                    fld fs11, 200(a0)
+                    ld ra,    8(a0)
+                    ret
+                    `
+                    : // no outputs
+                    : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                    : "memory";
+                }
+            }
+        }
+        else
+        {
+            pragma(inline, false)
+            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+            {
+                asm nothrow @nogc
+                {
+                    `
+                    sd sp,    0(a1)
+                    sd ra,    8(a1)
+                    sd s0,   16(a1)
+                    sd s1,   24(a1)
+                    sd s2,   32(a1)
+                    sd s3,   40(a1)
+                    sd s4,   48(a1)
+                    sd s5,   56(a1)
+                    sd s6,   64(a1)
+                    sd s7,   72(a1)
+                    sd s8,   80(a1)
+                    sd s9,   88(a1)
+                    sd s10,  96(a1)
+                    sd s11, 104(a1)
+                    ld sp,    0(a0)
+                    ld s0,   16(a0)
+                    ld s1,   24(a0)
+                    ld s2,   32(a0)
+                    ld s3,   40(a0)
+                    ld s4,   48(a0)
+                    ld s5,   56(a0)
+                    ld s6,   64(a0)
+                    ld s7,   72(a0)
+                    ld s8,   80(a0)
+                    ld s9,   88(a0)
+                    ld s10,  96(a0)
+                    ld s11, 104(a0)
+                    ld ra,    8(a0)
+                    ret
+                    `
+                    : // no outputs
+                    : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                    : "memory";
+                }
+            }
+        }
+    }
+    else version (RISCV32)
+    {
+        // SaveStateLen must be defined before co_active_buffer (line 444)
+        version (RISCV32E)
+            enum SaveStateLen = 4;  // RV32E: sp, ra, s0-s1
+        else version (D_HardFloat)
+            enum SaveStateLen = 26; // RV32I: 14 integer + 12 FP
+        else
+            enum SaveStateLen = 14; // RV32I: sp, ra, s0-s11
+
+        version (RISCV32E)
+        {
+            void co_init_stack(void* base, void* top, coentry_t entry)
+            {
+                assert(is_aligned!16(base) && is_aligned!16(top), "Stack must be aligned to 16 bytes");
+
+                void** p = cast(void**)base;
+                p[0] = cast(void*)top;  // starting sp
+                p[1] = entry;           // starting ra (entry point)
+                p[2] = cast(void*)top;  // starting s0 (frame pointer)
+            }
+
+            pragma(inline, false)
+            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+            {
+                asm nothrow @nogc
+                {
+                    `
+                    sw sp,  0(a1)
+                    sw ra,  4(a1)
+                    sw s0,  8(a1)
+                    sw s1, 12(a1)
+                    lw sp,  0(a0)
+                    lw s0,  8(a0)
+                    lw s1, 12(a0)
+                    lw ra,  4(a0)
+                    ret
+                    `
+                    : // no outputs
+                    : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                    : "memory";
+                }
+            }
+        }
+        else
+        {
+
+            void co_init_stack(void* base, void* top, coentry_t entry)
+            {
+                assert(is_aligned!16(base) && is_aligned!16(top), "Stack must be aligned to 16 bytes");
+
+                void** p = cast(void**)base;
+                p[0] = cast(void*)top;  // starting sp
+                p[1] = entry;           // starting ra (entry point)
+                p[2] = cast(void*)top;  // starting s0 (frame pointer)
+            }
+
+            version (D_HardFloat)
+            {
+                pragma(inline, false)
+                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+                {
+                    asm nothrow @nogc
+                    {
+                        `
+                        sw sp,   0(a1)
+                        sw ra,   4(a1)
+                        sw s0,   8(a1)
+                        sw s1,  12(a1)
+                        sw s2,  16(a1)
+                        sw s3,  20(a1)
+                        sw s4,  24(a1)
+                        sw s5,  28(a1)
+                        sw s6,  32(a1)
+                        sw s7,  36(a1)
+                        sw s8,  40(a1)
+                        sw s9,  44(a1)
+                        sw s10, 48(a1)
+                        sw s11, 52(a1)
+                        fsw fs0,  56(a1)
+                        fsw fs1,  60(a1)
+                        fsw fs2,  64(a1)
+                        fsw fs3,  68(a1)
+                        fsw fs4,  72(a1)
+                        fsw fs5,  76(a1)
+                        fsw fs6,  80(a1)
+                        fsw fs7,  84(a1)
+                        fsw fs8,  88(a1)
+                        fsw fs9,  92(a1)
+                        fsw fs10, 96(a1)
+                        fsw fs11, 100(a1)
+                        lw sp,   0(a0)
+                        lw s0,   8(a0)
+                        lw s1,  12(a0)
+                        lw s2,  16(a0)
+                        lw s3,  20(a0)
+                        lw s4,  24(a0)
+                        lw s5,  28(a0)
+                        lw s6,  32(a0)
+                        lw s7,  36(a0)
+                        lw s8,  40(a0)
+                        lw s9,  44(a0)
+                        lw s10, 48(a0)
+                        lw s11, 52(a0)
+                        flw fs0,  56(a0)
+                        flw fs1,  60(a0)
+                        flw fs2,  64(a0)
+                        flw fs3,  68(a0)
+                        flw fs4,  72(a0)
+                        flw fs5,  76(a0)
+                        flw fs6,  80(a0)
+                        flw fs7,  84(a0)
+                        flw fs8,  88(a0)
+                        flw fs9,  92(a0)
+                        flw fs10, 96(a0)
+                        flw fs11, 100(a0)
+                        lw ra,   4(a0)
+                        ret
+                        `
+                        : // no outputs
+                        : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                        : "memory";
+                    }
+                }
+            }
+            else
+            {
+                pragma(inline, false)
+                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+                {
+                    asm nothrow @nogc
+                    {
+                        `
+                        sw sp,   0(a1)
+                        sw ra,   4(a1)
+                        sw s0,   8(a1)
+                        sw s1,  12(a1)
+                        sw s2,  16(a1)
+                        sw s3,  20(a1)
+                        sw s4,  24(a1)
+                        sw s5,  28(a1)
+                        sw s6,  32(a1)
+                        sw s7,  36(a1)
+                        sw s8,  40(a1)
+                        sw s9,  44(a1)
+                        sw s10, 48(a1)
+                        sw s11, 52(a1)
+                        lw sp,   0(a0)
+                        lw s0,   8(a0)
+                        lw s1,  12(a0)
+                        lw s2,  16(a0)
+                        lw s3,  20(a0)
+                        lw s4,  24(a0)
+                        lw s5,  28(a0)
+                        lw s6,  32(a0)
+                        lw s7,  36(a0)
+                        lw s8,  40(a0)
+                        lw s9,  44(a0)
+                        lw s10, 48(a0)
+                        lw s11, 52(a0)
+                        lw ra,   4(a0)
+                        ret
+                        `
+                        : // no outputs
+                        : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                        : "memory";
+                    }
+                }
+            }
+        }
+    }
+    else version (Xtensa)
+    {
+        // Xtensa call0 ABI: callee-saved a0 (return addr), a1 (sp), a12-a15
+        // TODO: if windowed ABI is used, need register window spill (entry/retw)
+        enum SaveStateLen = 6;
+
+        void co_init_stack(void* base, void* top, coentry_t entry)
+        {
+            assert(is_aligned!16(base) && is_aligned!16(top), "Stack must be aligned to 16 bytes");
+
+            void** p = cast(void**)base;
+            p[0] = cast(void*)top;  // starting a1 (sp)
+            p[1] = entry;           // starting a0 (return address)
+        }
+
+        pragma(inline, false)
+        extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+        {
+            asm nothrow @nogc
+            {
+                `
+                s32i a1,  a3, 0
+                s32i a0,  a3, 4
+                s32i a12, a3, 8
+                s32i a13, a3, 12
+                s32i a14, a3, 16
+                s32i a15, a3, 20
+                l32i a1,  a2, 0
+                l32i a12, a2, 8
+                l32i a13, a2, 12
+                l32i a14, a2, 16
+                l32i a15, a2, 20
+                l32i a0,  a2, 4
+                ret
+                `
+                : // no outputs
+                : // a2=newCtx, a3=oldCtx (@naked, call0 ABI)
+                : "memory";
             }
         }
     }

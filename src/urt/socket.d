@@ -51,6 +51,88 @@ else version (Posix)
     enum AF_BRIDGE = 7;     // Multiprotocol bridge
     enum AF_INET6 = 10;     // IP version 6
 }
+else version (FreeStanding)
+{
+    // Bare-metal: BSD socket constants compatible with lwIP
+    alias SocketHandle = int;
+    enum INVALID_SOCKET = -1;
+
+    enum AF_UNSPEC = 0;
+    enum AF_UNIX   = 1;
+    enum AF_INET   = 2;
+    enum AF_INET6  = 10;
+
+    enum SOCK_STREAM = 1;
+    enum SOCK_DGRAM  = 2;
+    enum SOCK_RAW    = 3;
+
+    enum IPPROTO_IP   = 0;
+    enum IPPROTO_ICMP = 1;
+    enum IPPROTO_TCP  = 6;
+    enum IPPROTO_UDP  = 17;
+    enum IPPROTO_IPV6 = 41;
+    enum IPPROTO_RAW  = 255;
+
+    enum SOL_SOCKET = 0xFFF;
+
+    enum MSG_PEEK = 0x02;
+
+    alias socklen_t = uint;
+    struct in_addr { uint s_addr; }
+    struct in6_addr { ubyte[16] s6_addr; }
+    struct sockaddr { ushort sa_family; ubyte[14] sa_data; }
+    struct sockaddr_in { ushort sin_family; ushort sin_port; in_addr sin_addr; ubyte[8] sin_zero; }
+    struct sockaddr_in6 { ushort sin6_family; ushort sin6_port; uint sin6_flowinfo; in6_addr sin6_addr; uint sin6_scope_id; }
+    struct sockaddr_storage { ushort ss_family; ubyte[126] _pad; }
+    struct linger { ushort l_onoff; ushort l_linger; }
+    struct ip_mreq { in_addr imr_multiaddr; in_addr imr_interface; }
+    struct iovec { void* iov_base; size_t iov_len; }
+    struct msghdr { void* msg_name; socklen_t msg_namelen; iovec* msg_iov; size_t msg_iovlen; void* msg_control; size_t msg_controllen; int msg_flags; }
+
+    enum SO_ERROR = 0x1007;
+
+    enum POLLRDNORM = 0x0040;
+    enum POLLWRNORM = 0x0100;
+    enum POLLERR    = 0x0008;
+    enum POLLHUP    = 0x0010;
+    enum POLLNVAL   = 0x0020;
+
+    enum AI_PASSIVE     = 0x01;
+    enum AI_CANONNAME   = 0x02;
+    enum AI_NUMERICHOST = 0x04;
+    enum AI_V4MAPPED    = 0x08;
+    enum AI_ALL         = 0x10;
+    enum AI_ADDRCONFIG  = 0x20;
+    enum AI_NUMERICSERV = 0x400;
+
+    struct pollfd { int fd; short events; short revents; }
+    struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; socklen_t ai_addrlen; sockaddr* ai_addr; char* ai_canonname; addrinfo* ai_next; }
+
+    // BSD socket function stubs — will be provided by the IP stack
+    extern(C) nothrow @nogc
+    {
+        int poll(pollfd*, uint, int);
+        SocketHandle socket(int domain, int type, int protocol);
+        int _bind(SocketHandle, const(sockaddr)*, socklen_t);
+        int _listen(SocketHandle, int);
+        int _connect(SocketHandle, const(sockaddr)*, socklen_t);
+        SocketHandle _accept(SocketHandle, sockaddr*, socklen_t*);
+        ptrdiff_t _send(SocketHandle, const(void)*, size_t, int);
+        ptrdiff_t _sendto(SocketHandle, const(void)*, size_t, int, const(sockaddr)*, socklen_t);
+        ptrdiff_t _sendmsg(SocketHandle, const(msghdr)*, int);
+        ptrdiff_t _recv(SocketHandle, void*, size_t, int);
+        ptrdiff_t _recvfrom(SocketHandle, void*, size_t, int, sockaddr*, socklen_t*);
+        int _shutdown(SocketHandle, int);
+        int setsockopt(SocketHandle, int, int, const(void)*, socklen_t);
+        int getsockopt(SocketHandle, int, int, void*, socklen_t*);
+        int getsockname(SocketHandle, sockaddr*, socklen_t*);
+        int getpeername(SocketHandle, sockaddr*, socklen_t*);
+        int getaddrinfo(const(char)*, const(char)*, const(addrinfo)*, addrinfo**);
+        void freeaddrinfo(addrinfo*);
+        int gethostname(char*, size_t);
+        int close(int);
+    }
+}
 else
     static assert(false, "Platform not supported");
 
@@ -203,12 +285,11 @@ Result create_socket(AddressFamily af, SocketType type, Protocol proto, out Sock
 
 Result close(Socket socket)
 {
+    int result;
     version (Windows)
-        int result = closesocket(socket.handle);
-    else version (Posix)
-        int result = close(socket.handle);
+        result = closesocket(socket.handle);
     else
-        assert(false, "Not implemented!");
+        result = close(socket.handle);
     if (result < 0)
         return socket_getlasterror();
 
@@ -620,7 +701,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
     // determine the option 'level'
     OptLevel level = get_optlevel(option);
     version (HasIPv6) {} else
-        assert(level != OptLevel.ipv6 && level != OptLevel.ICMPv6, "Platform does not support IPv6!");
+        assert(level != OptLevel.ipv6 && level != OptLevel.icmpv6, "Platform does not support IPv6!");
 
     // platforms don't all agree on option data formats!
     const(void)* arg = optval;
@@ -982,21 +1063,22 @@ Result poll(PollFd[] pollFds, Duration timeout, out uint numEvents)
     assert(pollFds.length <= MaxFds, "Too many fds!");
     version (Windows)
         WSAPOLLFD[MaxFds] fds;
-    else version (Posix)
+    else
         pollfd[MaxFds] fds;
     for (size_t i = 0; i < pollFds.length; ++i)
     {
         fds[i].fd = pollFds[i].socket.handle;
         fds[i].revents = 0;
-        fds[i].events = ((pollFds[i].request_events & PollEvents.read)  ? POLLRDNORM : 0) |
-                        ((pollFds[i].request_events & PollEvents.write) ? POLLWRNORM : 0);
+        fds[i].events = cast(short)(((pollFds[i].request_events & PollEvents.read)  ? POLLRDNORM : 0) |
+                        ((pollFds[i].request_events & PollEvents.write) ? POLLWRNORM : 0));
     }
+    int r;
     version (Windows)
-        int r = WSAPoll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
+        r = WSAPoll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
     else version (Posix)
-        int r = _poll(fds.ptr, pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
+        r = _poll(fds.ptr, pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
     else
-        assert(false, "Not implemented!");
+        r = poll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
     if (r < 0)
     {
         numEvents = 0;
@@ -1535,6 +1617,16 @@ else version (Darwin)
         OptInfo( TCP_KEEPALIVE, OptType.duration, OptType.seconds ),
         OptInfo( TCP_NODELAY, OptType.bool_, OptType.int_ ),
     ];
+}
+else version (FreeStanding)
+{
+    // Bare-metal stub — socket options not yet supported
+    __gshared immutable OptInfo[SocketOption.max] s_socketOptions = () {
+        OptInfo[SocketOption.max] r;
+        foreach (ref o; r)
+            o = OptInfo(-1, OptType.unsupported, OptType.unsupported);
+        return r;
+    }();
 }
 else
     static assert(false, "TODO");

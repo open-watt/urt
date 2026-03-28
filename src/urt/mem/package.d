@@ -63,7 +63,7 @@ private:
 version(DigitalMars)
 {
     // DMD lowers alloca(n) calls to __alloca(n)
-    extern (C) void* __alloca(int nbytes)
+    extern(C) void* __alloca(int nbytes)
     {
         version (D_InlineAsm_X86)
         {

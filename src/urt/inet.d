@@ -163,14 +163,17 @@ nothrow @nogc:
         return offset;
     }
 
-    auto __debugOverview()
+    version (Windows)
     {
-        import urt.mem;
-        char[] buffer = cast(char[])tempAllocator.alloc(15);
-        ptrdiff_t len = toString(buffer, null, null);
-        return buffer[0 .. len];
+        auto __debugOverview()
+        {
+            import urt.mem;
+            char[] buffer = debug_alloc!char(15);
+            ptrdiff_t len = toString(buffer, null, null);
+            return buffer[0 .. len];
+        }
+        auto __debugExpanded() => b[];
     }
-    auto __debugExpanded() => b[];
 }
 
 
@@ -355,14 +358,17 @@ nothrow @nogc:
         return offset;
     }
 
-    auto __debugOverview()
+    version (Windows)
     {
-        import urt.mem;
-        char[] buffer = cast(char[])tempAllocator.alloc(39);
-        ptrdiff_t len = toString(buffer, null, null);
-        return buffer[0 .. len];
+        auto __debugOverview()
+        {
+            import urt.mem;
+            char[] buffer = debug_alloc!char(39);
+            ptrdiff_t len = toString(buffer, null, null);
+            return buffer[0 .. len];
+        }
+        auto __debugExpanded() => s[];
     }
-    auto __debugExpanded() => s[];
 }
 
 struct IPNetworkAddress
@@ -444,12 +450,15 @@ nothrow @nogc:
         return taken + t;
     }
 
-    auto __debugOverview()
+    version (Windows)
     {
-        import urt.mem;
-        char[] buffer = cast(char[])tempAllocator.alloc(18);
-        ptrdiff_t len = toString(buffer, null, null);
-        return buffer[0 .. len];
+        auto __debugOverview()
+        {
+            import urt.mem;
+            char[] buffer = debug_alloc!char(18);
+            ptrdiff_t len = toString(buffer, null, null);
+            return buffer[0 .. len];
+        }
     }
 }
 
@@ -541,12 +550,15 @@ nothrow @nogc:
         return taken + t;
     }
 
-    auto __debugOverview()
+    version (Windows)
     {
-        import urt.mem;
-        char[] buffer = cast(char[])tempAllocator.alloc(42);
-        ptrdiff_t len = toString(buffer, null, null);
-        return buffer[0 .. len];
+        auto __debugOverview()
+        {
+            import urt.mem;
+            char[] buffer = debug_alloc!char(42);
+            ptrdiff_t len = toString(buffer, null, null);
+            return buffer[0 .. len];
+        }
     }
 }
 
@@ -744,12 +756,15 @@ nothrow @nogc:
         return taken;
     }
 
-    auto __debugOverview()
+    version (Windows)
     {
-        import urt.mem;
-        char[] buffer = cast(char[])tempAllocator.alloc(47);
-        ptrdiff_t len = toString(buffer, null, null);
-        return buffer[0 .. len];
+        auto __debugOverview()
+        {
+            import urt.mem;
+            char[] buffer = debug_alloc!char(47);
+            ptrdiff_t len = toString(buffer, null, null);
+            return buffer[0 .. len];
+        }
     }
 }
 

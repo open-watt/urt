@@ -84,7 +84,7 @@ private:
 
 // declare some stuff outside the template...
 
-size_t read_ring(void[] buffer, const void[] data, ref uint readCur, const int writeCur, const size_t capacity)
+size_t read_ring(void[] buffer, const void[] data, ref uint readCur, const uint writeCur, const size_t capacity)
 {
     if (writeCur >= readCur)
     {

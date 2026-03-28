@@ -857,7 +857,7 @@ void set_utc_time(ulong unix_ns)
 
 private:
 
-immutable MonoTime startTime;
+__gshared immutable MonoTime startTime;
 
 __gshared immutable string[12] g_month_names = [ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" ];
 __gshared immutable uint[9] digit_multipliers = [ 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1 ];
@@ -885,7 +885,7 @@ else version (FreeStanding)
     enum uint nsec_multiplier = 1;
 }
 
-immutable ulong sys_time_offset;
+__gshared immutable ulong sys_time_offset;
 __gshared bool has_wall_time;
 
 package(urt) void init_clock()

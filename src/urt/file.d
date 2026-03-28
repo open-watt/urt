@@ -848,7 +848,8 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
 }
 
 
-unittest
+version (FreeStanding) {}
+else unittest
 {
     import urt.string;
 

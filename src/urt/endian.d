@@ -65,9 +65,9 @@ ulong endianToNative(T, bool little)(ref const ubyte[8] bytes)
     {
         // ctfe can't do the memory reinterpreting
         static if (little)
-            return cast(T)(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24 | cast(ulong)bytes[4] << 32 | cast(ulong)bytes[5] << 40 | cast(ulong)bytes[6] << 48 | cast(ulong)bytes[7] << 56);
+            return cast(T)(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | ulong(bytes[3]) << 24 | ulong(bytes[4]) << 32 | ulong(bytes[5]) << 40 | ulong(bytes[6]) << 48 | ulong(bytes[7]) << 56);
         else
-            return cast(T)(cast(ulong)bytes[0] << 56 | cast(ulong)bytes[1] << 48 | cast(ulong)bytes[2] << 40 | cast(ulong)bytes[3] << 32 | bytes[4] << 24 | bytes[5] << 16 | bytes[6] << 8 | bytes[7]);
+            return cast(T)(ulong(bytes[0]) << 56 | ulong(bytes[1]) << 48 | ulong(bytes[2]) << 40 | ulong(bytes[3]) << 32 | ulong(bytes[4]) << 24 | bytes[5] << 16 | bytes[6] << 8 | bytes[7]);
     }
     static if (SupportUnalignedLoadStore)
     {

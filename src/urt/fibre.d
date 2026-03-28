@@ -37,13 +37,13 @@ alias YieldHandler = ResumeHandler function(ref Fibre yielding, AwakenEvent awak
 
 struct Fibre
 {
-@nogc:
+nothrow @nogc:
 
     this() @disable;
     this(ref typeof(this)) @disable;    // disable copy
     this(typeof(this)) @disable;        // disable move
 
-    this(size_t stackSize) nothrow
+    this(size_t stackSize)
     {
         if (!mainFibre)
             mainFibre = co_active();
@@ -54,7 +54,7 @@ struct Fibre
         finished = true; // init in a state ready to be recycled...
         aborted = false;
 
-        static void fibreFunc()
+        static void fibreFunc() nothrow
         {
             import urt.system : abort;
 
@@ -84,8 +84,8 @@ struct Fibre
                 }
                 catch (Throwable e)
                 {
-                    import urt.log;
-                    writeDebugf("fibre abort: {0}:{1} - {2}", e.file, e.line, e.msg);
+                    import urt.io;
+                    writef_to!(WriteTarget.stderr, true)("abort: {0}:{1} - {2}", e.file, e.line, e.msg);
                     abort();
                 }
 
@@ -102,14 +102,14 @@ struct Fibre
         fibre = co_create(stackSize, &fibreFunc, &this);
     }
 
-    this(FibreEntryDelegate fibreEntry, YieldHandler yieldHandler, size_t stackSize = DefaultStackSize) nothrow
+    this(FibreEntryDelegate fibreEntry, YieldHandler yieldHandler, size_t stackSize = DefaultStackSize)
     {
         this(cast(FibreEntryFunc)fibreEntry.funcptr, yieldHandler, fibreEntry.ptr, stackSize);
 
         is_delegate = true;
     }
 
-    this(FibreEntryFunc fibreEntry, YieldHandler yieldHandler, void* userData = null, size_t stackSize = DefaultStackSize) nothrow
+    this(FibreEntryFunc fibreEntry, YieldHandler yieldHandler, void* userData = null, size_t stackSize = DefaultStackSize)
     {
         this(stackSize);
 
@@ -120,7 +120,7 @@ struct Fibre
         finished = false;
     }
 
-    ~this() nothrow
+    ~this()
     {
         assert(co_active() != fibre, "Can't delete the current fibre!");
 
@@ -133,12 +133,12 @@ struct Fibre
         co_delete(fibre);
     }
 
-    void resume() nothrow
+    void resume()
     {
         co_switch(fibre);
     }
 
-    void abort() nothrow
+    void abort()
     {
         assert(co_active() == mainFibre, "Can't abort when active; use urt.fibre.abort() instead.");
 
@@ -147,7 +147,7 @@ struct Fibre
         co_switch(fibre);
     }
 
-    void recycle(FibreEntryDelegate fibreEntry) pure nothrow
+    void recycle(FibreEntryDelegate fibreEntry) pure
     {
         assert(isFinished(), "Can't recycle a fibre that hasn't finished yet!");
 
@@ -159,7 +159,7 @@ struct Fibre
         aborted = false;
     }
 
-    void recycle(FibreEntryFunc fibreEntry, void* userData = null) pure nothrow
+    void recycle(FibreEntryFunc fibreEntry, void* userData = null) pure
     {
         assert(isFinished(), "Can't recycle a fibre that hasn't finished yet!");
 
@@ -171,7 +171,7 @@ struct Fibre
         aborted = false;
     }
 
-    void reset() pure nothrow
+    void reset() pure
     {
         assert(isFinished(), "Can't restart a fibre that hasn't finished yet!");
 
@@ -180,13 +180,13 @@ struct Fibre
         aborted = false;
     }
 
-    bool isFinished() const pure nothrow
+    bool isFinished() const pure
         => finished;
 
-    bool wasAborted() const pure nothrow
+    bool wasAborted() const pure
         => aborted;
 
-    size_t stackSize() const pure nothrow
+    size_t stackSize() const pure
     {
         assert(fibre, "Fibre not created!");
         auto fdata = co_get_fibre_data(fibre);
@@ -340,7 +340,7 @@ unittest
 nothrow:
 
 alias cothread_t = void*;
-alias coentry_t = void function() @nogc;
+alias coentry_t = void function() nothrow @nogc;
 
 version (UseWindowsFibreAPI)
 {

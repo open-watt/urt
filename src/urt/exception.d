@@ -27,20 +27,34 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
     if (msg.length == 0)
         msg = "Assertion failed";
 
-    debug
+    version (BL808)
     {
-        import urt.io : writef_to, WriteTarget;
-        import urt.dbg;
-
-        version (Windows)
-            writef_to!(WriteTarget.debugstring, true)("{0}({1}): {2}", file, line, msg);
-        writef_to!(WriteTarget.stdout, true)("{0}({1}): {2}", file, line, msg);
-
-        breakpoint();
+        import sys.bl808.uart : uart0_puts, uart0_hex;
+        import urt.mem.temp : tconcat;
+        uart0_puts(tconcat("\n*** ASSERT: ", msg, " at ", file, ':', line, '\n'));
+        while (true)
+        {
+            // SPIN!
+            // (we should probably reboot)
+        }
     }
     else
     {
-        import urt.internal.stdc : exit;
-        exit(-1);
+        debug
+        {
+            import urt.io : writef_to, WriteTarget;
+            import urt.dbg;
+
+            version (Windows)
+                writef_to!(WriteTarget.debugstring, true)("{0}({1}): {2}", file, line, msg);
+            writef_to!(WriteTarget.stdout, true)("{0}({1}): {2}", file, line, msg);
+
+            breakpoint();
+        }
+        else
+        {
+            import urt.internal.stdc : exit;
+            exit(-1);
+        }
     }
 }

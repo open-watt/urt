@@ -307,7 +307,7 @@ Result send(Socket socket, MsgFlags flags, size_t* bytes_sent, const void[][] bu
 {
     version (Windows)
     {
-        uint sent = void;
+        uint sent;
         WSABUF[32] bufs = void;
         assert(buffers.length <= bufs.length, "Too many buffers!");
 
@@ -320,10 +320,12 @@ Result send(Socket socket, MsgFlags flags, size_t* bytes_sent, const void[][] bu
             bufs[n].buf = cast(char*)buffer.ptr;
             bufs[n++].len = cast(uint)buffer.length;
         }
-
-        int rc = WSASend(socket.handle, bufs.ptr, n, &sent, /+map_message_flags(flags)+/ 0, null, null); // there are no meaningful flags on Windows
-        if (rc == SOCKET_ERROR)
-            return socket_getlasterror();
+        if (n > 0)
+        {
+            int rc = WSASend(socket.handle, bufs.ptr, n, &sent, /+map_message_flags(flags)+/ 0, null, null); // there are no meaningful flags on Windows
+            if (rc == SOCKET_ERROR)
+                return socket_getlasterror();
+        }
         if (bytes_sent)
             *bytes_sent = sent;
         return Result.success;
@@ -353,7 +355,7 @@ Result sendto(Socket socket, const InetAddress* address, size_t* bytes_sent, con
             assert(sock_addr, "Invalid socket address");
         }
 
-        uint sent = void;
+        uint sent;
         WSABUF[32] bufs = void;
         assert(buffers.length <= bufs.length, "Too many buffers!");
 
@@ -366,10 +368,12 @@ Result sendto(Socket socket, const InetAddress* address, size_t* bytes_sent, con
             bufs[n].buf = cast(char*)buffer.ptr;
             bufs[n++].len = cast(uint)buffer.length;
         }
-
-        int r = WSASendTo(socket.handle, bufs.ptr, n, &sent, /+map_message_flags(flags)+/ 0, sock_addr, cast(int)addr_len, null, null); // there are no meaningful flags on Windows
-        if (r == SOCKET_ERROR)
-            return socket_getlasterror();
+        if (n > 0)
+        {
+            int r = WSASendTo(socket.handle, bufs.ptr, n, &sent, /+map_message_flags(flags)+/ 0, sock_addr, cast(int)addr_len, null, null); // there are no meaningful flags on Windows
+            if (r == SOCKET_ERROR)
+                return socket_getlasterror();
+        }
         if (bytes_sent)
             *bytes_sent = sent;
         return Result.success;
@@ -391,7 +395,7 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
 
     version (Windows)
     {
-        uint sent = void;
+        uint sent;
         WSAMSG msg;
         WSABUF[32] bufs = void;
         assert(buffers.length <= bufs.length, "Too many buffers!");
@@ -405,21 +409,24 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
             bufs[n].buf = cast(char*)buffer.ptr;
             bufs[n++].len = cast(uint)buffer.length;
         }
+        if (n > 0)
+        {
+            msg.name = sock_addr;
+            msg.namelen = cast(int)addr_len;
+            msg.lpBuffers = bufs.ptr;
+            msg.dwBufferCount = n;
+            msg.Control.buf = cast(char*)control.ptr;
+            msg.Control.len = cast(uint)control.length;
+            msg.dwFlags = 0;
 
-        msg.name = sock_addr;
-        msg.namelen = cast(int)addr_len;
-        msg.lpBuffers = bufs.ptr;
-        msg.dwBufferCount = n;
-        msg.Control.buf = cast(char*)control.ptr;
-        msg.Control.len = cast(uint)control.length;
-        msg.dwFlags = 0;
-
-        int rc = WSASendMsg(socket.handle, &msg, /+map_message_flags(flags)+/ 0, &sent, null, null); // there are no meaningful flags on Windows
-        if (rc == SOCKET_ERROR)
-            return socket_getlasterror();
+            int rc = WSASendMsg(socket.handle, &msg, /+map_message_flags(flags)+/ 0, &sent, null, null); // there are no meaningful flags on Windows
+            if (rc == SOCKET_ERROR)
+                return socket_getlasterror();
+        }
     }
     else
     {
+        ptrdiff_t sent;
         msghdr hdr;
         iovec[32] iov = void;
         assert(buffers.length <= iov.length, "Too many buffers!");
@@ -433,18 +440,20 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
             iov[n].iov_base = cast(void*)buffer.ptr;
             iov[n++].iov_len = buffer.length;
         }
+        if (n > 0)
+        {
+            hdr.msg_name = sock_addr;
+            hdr.msg_namelen = cast(socklen_t)addr_len;
+            hdr.msg_iov = iov.ptr;
+            hdr.msg_iovlen = n;
+            hdr.msg_control = cast(void*)control.ptr;
+            hdr.msg_controllen = control.length;
+            hdr.msg_flags = 0;
 
-        hdr.msg_name = sock_addr;
-        hdr.msg_namelen = cast(socklen_t)addr_len;
-        hdr.msg_iov = iov.ptr;
-        hdr.msg_iovlen = n;
-        hdr.msg_control = cast(void*)control.ptr;
-        hdr.msg_controllen = control.length;
-        hdr.msg_flags = 0;
-
-        ptrdiff_t sent = _sendmsg(socket.handle, &hdr, map_message_flags(flags));
-        if (sent < 0)
-            return socket_getlasterror();
+            sent = _sendmsg(socket.handle, &hdr, map_message_flags(flags));
+            if (sent < 0)
+                return socket_getlasterror();
+        }
     }
     if (bytes_sent)
         *bytes_sent = sent;

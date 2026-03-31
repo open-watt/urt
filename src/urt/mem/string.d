@@ -171,15 +171,20 @@ void* allocWithStringCache(size_t bytes, String[] cachedStrings, const(char[])[]
 
 class StringAllocator : NoGCAllocator
 {
-    override void[] alloc(size_t bytes, size_t alignment = 1) nothrow @nogc
+    override void[] alloc(size_t bytes, size_t alignment = 1) pure nothrow @nogc
     {
-        assert(stringHeapCursor + bytes < stringHeap.length, "String heap overflow!");
+        static void[] impl(size_t bytes, size_t alignment) nothrow @nogc
+        {
+            assert(stringHeapCursor + bytes < stringHeap.length, "String heap overflow!");
 
-        char[] heap = cast(char[])stringHeap;
-        return heap[stringHeapCursor .. stringHeapCursor + bytes];
+            char[] heap = cast(char[])stringHeap;
+            return heap[stringHeapCursor .. stringHeapCursor + bytes];
+        }
+        alias PureHack = void[] function(size_t, size_t) pure nothrow @nogc;
+        return (cast(PureHack)&impl)(bytes, alignment);
     }
 
-    override void free(void[] mem) nothrow @nogc
+    override void free(void[] mem) pure nothrow @nogc
     {
         // you don't free cached strings!
     }

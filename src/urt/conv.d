@@ -597,12 +597,11 @@ unittest
 }
 
 
-ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null) // pure
+ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null) pure
 {
     // TODO: this function should be oblitereated and implemented natively...
     //       CRT call can't CTFE, which is a shame
 
-    import urt.internal.stdc;
     import urt.string.format : concat;
 
     char[16] fmt = void;
@@ -686,6 +685,8 @@ template to(T)
 
 
 private:
+
+extern(C) int snprintf(const char*, const size_t, const char*, ...) pure nothrow @nogc;
 
 // valid result is 0 .. 35; result is garbage outside that bound
 uint get_digit(char c) pure

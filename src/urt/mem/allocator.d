@@ -2,28 +2,30 @@ module urt.mem.allocator;
 
 import urt.lifetime;
 
+nothrow:
+
 
 // TODO: this should be defined by platform/compiler/etc...
 enum DefaultAlign = size_t.sizeof;
 
-NoGCAllocator defaultAllocator() nothrow @nogc
+NoGCAllocator defaultAllocator() pure @nogc
 {
-    return Mallocator.instance;
+    return Mallocator.instance();
 }
 
-NoGCAllocator tempAllocator() nothrow @nogc
+NoGCAllocator tempAllocator() pure @nogc
 {
     import urt.mem.temp;
-
-    return TempAllocator.instance;
+    return TempAllocator.instance();
 }
 
 
 class Allocator
 {
-    abstract void[] alloc(size_t bytes, size_t alignment = DefaultAlign) nothrow;
+nothrow:
+    abstract void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure;
 
-    void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) nothrow
+    void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) pure
     {
         void[] newMem = alloc(newSize, alignment);
         if (newMem != null)
@@ -37,16 +39,16 @@ class Allocator
         return newMem;
     }
 
-    void[] expand(void[] mem, size_t newSize) nothrow
+    void[] expand(void[] mem, size_t newSize) pure
     {
         return null;
     }
 
-    abstract void free(void[] mem) nothrow;
+    abstract void free(void[] mem) pure;
 
 //    abstract size_t getUsableSize(void* p); // get the usable size for an allocation...
 
-    final T* allocT(T, Args...)(auto ref Args args) nothrow
+    final T* allocT(T, Args...)(auto ref Args args)
         if (!is(T == class))
     {
         T* item = cast(T*)alloc(T.sizeof, T.alignof).ptr;
@@ -59,7 +61,7 @@ class Allocator
         return item;
     }
 
-    final T allocT(T, Args...)(auto ref Args args) nothrow
+    final T allocT(T, Args...)(auto ref Args args)
         if (is(T == class))
     {
         T item = cast(T)alloc(__traits(classInstanceSize, T), __traits(classInstanceAlignment, T)).ptr;
@@ -72,7 +74,7 @@ class Allocator
         return item;
     }
 
-    final void freeT(T)(T* item) nothrow
+    final void freeT(T)(T* item)
         if (!is(T == class))
     {
         try
@@ -84,7 +86,7 @@ class Allocator
         free((cast(void*)item)[0..T.sizeof]);
     }
 
-    final void freeT(T)(T item) nothrow
+    final void freeT(T)(T item)
         if (is(T == class))
     {
         try
@@ -96,7 +98,7 @@ class Allocator
         free((cast(void*)item)[0..__traits(classInstanceSize, T)]);
     }
 
-    final T[] allocArray(T, Args...)(size_t count, auto ref Args args) nothrow
+    final T[] allocArray(T, Args...)(size_t count, auto ref Args args)
         if (!is(T == class))
     {
         if (count == 0)
@@ -114,7 +116,7 @@ class Allocator
         return items;
     }
 
-    final T[] reallocArray(T, Args...)(T[] arr, size_t newCount, auto ref Args args) nothrow
+    final T[] reallocArray(T, Args...)(T[] arr, size_t newCount, auto ref Args args)
         if (!is(T == class))
     {
         if (newCount < arr.length)
@@ -148,7 +150,7 @@ class Allocator
         return arr;
     }
 
-    final void freeArray(T)(T[] items) nothrow
+    final void freeArray(T)(T[] items)
         if (!is(T == class))
     {
         try
@@ -166,15 +168,21 @@ class Allocator
 
 class GCAllocator : Allocator
 {
-    static GCAllocator instance() nothrow @nogc => _instance;
+nothrow:
+    static GCAllocator instance() pure @nogc
+    {
+        alias PureHack = GCAllocator function() pure nothrow @nogc;
+        static GCAllocator hack() nothrow @nogc => _instance;
+        return (cast(PureHack)&hack)();
+    }
 
-    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) nothrow
+    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure
     {
         // TODO: can/should we enforce alignment?
         return new void[bytes];
     }
 
-    override void free(void[] mem) nothrow
+    override void free(void[] mem) pure
     {
         // GC will take care of it...
     }
@@ -185,9 +193,10 @@ private:
 
 class NoGCAllocator : Allocator
 {
-    abstract override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) nothrow @nogc;
+nothrow @nogc:
+    abstract override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure;
 
-    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) nothrow @nogc
+    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) pure
     {
         void[] newMem = alloc(newSize, alignment);
         if (newMem != null)
@@ -201,14 +210,14 @@ class NoGCAllocator : Allocator
         return newMem;
     }
 
-    override void[] expand(void[] mem, size_t newSize) nothrow @nogc
+    override void[] expand(void[] mem, size_t newSize) pure
     {
         return null;
     }
 
-    abstract override void free(void[] mem) nothrow @nogc;
+    abstract override void free(void[] mem) pure;
 
-    final T* allocT(T, Args...)(auto ref Args args) nothrow @nogc
+    final T* allocT(T, Args...)(auto ref Args args)
         if (!is(T == class))
     {
         T* item = cast(T*)alloc(T.sizeof, T.alignof).ptr;
@@ -221,7 +230,7 @@ class NoGCAllocator : Allocator
         return item;
     }
 
-    final T allocT(T, Args...)(auto ref Args args) nothrow @nogc
+    final T allocT(T, Args...)(auto ref Args args)
         if (is(T == class))
     {
         T item = cast(T)alloc(__traits(classInstanceSize, T), __traits(classInstanceAlignment, T)).ptr;
@@ -234,7 +243,7 @@ class NoGCAllocator : Allocator
         return item;
     }
 
-    final void freeT(T)(T* item) nothrow @nogc
+    final void freeT(T)(T* item)
         if (!is(T == class))
     {
         try
@@ -246,7 +255,7 @@ class NoGCAllocator : Allocator
         free((cast(void*)item)[0..T.sizeof]);
     }
 
-    final void freeT(T)(T item) nothrow @nogc
+    final void freeT(T)(T item)
         if (is(T == class))
     {
         // HACK: since druntime can't actually destroy a @nogc class!
@@ -262,7 +271,7 @@ class NoGCAllocator : Allocator
         free((cast(void*)item)[0..__traits(classInstanceSize, T)]);
     }
 
-    final T[] allocArray(T, Args...)(size_t count, auto ref Args args) nothrow @nogc
+    final T[] allocArray(T, Args...)(size_t count, auto ref Args args)
         if (!is(T == class))
     {
         if (count == 0)
@@ -279,7 +288,7 @@ class NoGCAllocator : Allocator
         return items;
     }
 
-    final T[] allocArray(T)(size_t count) nothrow @nogc
+    final T[] allocArray(T)(size_t count)
         if (is(T == class))
     {
         if (count == 0)
@@ -291,7 +300,7 @@ class NoGCAllocator : Allocator
         return items;
     }
 
-    final T[] reallocArray(T, Args...)(T[] arr, size_t newCount, auto ref Args args) nothrow @nogc
+    final T[] reallocArray(T, Args...)(T[] arr, size_t newCount, auto ref Args args)
         if (!is(T == class))
     {
         if (newCount < arr.length)
@@ -326,7 +335,7 @@ class NoGCAllocator : Allocator
         return arr;
     }
 
-    final void freeArray(T)(T[] items) nothrow @nogc
+    final void freeArray(T)(T[] items)
         if (!is(T == class))
     {
         try
@@ -341,7 +350,7 @@ class NoGCAllocator : Allocator
         free(cast(void[])items[]);
     }
 
-    final void freeArray(T)(T[] items) nothrow @nogc
+    final void freeArray(T)(T[] items)
         if (is(T == class))
     {
         free(cast(void[])items[]);
@@ -351,25 +360,31 @@ class NoGCAllocator : Allocator
 class Mallocator : NoGCAllocator
 {
     static import urt.mem.alloc;
+nothrow @nogc:
 
-    static Mallocator instance() nothrow @nogc => _instance;
+    static Mallocator instance() pure
+    {
+        alias PureHack = Mallocator function() pure nothrow @nogc;
+        static Mallocator hack() nothrow @nogc => _instance;
+        return (cast(PureHack)&hack)();
+    }
 
-    override void[] alloc(size_t size, size_t alignment = DefaultAlign) nothrow @nogc
+    override void[] alloc(size_t size, size_t alignment = DefaultAlign) pure
     {
         return urt.mem.alloc.alloc_aligned(size, alignment);
     }
 
-    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) nothrow @nogc
+    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) pure
     {
         return urt.mem.alloc.realloc_aligned(mem, newSize, alignment);
     }
 
-    override void[] expand(void[] mem, size_t newSize) nothrow
+    override void[] expand(void[] mem, size_t newSize) pure
     {
         return urt.mem.alloc.expand(mem, newSize);
     }
 
-    override void free(void[] mem) nothrow @nogc
+    override void free(void[] mem) pure
     {
         urt.mem.alloc.free_aligned(mem);
     }
@@ -381,25 +396,25 @@ private:
 class RegionAllocator : NoGCAllocator
 {
     import urt.mem.region;
+nothrow @nogc:
 
-    static RegionAllocator getRegionAllocator(void[] region) pure nothrow @nogc
+    static RegionAllocator get_region_allocator(void[] region) pure
     {
         Region* r = makeRegion(region);
         return r.alloc!RegionAllocator(r);
     }
 
-
-    this(Region* region) pure nothrow @nogc
+    this(Region* region) pure
     {
         this.region = region;
     }
 
-    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure nothrow @nogc
+    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure
     {
         return region.alloc(bytes, alignment);
     }
 
-    override void free(void[] mem) pure nothrow @nogc
+    override void free(void[] mem) pure
     {
     }
 

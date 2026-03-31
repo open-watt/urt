@@ -28,8 +28,8 @@ enum StringAlloc : ubyte
 
 struct StringAllocator
 {
-    char* delegate(ushort bytes, void* userData) nothrow @nogc alloc;
-    void delegate(char* s) nothrow @nogc free;
+    char* delegate(ushort bytes, void* userData) pure nothrow @nogc alloc;
+    void delegate(char* s) pure nothrow @nogc free;
 }
 
 struct StringCacheBuilder
@@ -194,7 +194,7 @@ char* writeString(char* buffer, const(char)[] str) pure nothrow @nogc
     return buffer;
 }
 
-String as_string(const(char)* s) nothrow @nogc
+String as_string(const(char)* s) pure nothrow @nogc
     => String(s, false);
 
 inout(char)[] as_dstring(inout(char)* s) pure nothrow @nogc
@@ -237,7 +237,7 @@ nothrow @nogc:
         }
     }
 
-    this(size_t Embed)(MutableString!Embed str) inout //pure TODO: PUT THIS BACK!!
+    this(size_t Embed)(MutableString!Embed str) inout pure
     {
         if (!str.ptr)
             return;
@@ -247,7 +247,7 @@ nothrow @nogc:
             if (Embed > 0 && str.ptr == str.embed.ptr + 2)
             {
                 // clone the string
-                this(writeString(stringAllocators[0].alloc(cast(ushort)str.length, null), str[]), true);
+                this(writeString(get_string_allocator(0).alloc(cast(ushort)str.length, null), str[]), true);
                 return;
             }
         }
@@ -268,7 +268,7 @@ nothrow @nogc:
         ptr = cs.ptr;
     }
 
-    ~this()
+    ~this() pure
     {
         if (ptr)
             decRef();
@@ -401,12 +401,12 @@ private:
         }
     }
 
-    void decRef()
+    void decRef() pure
     {
         if (ushort* rc = refCounter())
         {
             if ((*rc & 0x3FFF) == 0)
-                stringAllocators[*rc >> 14].free(cast(char*)ptr);
+                get_string_allocator(*rc >> 14).free(cast(char*)ptr);
             else
                 --*rc;
         }
@@ -604,7 +604,7 @@ nothrow @nogc:
         this.format(format, forward!args);
     }
 
-    ~this()
+    ~this() pure
     {
         freeStringBuffer(ptr);
     }
@@ -934,7 +934,7 @@ private:
         return buffer + 4;
     }
 
-    void freeStringBuffer(char* buffer)
+    void freeStringBuffer(char* buffer) pure
     {
         if (!buffer)
             return;
@@ -1111,32 +1111,42 @@ private:
 __gshared StringAllocator[4] stringAllocators;
 static assert(stringAllocators.length <= 4, "Only 2 bits reserved to store allocator index");
 
+ref StringAllocator get_string_allocator(uint i) pure nothrow @nogc
+{
+    alias PureHack = ref StringAllocator function(uint i) pure nothrow @nogc;
+    static ref StringAllocator get_allocator(uint i) nothrow @nogc { return stringAllocators[i]; };
+    return (cast(PureHack)&get_allocator)(i);
+}
+
 package(urt) void initStringAllocators() nothrow @nogc
 {
-    stringAllocators[StringAlloc.Default].alloc = (ushort bytes, void* userData) {
-        char* buffer = cast(char*)defaultAllocator().alloc(bytes + 4, ushort.alignof).ptr;
+    alias PureAlloc = void[] delegate(size_t, size_t) pure nothrow @nogc;
+    alias PureFree = void delegate(void[]) pure nothrow @nogc;
+
+    stringAllocators[StringAlloc.Default].alloc = (ushort bytes, void* userData) pure {
+        char* buffer = cast(char*)(cast(PureAlloc)&defaultAllocator().alloc)(bytes + 4, ushort.alignof).ptr;
         *cast(ushort*)buffer = StringAlloc.Default << 14; // allocator = default, rc = 0
         return buffer + 4;
     };
-    stringAllocators[StringAlloc.Default].free = (char* str) {
+    stringAllocators[StringAlloc.Default].free = (char* str) pure {
         ushort len = (cast(ushort*)str)[-1] & 0x7FFF;
         str -= 4;
-        defaultAllocator().free(str[0 .. 4 + len]);
+        (cast(PureFree)&defaultAllocator().free)(str[0 .. 4 + len]);
     };
 
-    stringAllocators[StringAlloc.Explicit].alloc = (ushort bytes, void* userData) {
+    stringAllocators[StringAlloc.Explicit].alloc = (ushort bytes, void* userData) pure {
         NoGCAllocator a = cast(NoGCAllocator)userData;
-        char* buffer = cast(char*)a.alloc(size_t.sizeof*2 + bytes, size_t.alignof).ptr;
+        char* buffer = cast(char*)(cast(PureAlloc)&a.alloc)(size_t.sizeof*2 + bytes, size_t.alignof).ptr;
         *cast(NoGCAllocator*)buffer = a;
         buffer += size_t.sizeof*2;
         (cast(ushort*)buffer)[-2] = StringAlloc.Explicit << 14; // allocator = explicit, rc = 0
         return buffer;
     };
-    stringAllocators[StringAlloc.Explicit].free = (char* str) {
+    stringAllocators[StringAlloc.Explicit].free = (char* str) pure {
         NoGCAllocator a = *cast(NoGCAllocator*)(str - size_t.sizeof*2);
         ushort len = (cast(ushort*)str)[-1] & 0x7FFF;
         str -= size_t.sizeof*2;
-        a.free(str[0 .. size_t.sizeof*2 + len]);
+        (cast(PureFree)&a.free)(str[0 .. size_t.sizeof*2 + len]);
     };
 }
 

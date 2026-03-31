@@ -16,7 +16,7 @@ template fnv1_initial(T)
     else static if (is(T == uint))
         enum T fnv1_initial = 0x811C9DC5;
     else static if (is(T == ulong))
-        enum T fnv1_initial = 0XCBF29CE484222325;
+        enum T fnv1_initial = 0xCBF29CE484222325;
 }
 
 T fnv1(T, bool alternate)(const ubyte[] s, T hash = fnv1_initial!T) pure nothrow @nogc

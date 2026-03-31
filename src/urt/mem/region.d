@@ -2,8 +2,10 @@ module urt.mem.region;
 
 import urt.util;
 
+nothrow @nogc:
 
-static Region* makeRegion(void[] mem) pure nothrow @nogc
+
+static Region* makeRegion(void[] mem) pure
 {
     assert(mem.length >= Region.sizeof, "Memory block too small");
     Region* region = cast(Region*)mem.ptr.align_up(Region.alignof);

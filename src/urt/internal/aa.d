@@ -688,7 +688,7 @@ auto _aaValues(K, V)(inout V[K] a)
     {
         if (!b.filled)
             continue;
-        import core.lifetime;
+        import urt.lifetime;
         () @trusted { copyEmplace(b.entry.value, res[i++]); }();
     }
     return res;
@@ -716,7 +716,7 @@ auto _aaKeys(K, V)(inout V[K] a)
         if (!b.filled)
             continue;
         // res ~= b.entry.key;
-        import core.lifetime;
+        import urt.lifetime;
         () @trusted { copyEmplace(b.entry.key, res[i++]); }();
     }
     return res;

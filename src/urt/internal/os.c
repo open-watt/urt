@@ -11,6 +11,8 @@
 # include <netinet/tcp.h>
 # include <netdb.h>
 # include <unistd.h>
+# include <poll.h>
+# include <fcntl.h>
 
 // EWOULDBLOCK is #define EWOULDBLOCK EAGAIN on Linux — ImportC cannot resolve
 // chained macros, so re-define as a plain integer.

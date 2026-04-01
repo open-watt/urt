@@ -53,7 +53,7 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
         }
         else
         {
-            import urt.internal.stdc : exit;
+            import urt.internal.stdc.stdlib : exit;
             exit(-1);
         }
     }

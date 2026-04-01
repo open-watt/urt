@@ -154,31 +154,33 @@ auto pow(B, E)(B base, E exp) @trusted
     static if (isFloatB)
     {
         // Floating-point base
-        B result = cast(B) 1.0;
+        B result = B(1);
         B b = base;
 
         static if (isFloatE)
         {
             // F ^^ F — handle integer-valued exponents (covers 99% of
             // real-world `^^` uses: value^^2, 10.0^^e, etc.)
-            if (exp == 0) return cast(B) 1.0;
-            long iexp = cast(long) exp;
-            if (cast(E) iexp == exp)
-                return _powfi!(B)(b, iexp);
+            if (exp == 0)
+                return B(1);
+            long iexp = cast(long)exp;
+            if (cast(E)iexp == exp)
+                return _powfi!B(b, iexp);
             // True non-integer exponent: not supported without libm.
             assert(false, "Non-integer float exponent needs libm");
         }
         else
         {
             // F ^^ I — binary exponentiation
-            return _powfi!(B)(b, cast(long) exp);
+            return _powfi!B(b, long(exp));
         }
     }
     else
     {
         // I ^^ I — integer power
-        if (exp == 0) return cast(B) 1;
-        B result = cast(B) 1;
+        if (exp == 0)
+            return B(1);
+        B result = B(1);
         B b = base;
         auto e = cast(ulong) exp;
         while (e > 0)
@@ -194,10 +196,11 @@ auto pow(B, E)(B base, E exp) @trusted
 // binary exponentiation: float base, integer exponent.
 private F _powfi(F)(F base, long exp) @trusted
 {
-    if (exp == 0) return cast(F) 1.0;
+    if (exp == 0)
+        return F(1);
     bool neg = exp < 0;
     ulong e = neg ? cast(ulong)(-exp) : cast(ulong) exp;
-    F result = cast(F) 1.0;
+    F result = F(1);
     while (e > 0)
     {
         if (e & 1)
@@ -205,7 +208,7 @@ private F _powfi(F)(F base, long exp) @trusted
         base *= base;
         e >>= 1;
     }
-    return neg ? cast(F) 1.0 / result : result;
+    return neg ? F(1) / result : result;
 }
 
 pragma(inline, true)

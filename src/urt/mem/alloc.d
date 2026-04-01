@@ -1,29 +1,32 @@
 module urt.mem.alloc;
 
-import urt.internal.stdc;
+import urt.mem;
 
 nothrow @nogc:
 
-void[] alloc(size_t size) nothrow @nogc
+
+void[] alloc(size_t size) pure
 {
+    // TODO: pure malloc is meant to copy and restore errno around the call, because that's user-accessible state...
+
     // TODO: we might pin the length to a debug table somewhere...
     return malloc(size)[0 .. size];
 }
 
-void[] realloc(void[] mem, size_t newSize) nothrow @nogc
+void[] realloc(void[] mem, size_t newSize) pure
 {
     // TODO: we might pin the length to a debug table somewhere...
     return urt.mem.realloc(mem.ptr, newSize)[0 .. newSize];
 }
 
-void free(void[] mem) nothrow @nogc
+void free(void[] mem) pure
 {
     // maybe check the length passed to free matches the alloc?
     // ... or you know, just don't do that.
     urt.mem.free(mem.ptr);
 }
 
-void[] alloc_aligned(size_t size, size_t alignment) nothrow @nogc
+void[] alloc_aligned(size_t size, size_t alignment) pure
 {
     import urt.util : align_down, is_power_of_2, max;
 
@@ -37,7 +40,7 @@ void[] alloc_aligned(size_t size, size_t alignment) nothrow @nogc
     }
     else version (Posix)
     {
-        import core.sys.posix.stdlib;
+        import urt.internal.sys.posix;
         void* mem;
         return posix_memalign(&mem, alignment, size) ? null : mem[0 .. size];
     }
@@ -60,7 +63,7 @@ void[] alloc_aligned(size_t size, size_t alignment) nothrow @nogc
         assert(false, "Unsupported platform");
 }
 
-void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) nothrow @nogc
+void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) pure
 {
     import urt.util : is_power_of_2, min, max;
 
@@ -77,7 +80,7 @@ void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) nothrow @no
     return newAlloc;
 }
 
-void free_aligned(void[] mem) nothrow @nogc
+void free_aligned(void[] mem) pure
 {
     if (mem.ptr is null)
         return;
@@ -95,7 +98,7 @@ void free_aligned(void[] mem) nothrow @nogc
 }
 
 // NOTE: This function is only compatible with alloc_aligned!
-void[] expand(void[] mem, size_t newSize) nothrow @nogc
+void[] expand(void[] mem, size_t newSize) pure
 {
     if (mem.ptr is null)
         return null;
@@ -105,7 +108,7 @@ void[] expand(void[] mem, size_t newSize) nothrow @nogc
 }
 
 // NOTE: This function is only compatible with alloc_aligned!
-size_t memsize(void* ptr) nothrow @nogc
+size_t memsize(void* ptr) pure
 {
     if (ptr is null)
         return 0;
@@ -140,16 +143,16 @@ unittest
 
 version (Windows)
 {
-    extern(C) void* _aligned_malloc(size_t size, size_t alignment) nothrow @nogc;
-    extern(C) void _aligned_free(void* memblock) nothrow @nogc;
-    extern(C) size_t _aligned_msize(void* memblock) nothrow @nogc;
+    extern(C) void* _aligned_malloc(size_t size, size_t alignment) pure;
+    extern(C) void _aligned_free(void* memblock) pure;
+    extern(C) size_t _aligned_msize(void* memblock) pure;
 }
 
 version (Posix)
 {
-    extern(C) size_t malloc_usable_size(void *__ptr);
+    extern(C) size_t malloc_usable_size(void *__ptr) pure;
 }
 else version (FreeStanding)
 {
-    extern(C) size_t malloc_usable_size(void *__ptr);
+    extern(C) size_t malloc_usable_size(void *__ptr) pure;
 }

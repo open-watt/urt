@@ -104,7 +104,7 @@ SystemInfo get_sysinfo()
     }
     else version (Posix)
     {
-        import core.sys.posix.unistd;
+        import urt.internal.sys.posix;
 
         int pages = sysconf(_SC_PHYS_PAGES);
         int avail = sysconf(_SC_AVPHYS_PAGES);

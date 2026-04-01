@@ -460,11 +460,7 @@ version (Windows) {} else version (FreeStanding) {} else debug
     import urt.io : write_err, writeln_err, writef_to, WriteTarget;
     import urt.mem : strlen, memcpy;
 
-    import core.sys.posix.dlfcn : dladdr, Dl_info;
-    import core.sys.posix.fcntl : open, O_RDONLY;
-    import core.sys.posix.unistd : close, lseek, readlink, sysconf, _SC_PAGE_SIZE;
-    import core.sys.posix.sys.mman : mmap, munmap, PROT_READ, MAP_PRIVATE, MAP_FAILED;
-    import core.sys.posix.sys.types : off_t;
+    import urt.internal.sys.posix;
 
     private enum SEEK_END = 2;
 
@@ -1583,7 +1579,7 @@ private void terminate() nothrow @nogc @trusted
         asm nothrow @nogc { hlt; }
     else
     {
-        import urt.internal.stdc : abort;
+        import urt.internal.stdc.stdlib : abort;
         abort();
     }
 }
@@ -3172,7 +3168,7 @@ _sleb128_t s_leb128(const(ubyte)** p) nothrow @nogc
 void dwarf_terminate(uint line) nothrow @nogc
 {
     import urt.io : writef_to, WriteTarget;
-    import urt.internal.stdc : abort;
+    import urt.internal.stdc.stdlib : abort;
     writef_to!(WriteTarget.stderr, true)("dwarfeh({0}) fatal error", line);
     abort();
 }
@@ -3406,7 +3402,7 @@ pragma(mangle, throw_mangle)
 extern(C) void dwarfeh_throw(Throwable o)
 {
     import urt.io : writeln_err, writef_to, WriteTarget;
-    import urt.internal.stdc : abort;
+    import urt.internal.stdc.stdlib : abort;
 
     ExceptionHeader* eh = ExceptionHeader.create(o);
     eh.push();

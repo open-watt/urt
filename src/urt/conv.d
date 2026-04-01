@@ -597,22 +597,36 @@ unittest
 }
 
 
-ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null) // pure
+ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null) pure
 {
     // TODO: this function should be oblitereated and implemented natively...
     //       CRT call can't CTFE, which is a shame
 
-    import urt.internal.stdc;
     import urt.string.format : concat;
 
-    char[16] fmt = void;
     char[64] result = void;
-    assert(format.length <= fmt.sizeof - 3, "Format string buffer overflow");
 
-    concat(fmt, "%", format, "g\0");
-    int len = snprintf(result.ptr, result.length, fmt.ptr, value);
-    if (len < 0)
-        return -2;
+    // parse format; precision is '.10' => 10 digits
+    int digits = 6; 
+    size_t dot = format.findFirst('.');
+    if (dot < format.length)
+        digits = cast(int)parse_uint(format[dot + 1 .. $]);
+    version (Windows)
+    {
+        import urt.internal.stdc.stdlib : _gcvt_s;
+        int err = _gcvt_s(result.ptr, result.length, value, digits);
+        if (err != 0)
+            return -2;
+    }
+    else
+    {
+        import urt.internal.stdc.stdlib : gcvt;
+        if (gcvt(value, digits, result.ptr) is null)
+            return -2;
+    }
+    size_t len = result.ptr.strlen();
+    if (result[len - 1] == '.')
+        --len; // trim trailing '.' if no digits follow it
     if (buffer.ptr)
     {
         if (len > buffer.length)
@@ -622,6 +636,31 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
     return len;
 }
 
+unittest
+{
+    import urt.io;
+    char[64] buf;
+    auto len = format_float(0.0, buf);
+    assert(buf[0..len] == "0");
+    len = format_float(1.0, buf);
+    assert(buf[0..len] == "1");
+    len = format_float(-1.0, buf);
+    assert(buf[0..len] == "-1");
+    len = format_float(3.14159, buf);
+    assert(buf[0..len] == "3.14159");
+    len = format_float(3.14159, buf, ".3");
+    assert(buf[0..len] == "3.14");
+    len = format_float(1.5, buf);
+    assert(buf[0..len] == "1.5");
+    len = format_float(1e6, buf);
+    assert(buf[0..len] == "1.e+006" || buf[0..len] == "1e+06");
+    len = format_float(1e6, buf, ".7");
+    assert(buf[0..len] == "1000000");
+    len = format_float(0.001, buf);
+    assert(buf[0..len] == "0.001" || buf[0..len] == "1.e-003"); // i don't know why it emits e-3 :/
+    len = format_float(-0.0, buf);
+    assert(buf[0..len] == "-0"); // do we want to print -0?
+}
 
 
 template to(T)

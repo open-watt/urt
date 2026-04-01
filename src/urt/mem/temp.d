@@ -4,11 +4,12 @@ import urt.mem;
 
 version = DebugTempAlloc;
 
+nothrow @nogc:
 
 enum size_t TempMemSize = 4096;
 
 
-void[] talloc(size_t size) nothrow @nogc
+void[] talloc(size_t size) pure
 {
     debug version (DebugTempAlloc)
     {
@@ -18,21 +19,19 @@ void[] talloc(size_t size) nothrow @nogc
 
     assert(size <= TempMemSize / 2, "Requested temp memory size is too large");
 
-    if (alloc_offset + size > TempMemSize)
-        alloc_offset = 0;
-
-    void[] mem = tempMem[alloc_offset .. alloc_offset + size];
-    alloc_offset += size;
-
-    return mem;
+    void[] mem = tmem_tail();
+    if (mem.length < size)
+        mem = tmem_reset();
+    tmem_advance(size);
+    return mem[0 .. size];
 }
 
-void[] talloc_aligned(size_t size, size_t alignment) nothrow @nogc
+void[] talloc_aligned(size_t size, size_t alignment) pure
 {
     assert(false);
 }
 
-void[] trealloc(void[] mem, size_t newSize) nothrow @nogc
+void[] trealloc(void[] mem, size_t newSize) pure
 {
     if (newSize <= mem.length)
         return mem[0 .. newSize];
@@ -46,35 +45,36 @@ void[] trealloc(void[] mem, size_t newSize) nothrow @nogc
     return r;
 }
 
-void[] trealloc_aligned(void[] mem, size_t newSize, size_t alignment) nothrow @nogc
+void[] trealloc_aligned(void[] mem, size_t newSize, size_t alignment) pure
 {
     assert(false);
 }
 
-void[] texpand(void[] mem, size_t newSize) nothrow @nogc
+void[] texpand(void[] mem, size_t newSize) pure
 {
-    if (mem.ptr + mem.length != tempMem.ptr + alloc_offset)
+    void[] tmem = tmem_tail();
+    if (mem.ptr + mem.length != tmem.ptr)
         return null;
     ptrdiff_t grow = newSize - mem.length;
-    if (cast(size_t)(alloc_offset + grow) > TempMemSize)
+    if (grow > tmem.length)
         return null;
-    alloc_offset += grow;
+    tmem_advance(grow);
     return mem.ptr[0 .. newSize];
 }
 
-void tfree(void[] mem) nothrow @nogc
+void tfree(void[] mem) pure
 {
     // maybe do some debug accounting...?
 }
 
-char* tstringz(const(char)[] str) nothrow @nogc
+char* tstringz(const(char)[] str) pure
 {
     char* r = cast(char*)talloc(str.length + 1).ptr;
     r[0 .. str.length] = str[];
     r[str.length] = '\0';
     return r;
 }
-char* tstringz(const(wchar)[] str) nothrow @nogc
+char* tstringz(const(wchar)[] str) pure
 {
     import urt.string.uni : uni_convert;
     char* r = cast(char*)talloc(str.length*3 + 1).ptr;
@@ -83,7 +83,7 @@ char* tstringz(const(wchar)[] str) nothrow @nogc
     return r;
 }
 
-wchar* twstringz(const(char)[] str) nothrow @nogc
+wchar* twstringz(const(char)[] str) pure
 {
     import urt.string.uni : uni_convert;
     wchar* r = cast(wchar*)talloc(str.length*2 + 2).ptr;
@@ -91,7 +91,7 @@ wchar* twstringz(const(char)[] str) nothrow @nogc
     r[len] = '\0';
     return r;
 }
-wchar* twstringz(const(wchar)[] str) nothrow @nogc
+wchar* twstringz(const(wchar)[] str) pure
 {
     wchar* r = cast(wchar*)talloc(str.length*2 + 2).ptr;
     r[0 .. str.length] = str[];
@@ -110,24 +110,25 @@ const(char)[] tstring(T)(auto ref T value)
     else
     {
         import urt.string.format : toString;
-        ptrdiff_t r = toString(value, cast(char[])tempMem[alloc_offset..$]);
+        char[] tmem = cast(char[])tmem_tail();
+        ptrdiff_t r = toString(value, tmem);
         if (r < 0)
         {
-            alloc_offset = 0;
-            r = toString(value, cast(char[])tempMem[0..TempMemSize / 2]);
+            tmem = cast(char[])tmem_reset();
+            r = toString(value, tmem);
             if (r < 0)
             {
 //                assert(false, "Formatted string is too large for the temp buffer!");
                 return null;
             }
         }
-        const(char)[] result = cast(char[])tempMem[alloc_offset .. alloc_offset + r];
-        alloc_offset += r;
+        const(char)[] result = tmem[0 .. r];
+        tmem_advance(r);
         return result;
     }
 }
 
-const(dchar)[] tdstring(T)(auto ref T value) nothrow @nogc
+const(dchar)[] tdstring(T)(auto ref T value)
 {
     static if (is(T : const(char)[]) || is(T : const(wchar)[]) || is(T : const(dchar)[]))
         alias s = value;
@@ -178,15 +179,21 @@ char[] tformat(Args...)(const(char)[] fmt, ref Args args)
 class TempAllocator : NoGCAllocator
 {
     static import urt.mem.alloc;
+nothrow @nogc:
 
-    static TempAllocator instance() nothrow @nogc => _instance;
+    static TempAllocator instance() pure
+    {
+        alias PureHack = TempAllocator function() pure nothrow @nogc;
+        static TempAllocator hack() nothrow @nogc => _instance;
+        return (cast(PureHack)&hack)();
+    }
 
-    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) nothrow @nogc
+    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure
     {
         return talloc(bytes);
     }
 
-    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) nothrow @nogc
+    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) pure
     {
         return trealloc(mem, newSize);
         // TODO...
@@ -194,12 +201,12 @@ class TempAllocator : NoGCAllocator
         return null;
     }
 
-    override void[] expand(void[] mem, size_t newSize) nothrow
+    override void[] expand(void[] mem, size_t newSize) pure
     {
         return texpand(mem, newSize);
     }
 
-    override void free(void[] mem) nothrow @nogc
+    override void free(void[] mem) pure
     {
         tfree(mem);
     }
@@ -213,3 +220,32 @@ private:
 
 static void[TempMemSize] tempMem;
 static ushort alloc_offset = 0;
+
+void[] tmem_tail() pure
+{
+    static void[] impl() nothrow @nogc
+        => tempMem[alloc_offset..$];
+    alias PureHack = void[] function() pure nothrow @nogc;
+    return (cast(PureHack)&impl)();
+}
+
+void[] tmem_reset() pure
+{
+    static void[] impl() nothrow @nogc
+    {
+        alloc_offset = 0;
+        return tempMem[0..TempMemSize / 2];
+    }
+    alias PureHack = void[] function() pure nothrow @nogc;
+    return (cast(PureHack)&impl)();
+}
+
+void tmem_advance(size_t n) pure
+{
+    static void impl(ushort n) nothrow @nogc
+    {
+        alloc_offset += n;
+    }
+    alias PureHack = void function(ushort) pure nothrow @nogc;
+    return (cast(PureHack)&impl)(cast(ushort)n);
+}

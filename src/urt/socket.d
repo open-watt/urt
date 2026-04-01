@@ -27,15 +27,11 @@ version (Windows)
 else version (Posix)
 {
     import urt.internal.os; // use ImportC to import system C headers...
-    import core.sys.posix.fcntl;
-    import core.sys.posix.poll;
-    import core.sys.posix.unistd : close, gethostname;
-    import core.sys.posix.netinet.in_ : in6_addr, sockaddr_in6;
 
     alias _bind = urt.internal.os.bind, _listen = urt.internal.os.listen, _connect = urt.internal.os.connect,
         _accept = urt.internal.os.accept, _send = urt.internal.os.send, _sendto = urt.internal.os.sendto, _sendmsg = urt.internal.os.sendmsg,
-        _recv = urt.internal.os.recv, _recvfrom = urt.internal.os.recvfrom, _shutdown = urt.internal.os.shutdown;
-    alias _poll = core.sys.posix.poll.poll;
+        _recv = urt.internal.os.recv, _recvfrom = urt.internal.os.recvfrom, _shutdown = urt.internal.os.shutdown,
+        _close = urt.internal.os.close, _poll = urt.internal.os.poll;
 
     version = HasUnixSocket;
     version = HasIPv6;
@@ -288,16 +284,12 @@ Result close(Socket socket)
     int result;
     version (Windows)
         result = closesocket(socket.handle);
+    else version (Posix)
+        result = _close(socket.handle);
     else
-        result = close(socket.handle);
+        assert(false, "Not implemented!");
     if (result < 0)
         return socket_getlasterror();
-
-//    {
-//        LockGuard<SharedMutex> lock(s_noSignalMut);
-//        s_noSignal.Erase(socket);
-//    }
-
     return Result.success;
 }
 
@@ -1296,7 +1288,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                     version (Windows)
                         storeBigEndian(&ain6.sin6_addr.in6_u.u6_addr16[a], address._a.ipv6.addr.s[a]);
                     else version (Posix)
-                        storeBigEndian(cast(ushort*)ain6.sin6_addr.s6_addr + a, address._a.ipv6.addr.s[a]);
+                        storeBigEndian(&ain6.sin6_addr.__in6_u.__u6_addr16[a], address._a.ipv6.addr.s[a]);
                     else
                         assert(false, "Not implemented!");
                 }
@@ -1412,7 +1404,7 @@ IPv6Addr make_IPv6Addr(ref const in6_addr in6)
         version (Windows)
             addr.s[a] = loadBigEndian(&in6.in6_u.u6_addr16[a]);
         else version (Posix)
-            addr.s[a] = loadBigEndian(cast(const(ushort)*)in6.s6_addr + a);
+            addr.s[a] = loadBigEndian(&in6.__in6_u.__u6_addr16[a]);
         else
             assert(false, "Not implemented!");
     }

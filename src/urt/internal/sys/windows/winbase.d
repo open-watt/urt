@@ -37,7 +37,7 @@ import urt.internal.sys.windows.basetyps, urt.internal.sys.windows.w32api, urt.i
 
 // FIXME:
 //alias void va_list;
-import urt.internal.stdc : va_list;
+//import urt.internal.stdc : va_list;
 import urt.mem : memset, memcpy, memmove;
 
 
@@ -1862,8 +1862,8 @@ extern (Windows) nothrow @nogc {
     HRSRC FindResourceExW(HINSTANCE, LPCWSTR, LPCWSTR, WORD);
     BOOL FlushFileBuffers(HANDLE);
     BOOL FlushInstructionCache(HANDLE, PCVOID, SIZE_T);
-    DWORD FormatMessageA(DWORD, PCVOID, DWORD, DWORD, LPSTR, DWORD, va_list*);
-    DWORD FormatMessageW(DWORD, PCVOID, DWORD, DWORD, LPWSTR, DWORD, va_list*);
+//    DWORD FormatMessageA(DWORD, PCVOID, DWORD, DWORD, LPSTR, DWORD, va_list*);
+//    DWORD FormatMessageW(DWORD, PCVOID, DWORD, DWORD, LPWSTR, DWORD, va_list*);
     BOOL FreeEnvironmentStringsA(LPSTR);
     BOOL FreeEnvironmentStringsW(LPWSTR);
     BOOL FreeLibrary(HMODULE);
@@ -2607,7 +2607,7 @@ version (Unicode) {
     alias FindNextFileW FindNextFile;
     alias FindResourceW FindResource;
     alias FindResourceExW FindResourceEx;
-    alias FormatMessageW FormatMessage;
+//    alias FormatMessageW FormatMessage;
     alias FreeEnvironmentStringsW FreeEnvironmentStrings;
     alias GetAtomNameW GetAtomName;
     alias GetCommandLineW GetCommandLine;
@@ -2786,7 +2786,7 @@ version (Unicode) {
     alias FindNextFileA FindNextFile;
     alias FindResourceA FindResource;
     alias FindResourceExA FindResourceEx;
-    alias FormatMessageA FormatMessage;
+//    alias FormatMessageA FormatMessage;
     alias FreeEnvironmentStringsA FreeEnvironmentStrings;
     alias GetAtomNameA GetAtomName;
     alias GetCommandLineA GetCommandLine;

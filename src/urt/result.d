@@ -93,14 +93,7 @@ version (Windows)
 }
 else version (Posix)
 {
-    import urt.internal.stdc;
-
-    extern (C) private int* __errno_location() nothrow @nogc;
-
-    @property int errno() nothrow @nogc @trusted
-    {
-        return *__errno_location();
-    }
+    import urt.internal.stdc.errno;
 
     enum InternalResult : Result
     {

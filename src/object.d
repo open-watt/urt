@@ -27,15 +27,27 @@ else version (AArch64)
     else version = WithArgTypes;
 }
 
-
 // ──────────────────────────────────────────────────────────────────────
 // Fundamental type aliases (compiler hardcodes references to these)
 // ──────────────────────────────────────────────────────────────────────
 
 alias size_t = typeof(int.sizeof);
-alias ptrdiff_t = typeof(cast(void*) 0 - cast(void*) 0);
+alias ptrdiff_t = typeof(cast(void*)0 - cast(void*)0);
 alias nullptr_t = typeof(null);
 alias noreturn = typeof(*null);
+
+// needed so druntime's core.stdc.stdio compiles on AArch64
+version (AArch64)
+{
+    extern (C++, std) struct __va_list
+    {
+        void* __stack;
+        void* __gr_top;
+        void* __vr_top;
+        int __gr_offs;
+        int __vr_offs;
+    }
+}
 
 version (Windows)
     alias wchar wchar_t;
@@ -97,6 +109,22 @@ public import urt.util : min, max, swap;
 //    return t.move;
 //}
 
+// ──────────────────────────────────────────────────────────────────────
+// ^^ helpers
+// ──────────────────────────────────────────────────────────────────────
+
+static if (__VERSION__ >= 2113)
+{
+    static import urt.math;
+    alias _d_pow = urt.math.pow;
+
+    auto _d_sqrt(T)(T x)
+    {
+        // TODO: should we have a `float` one?
+        import urt.math : sqrt;
+        return sqrt(x);
+    }
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Object — root of the class hierarchy
@@ -1350,6 +1378,7 @@ void destroy(bool initialize = true, T)(ref T obj) if (!is(T == struct) && !is(T
 
 @property immutable(T)[] idup(T)(T[] a) @trusted
 {
+    assert(__ctfe, "idup is only supported at compile time");
     // CTFE-compatible: the interpreter handles ~= natively.
     // At runtime this would assert via _d_arrayappendcTX.
     immutable(T)[] r;
@@ -1360,6 +1389,7 @@ void destroy(bool initialize = true, T)(ref T obj) if (!is(T == struct) && !is(T
 
 @property T[] dup(T)(const(T)[] a) @trusted
 {
+    assert(__ctfe, "dup is only supported at compile time");
     T[] r;
     foreach (ref e; a)
         r ~= cast(T) e;
@@ -1380,52 +1410,47 @@ bool _xopCmp(in void*, in void*)
 // hashOf — used by AAs and anywhere .toHash is needed
 // ──────────────────────────────────────────────────────────────────────
 
-size_t hashOf(T)(auto ref T val, size_t seed = 0) @trusted pure nothrow @nogc
+size_t hashOf(T)(auto ref T val, size_t seed = 0) pure nothrow @nogc @trusted
 {
+    import urt.hash : fnv1a, fnv1a64, fnv1_initial;
+
     static if (is(T : const(char)[]))
     {
-        // FNV-1a for strings
-        size_t h = seed == 0 ? 2166136261 : seed;
-        foreach (c; cast(const(ubyte)[]) val)
-        {
-            h ^= c;
-            h *= 16777619;
-        }
-        return h;
+        static if (is(size_t == uint))
+            return fnv1a(cast(ubyte[])val, seed ? seed : fnv1_initial!uint);
+        else
+            return fnv1a64(cast(ubyte[])val, seed ? seed : fnv1_initial!ulong);
     }
     else static if (is(T V : V*))
     {
         // Pointers — CTFE compatible
         if (__ctfe)
         {
-            if (val is null) return seed;
+            if (val is null)
+                return seed;
             assert(0, "Unable to hash non-null pointer at compile time");
         }
-        size_t v = cast(size_t) val;
+        size_t v = cast(size_t)val;
         return _fnv(v ^ (v >> 4), seed);
     }
     else static if (__traits(isIntegral, T))
     {
         // Integers — CTFE compatible, no reinterpreting cast
         static if (T.sizeof <= size_t.sizeof)
-            return _fnv(cast(size_t) val, seed);
+            return _fnv(cast(size_t)val, seed);
         else
             return _fnv(cast(size_t)(val ^ (val >>> (size_t.sizeof * 8))), seed);
     }
     else static if (__traits(isFloating, T))
     {
         // At CTFE we cannot reinterpret float bits; use lossy integer cast
+        // it'd be better if we could work out the magnitude and multipley the significant bits into an integer
         if (__ctfe)
-            return _fnv(cast(size_t) cast(long) val, seed);
-        // Runtime: walk the bytes
-        auto p = cast(const ubyte*)&val;
-        size_t h = seed == 0 ? 2166136261 : seed;
-        foreach (i; 0 .. T.sizeof)
-        {
-            h ^= p[i];
-            h *= 16777619;
-        }
-        return h;
+            return _fnv(cast(size_t)cast(long)val, seed);
+        static if (is(size_t == uint))
+            return fnv1a((cast(ubyte*)&val)[0..T.sizeof], seed ? seed : fnv1_initial!uint);
+        else
+            return fnv1a64((cast(ubyte*)&val)[0..T.sizeof], seed ? seed : fnv1_initial!uint);
     }
     else static if (is(T == struct))
     {
@@ -1437,28 +1462,38 @@ size_t hashOf(T)(auto ref T val, size_t seed = 0) @trusted pure nothrow @nogc
     }
     else static if (is(T == enum))
     {
-        import urt.internal.traits : Unconst;
         static if (is(T EType == enum))
-            return hashOf(cast(EType) val, seed);
+            return hashOf(cast(EType)val, seed);
         else
             return _fnv(0, seed);
     }
     else
-    {
         return seed;
-    }
 }
 
-private size_t _fnv(size_t val, size_t seed) nothrow @nogc pure @safe
+private size_t _fnv(size_t val, size_t seed) pure nothrow @nogc @trusted
 {
-    size_t h = seed == 0 ? 2166136261 : seed;
-    foreach (i; 0 .. size_t.sizeof)
+    import urt.hash : fnv1a, fnv1a64, fnv1_initial;
+
+    // maybe it's better to write out the algorithm inline...?
+    if (__ctfe)
     {
-        h ^= val & 0xFF;
-        h *= 16777619;
-        val >>= 8;
+        static if (is(size_t == uint))
+        {
+            ubyte[4] bytes = [ val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF ];
+            return fnv1a(bytes, seed ? seed : fnv1_initial!uint);
+        }
+        else
+        {
+            ubyte[8] bytes = [ val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF,
+                               (val >> 32) & 0xFF, (val >> 40) & 0xFF, (val >> 48) & 0xFF, (val >> 56) & 0xFF ];
+            return fnv1a64(bytes, seed ? seed : fnv1_initial!ulong);
+        }
     }
-    return h;
+    static if (is(size_t == uint))
+        return fnv1a((cast(ubyte*)&val)[0..4], seed ? seed : fnv1_initial!uint);
+    else
+        return fnv1a64((cast(ubyte*)&val)[0..8], seed ? seed : fnv1_initial!ulong);
 }
 
 // ──────────────────────────────────────────────────────────────────────

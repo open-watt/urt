@@ -25,11 +25,10 @@ template write_to(WriteTarget target, bool newline = false)
             }
             else
             {
-                import urt.internal.stdc;
-                static if (target == WriteTarget.stderr)
-                    return fprintf(stderr, "%.*s" ~ (newline ? "\n" : ""), cast(int)str.length, str.ptr);
-                else
-                    return printf("%.*s" ~ (newline ? "\n" : ""), cast(int)str.length, str.ptr);
+                fwrite(str.ptr, 1, str.length, target == WriteTarget.stdout ? stdout : stderr);
+                if (newline)
+                    fwrite("\n".ptr, 1, "\n".length, target == WriteTarget.stdout ? stdout : stderr);
+                return cast(int)(str.length + "\n".length);
             }
         }
         else static if (target == WriteTarget.debugstring)
@@ -90,11 +89,8 @@ void flush(WriteTarget target = WriteTarget.stdout)() nothrow @nogc
     }
     else
     {
-        import urt.internal.stdc : fflush, stdout, stderr;
-        static if (target == WriteTarget.stdout)
-            fflush(stdout);
-        else static if (target == WriteTarget.stderr)
-            fflush(stderr);
+        static if (target == WriteTarget.stdout || target == WriteTarget.stderr)
+            fflush(target == WriteTarget.stdout ? stdout : stderr);
     }
 }
 
@@ -116,3 +112,8 @@ unittest
     write("mister ", "robot ");
     writef("how do {0} do?\n", "you");
 }
+
+
+private:
+
+import core.stdc.stdio : stdout, stderr, fwrite, fflush;

@@ -6,26 +6,43 @@ nothrow @nogc:
 
 void[] alloc(size_t size) nothrow @nogc
 {
-
     // TODO: we might pin the length to a debug table somewhere...
     return malloc(size)[0 .. size];
 }
 
+void[] realloc(void[] mem, size_t newSize) nothrow @nogc
+{
+    // TODO: we might pin the length to a debug table somewhere...
+    return urt.mem.realloc(mem.ptr, newSize)[0 .. newSize];
+}
+
+void free(void[] mem) nothrow @nogc
+{
+    // maybe check the length passed to free matches the alloc?
+    // ... or you know, just don't do that.
+    urt.mem.free(mem.ptr);
+}
+
 void[] alloc_aligned(size_t size, size_t alignment) nothrow @nogc
 {
-    import urt.util : is_power_of_2, max;
+    import urt.util : align_down, is_power_of_2, max;
+
     alignment = max(alignment, (void*).sizeof);
     assert(is_power_of_2(alignment), "Alignment must be a power of two!");
 
     version (Windows)
     {
-        import urt.util : align_down;
-
-        // This is how Visual Studio's _aligned_malloc works...
-        // see C:\Program Files (x86)\Windows Kits\10\Source\10.0.15063.0\ucrt\heap\align.cpp
-        //
-        // This is implemented so memsize() can return the correct result.
-        //
+        void* mem = _aligned_malloc(size, alignment);
+        return mem ? mem[0 .. size] : null;
+    }
+    else version (Posix)
+    {
+        import core.sys.posix.stdlib;
+        void* mem;
+        return posix_memalign(&mem, alignment, size) ? null : mem[0 .. size];
+    }
+    else version (FreeStanding)
+    {
         size_t header_size = (void*).sizeof + alignment;
         size_t total = header_size + size;
 
@@ -39,25 +56,8 @@ void[] alloc_aligned(size_t size, size_t alignment) nothrow @nogc
 
         return (cast(void*)allocptr)[0 .. size];
     }
-    else version (Posix)
-    {
-        import core.sys.posix.stdlib;
-        void* mem;
-        return posix_memalign(&mem, alignment, size) ? null : mem[0 .. size];
-    }
     else
-    {
-        void[] mem = malloc(size)[0 .. size];
-        // HACK: just for now...
-        assert((cast(size_t)mem.ptr & (alignment - 1)) == 0, "Memory not aligned!");
-        return mem;
-    }
-}
-
-void[] realloc(void[] mem, size_t newSize) nothrow @nogc
-{
-    // TODO: we might pin the length to a debug table somewhere...
-    return urt.mem.realloc(mem.ptr, newSize)[0 .. newSize];
+        assert(false, "Unsupported platform");
 }
 
 void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) nothrow @nogc
@@ -77,62 +77,48 @@ void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) nothrow @no
     return newAlloc;
 }
 
-// NOTE: This function is only compatible with alloc_aligned!
-void[] expand(void[] mem, size_t newSize) nothrow @nogc
-{
-    version (Windows)
-    {
-        if (mem.ptr is null)
-            return null;
-        void* ptr = (cast(void**)mem.ptr)[-1];
-        size_t head = (cast(size_t)mem.ptr - cast(size_t)ptr);
-        void* r = _expand(ptr, head + newSize);
-        if (r is null)
-            return null;
-        return mem.ptr[0 .. newSize];
-    }
-    else
-    {
-        if (newSize <= memsize(mem.ptr))
-            return mem.ptr[0 .. newSize];
-        return null;
-    }
-}
-
-void free(void[] mem) nothrow @nogc
-{
-    // maybe check the length passed to free matches the alloc?
-    // ... or you know, just don't do that.
-
-    urt.mem.free(mem.ptr);
-}
-
 void free_aligned(void[] mem) nothrow @nogc
 {
+    if (mem.ptr is null)
+        return;
     version (Windows)
+        _aligned_free(mem.ptr);
+    else version (Posix)
+        urt.mem.free(mem.ptr);
+    else version (FreeStanding)
     {
-        if (mem.ptr is null)
-            return;
         void* p = (cast(void**)mem.ptr)[-1];
         urt.mem.free(p);
     }
     else
-        urt.mem.free(mem.ptr);
+        assert(false, "Unsupported platform");
 }
 
+// NOTE: This function is only compatible with alloc_aligned!
+void[] expand(void[] mem, size_t newSize) nothrow @nogc
+{
+    if (mem.ptr is null)
+        return null;
+    if (newSize <= memsize(mem.ptr))
+        return mem.ptr[0 .. newSize];
+    return null;
+}
+
+// NOTE: This function is only compatible with alloc_aligned!
 size_t memsize(void* ptr) nothrow @nogc
 {
+    if (ptr is null)
+        return 0;
     version (Windows)
-    {
-        if (ptr is null)
-            return 0;
-        void* mem = (cast(void**)ptr)[-1];
-        return _msize(mem) - (cast(size_t)ptr - cast(size_t)mem);
-    }
+        return _aligned_msize(ptr);
     else version (Posix)
         return malloc_usable_size(ptr);
-    else version (Darwin)
-        return malloc_size(ptr);
+    else version (FreeStanding)
+    {
+        void* mem = (cast(void**)ptr)[-1];
+        size_t offset = cast(size_t)ptr - cast(size_t)mem;
+        return malloc_usable_size(mem) - offset;
+    }
     else
         assert(false, "Unsupported platform");
 }
@@ -141,20 +127,29 @@ size_t memsize(void* ptr) nothrow @nogc
 unittest
 {
     void[] mem = alloc_aligned(16, 8);
+    assert(mem !is null);
     size_t s = memsize(mem.ptr);
+    assert(s >= 16);
     mem = expand(mem, 8);
+    assert(mem !is null);
     mem = expand(mem, 16);
+    assert(mem !is null);
     free_aligned(mem);
 }
 
 
 version (Windows)
 {
-    extern(C) void* _expand(void* memblock, size_t size) nothrow @nogc;
-    extern(C) size_t _msize(void* _Block);
+    extern(C) void* _aligned_malloc(size_t size, size_t alignment) nothrow @nogc;
+    extern(C) void _aligned_free(void* memblock) nothrow @nogc;
+    extern(C) size_t _aligned_msize(void* memblock) nothrow @nogc;
 }
 
 version (Posix)
+{
+    extern(C) size_t malloc_usable_size(void *__ptr);
+}
+else version (FreeStanding)
 {
     extern(C) size_t malloc_usable_size(void *__ptr);
 }

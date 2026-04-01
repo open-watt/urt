@@ -26,6 +26,6 @@ else version (Darwin)
 else version (FreeBSD)
     enum string Platform = "FreeBSD";
 else version (FreeStanding)
-    enum string Platform = "Bare-metal";
+    enum string Platform = "bare-metal";
 else
     static assert(0, "Unsupported platform");

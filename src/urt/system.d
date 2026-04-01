@@ -9,8 +9,8 @@ nothrow @nogc:
 
 enum IdleParams : ubyte
 {
-    SystemRequired = 1,     // stop the system from going to sleep
-    DisplayRequired = 2,    // keep the display turned on
+    system_required = 1,     // stop the system from going to sleep
+    display_required = 2,    // keep the display turned on
 }
 
 extern(C) noreturn abort();
@@ -29,10 +29,21 @@ void sleep(Duration duration)
         import urt.internal.sys.windows.winbase : Sleep;
         Sleep(cast(uint)duration.as!"msecs");
     }
+    else version (BL808)
+    {
+        import sys.bl808.irq : IrqClass, enable_irq, disable_irq, wait_for_interrupt;
+        import sys.bl808.timer : mtime_read, mtimecmp_write_oneshot;
+
+        ulong deadline = mtime_read() + duration.as!"usecs";
+        mtimecmp_write_oneshot(deadline);
+        auto was_enabled = enable_irq(IrqClass.timer);
+        while (mtime_read() < deadline)
+            wait_for_interrupt();
+        if (!was_enabled)
+            disable_irq(IrqClass.timer);
+    }
     else
     {
-        // TODO: use nanosleep; usleep is deprecated!
-
         usleep(cast(uint)duration.as!"usecs");
     }
 }
@@ -41,8 +52,11 @@ struct SystemInfo
 {
     string os_name;
     string processor;
-    ulong total_memory;
-    ulong available_memory;
+    ulong total_memory;     // total physical RAM or heap region
+    ulong used_memory;      // actively allocated
+    ulong reserved_memory;  // claimed from OS/sbrk (>= used, includes freed blocks)
+    ulong avail_memory;     // system-wide available for new allocations
+    ulong peak_memory;      // high-water mark (0 if unavailable)
     Duration uptime;
 }
 
@@ -50,7 +64,7 @@ SystemInfo get_sysinfo()
 {
     SystemInfo r;
     r.os_name = Platform;
-    r.processor = ProcessorFamily;
+    r.processor = ProcessorName;
     version (Windows)
     {
         MEMORYSTATUSEX mem;
@@ -58,7 +72,15 @@ SystemInfo get_sysinfo()
         if (GlobalMemoryStatusEx(&mem))
         {
             r.total_memory = mem.ullTotalPhys;
-            r.available_memory = mem.ullAvailPhys;
+            r.avail_memory = mem.ullAvailPhys;
+        }
+        PROCESS_MEMORY_COUNTERS pmc;
+        pmc.cb = PROCESS_MEMORY_COUNTERS.sizeof;
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, pmc.sizeof))
+        {
+            r.reserved_memory = pmc.WorkingSetSize;      // resident pages
+            r.used_memory = pmc.PagefileUsage;            // committed private bytes
+            r.peak_memory = pmc.PeakWorkingSetSize;
         }
         r.uptime = msecs(GetTickCount64());
     }
@@ -70,8 +92,14 @@ SystemInfo get_sysinfo()
         if (sysinfo(&info) < 0)
             assert(false, "sysinfo() failed!");
 
-        r.total_memory = cast(ulong)info.totalram * info.mem_unit;
-        r.available_memory = cast(ulong)info.freeram * info.mem_unit;
+        auto unit = cast(ulong)info.mem_unit;
+        r.total_memory = info.totalram * unit;
+        r.avail_memory = info.freeram * unit;
+
+        // Process-level stats from /proc/self/status
+        r.reserved_memory = read_proc_self_field("VmRSS:");   // resident set
+        r.used_memory = read_proc_self_field("VmSize:");       // virtual size (committed)
+        r.peak_memory = read_proc_self_field("VmPeak:");
         r.uptime = seconds(info.uptime);
     }
     else version (Posix)
@@ -79,12 +107,25 @@ SystemInfo get_sysinfo()
         import core.sys.posix.unistd;
 
         int pages = sysconf(_SC_PHYS_PAGES);
+        int avail = sysconf(_SC_AVPHYS_PAGES);
         int page_size = sysconf(_SC_PAGE_SIZE);
 
         assert(pages >= 0 && page_size >= 0, "sysconf() failed!");
 
         r.total_memory = cast(ulong)pages * page_size;
-        static assert(false, "TODO: need `available_memory`");
+        r.avail_memory = (avail >= 0) ? cast(ulong)avail * page_size : 0;
+        r.used_memory = r.total_memory - r.avail_memory;
+        r.reserved_memory = r.used_memory;
+    }
+    else version (BL808)
+    {
+        auto mi = mallinfo();
+        r.total_memory = heap_len();
+        r.used_memory = mi.uordblks;
+        r.reserved_memory = mi.arena;
+        r.avail_memory = r.total_memory - mi.arena + mi.fordblks;
+        r.peak_memory = mi.max_total_mem;
+        r.uptime = getAppTime();
     }
     return r;
 }
@@ -99,7 +140,7 @@ void set_system_idle_params(IdleParams params)
         enum EXECUTION_STATE ES_DISPLAY_REQUIRED = 0x00000002;
         enum EXECUTION_STATE ES_CONTINUOUS = 0x80000000;
 
-        SetThreadExecutionState(ES_CONTINUOUS | ((params & IdleParams.SystemRequired) ? ES_SYSTEM_REQUIRED : 0) | ((params & IdleParams.DisplayRequired) ? ES_DISPLAY_REQUIRED : 0));
+        SetThreadExecutionState(ES_CONTINUOUS | ((params & IdleParams.system_required) ? ES_SYSTEM_REQUIRED : 0) | ((params & IdleParams.display_required) ? ES_DISPLAY_REQUIRED : 0));
     }
     else version (Posix)
     {
@@ -120,15 +161,119 @@ unittest
     assert(info.uptime > Duration.zero);
 
     import urt.io;
-    writelnf("System info: {0} - {1}, mem: {2}kb ({3}kb)", info.os_name, info.processor, info.total_memory / (1024), info.available_memory / (1024));
+    writelnf("System: {0} - {1}", info.os_name, info.processor);
+    writelnf("  total: {0}kb  used: {1}kb  reserved: {2}kb  free: {3}kb  peak: {4}kb",
+        info.total_memory / 1024, info.used_memory / 1024,
+        info.reserved_memory / 1024, info.avail_memory / 1024,
+        info.peak_memory / 1024);
+
+    version (BL808)
+    {
+        import sys.bl808.irq : irq_count, irq_histogram;
+        writelnf("  IRQ total: {0}", irq_count);
+        foreach (i; 0 .. irq_histogram.length)
+        {
+            if (irq_histogram[i] > 0)
+                writelnf("    IRQ {0}: {1}", i, irq_histogram[i]);
+        }
+    }
 }
 
 
 package:
 
+version (BL808)
+{
+    extern(C) extern __gshared {
+        void* __heap_start;
+        void* __heap_end;
+    }
+
+    struct Mallinfo
+    {
+        size_t arena;      // total space from sbrk
+        size_t ordblks;    // number of free chunks
+        size_t smblks;     // unused
+        size_t hblks;      // unused
+        size_t hblkhd;     // unused
+        size_t uordblks;   // total allocated space
+        size_t fordblks;   // total free space
+        size_t keepcost;   // releasable space
+        size_t aordblks;   // number of allocated chunks
+        size_t max_total_mem; // max total allocated space
+    }
+    extern(C) Mallinfo mallinfo() @nogc nothrow;
+
+    extern(C) void* _sbrk(int incr) @nogc nothrow;
+
+    size_t heap_len()
+        => cast(size_t)&__heap_end - cast(size_t)&__heap_start;
+}
+
+version (linux)
+{
+    // Read a field from /proc/self/status, returns value in bytes (field is in kB)
+    ulong read_proc_self_field(string field) nothrow @nogc
+    {
+        import urt.file : File, open, read, close, FileOpenMode;
+
+        File f;
+        if (!f.open("/proc/self/status", FileOpenMode.ReadExisting))
+            return 0;
+
+        char[4096] buf = void;
+        size_t n;
+        auto r = f.read(buf, n);
+        f.close();
+        if (!r || n == 0)
+            return 0;
+
+        auto content = buf[0 .. n];
+        // Find field name in content
+        for (size_t i = 0; i + field.length < content.length; ++i)
+        {
+            if (content[i .. i + field.length] == field)
+            {
+                // Skip whitespace after field name
+                size_t j = i + field.length;
+                while (j < content.length && (content[j] == ' ' || content[j] == '\t'))
+                    ++j;
+                // Parse number
+                ulong val = 0;
+                while (j < content.length && content[j] >= '0' && content[j] <= '9')
+                {
+                    val = val * 10 + (content[j] - '0');
+                    ++j;
+                }
+                // /proc/self/status reports in kB
+                return val * 1024;
+            }
+        }
+        return 0;
+    }
+}
+
 version (Windows)
 {
-    import urt.internal.sys.windows.winbase : GlobalMemoryStatusEx, MEMORYSTATUSEX;
+    import urt.internal.sys.windows.winbase : GlobalMemoryStatusEx, GetCurrentProcess, MEMORYSTATUSEX;
+
+    struct PROCESS_MEMORY_COUNTERS
+    {
+        uint cb;
+        uint PageFaultCount;
+        size_t PeakWorkingSetSize;
+        size_t WorkingSetSize;
+        size_t QuotaPeakPagedPoolUsage;
+        size_t QuotaPagedPoolUsage;
+        size_t QuotaPeakNonPagedPoolUsage;
+        size_t QuotaNonPagedPoolUsage;
+        size_t PagefileUsage;
+        size_t PeakPagefileUsage;
+    }
+
+    extern(Windows) int GetProcessMemoryInfo(void* Process, PROCESS_MEMORY_COUNTERS* ppsmemCounters, uint cb) nothrow @nogc;
+
+    pragma(lib, "psapi");
 
     extern(Windows) ulong GetTickCount64();
 

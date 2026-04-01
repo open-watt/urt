@@ -22,8 +22,12 @@ DEPFILE := $(OBJDIR)/$(TARGETNAME).d
 
 DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=nosharedaccess -preview=in
 
-SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d')
+SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d' -not -path '$(SRCDIR)/sys/*')
 SOURCES := $(SOURCES) $(SRCDIR)/urt/internal/mbedtls.c
+
+ifeq ($(PLATFORM),riscv64)
+    SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys" -type f -name '*.d' 2>/dev/null)
+endif
 
 # Set target file based on build type and OS
 ifeq ($(BUILD_TYPE),exe)

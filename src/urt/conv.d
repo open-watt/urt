@@ -6,6 +6,19 @@ public import urt.string.format : toString;
 
 nothrow @nogc:
 
+// Workaround for LLVM bug: riscv-isel hangs when stores into a stack buffer
+// and memcmp on that buffer are visible in the same function with
+// +unaligned-scalar-mem. Preventing inlining keeps them in separate functions.
+// See: https://github.com/llvm/llvm-project/issues/XXXXX
+pragma(inline, false) private bool streq(const(char)[] a, const(char)[] b) pure
+{
+    if (a.length != b.length)
+        return false;
+    foreach (i; 0 .. a.length)
+        if (a[i] != b[i])
+            return false;
+    return true;
+}
 
 // on error or not-a-number cases, bytes_taken will contain 0
 
@@ -566,21 +579,21 @@ unittest
     assert(format_int(-123, null, 10, 2) == 4);
 
     size_t len = format_int(0, buffer);
-    assert(buffer[0 .. len] == "0");
+    assert(streq(buffer[0 .. len], "0"));
     len = format_int(14, buffer);
-    assert(buffer[0 .. len] == "14");
+    assert(streq(buffer[0 .. len], "14"));
     len = format_int(14, buffer, 2);
-    assert(buffer[0 .. len] == "1110");
+    assert(streq(buffer[0 .. len], "1110"));
     len = format_int(14, buffer, 8, 3);
-    assert(buffer[0 .. len] == " 16");
+    assert(streq(buffer[0 .. len], " 16"));
     len = format_int(14, buffer, 16, 4, '0');
-    assert(buffer[0 .. len] == "000E");
+    assert(streq(buffer[0 .. len], "000E"));
     len = format_int(-14, buffer, 16, 3, '0');
-    assert(buffer[0 .. len] == "-0E");
+    assert(streq(buffer[0 .. len], "-0E"));
     len = format_int(12345, buffer, 10, 3);
-    assert(buffer[0 .. len] == "12345");
+    assert(streq(buffer[0 .. len], "12345"));
     len = format_int(-123, buffer, 10, 6);
-    assert(buffer[0 .. len] == "  -123");
+    assert(streq(buffer[0 .. len], "  -123"));
 }
 
 

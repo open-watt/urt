@@ -1598,13 +1598,16 @@ const:
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// _d_dso_registry — ELF shared-object module registry
+// Module registration — LDC uses _Dmodule_ref linked list
 //
-// On ELF targets the compiler generates .init_array/.fini_array entries
-// that call _d_dso_registry with pointers to the module-info section.
-// We stash the module range here; uRT's C main() handles constructor
-// execution and unittest running via get_module_infos().
+// On ELF targets the compiler generates .init_array entries that chain
+// ModuleReference structs into _Dmodule_ref. On Linux, glibc's crt0
+// calls .init_array automatically. On bare-metal, start.S does it.
 // ──────────────────────────────────────────────────────────────────────
+
+version (Windows) {}
+else
+    extern(C) __gshared void* _Dmodule_ref = null;
 
 version (linux)
 {

@@ -26,12 +26,8 @@ version(Windows)
 }
 else version (Posix)
 {
-    import urt.internal.stdc;
-    import core.sys.posix.dirent;
-    import core.sys.posix.fcntl;
-    import core.sys.posix.stdlib;
-    import core.sys.posix.sys.stat;
-    import core.sys.posix.unistd;
+    import urt.internal.sys.posix;
+    import urt.internal.stdc.errno;
     import urt.mem.temp : tconcat;
     import urt.string : tstringz;
 
@@ -43,6 +39,7 @@ else version (Posix)
     enum POSIX_FADV_RANDOM = 1;
     enum POSIX_FADV_SEQUENTIAL = 2;
     extern(C) int posix_fadvise(int fd, off_t offset, off_t len, int advice) nothrow @nogc;
+    extern(C) int rename(scope const char*, scope const char*) nothrow @nogc;
 }
 else version (FreeStanding)
 {
@@ -126,7 +123,6 @@ bool file_exists(const(char)[] path)
     }
     else version (Posix)
     {
-        import core.sys.posix.sys.stat;
         stat_t st;
         return stat(path.tstringz, &st) == 0 && S_ISREG(st.st_mode);
     }
@@ -161,8 +157,7 @@ Result rename_file(const(char)[] oldPath, const(char)[] newPath)
     }
     else version (Posix)
     {
-        import core.sys.posix.stdio;
-        if (int result = rename(oldPath.tstringz, newPath.tstringz)!= 0)
+        if (int result = rename(oldPath.tstringz, newPath.tstringz) != 0)
            return posix_result(result);
     }
     else
@@ -367,7 +362,7 @@ Result create_directory(const(char)[] path)
     }
     else version (Posix)
     {
-        if (!core.sys.posix.sys.stat.mkdir(tconcat(path, "\0").ptr, 493 /* 0755 */) != 0)
+        if (!urt.internal.sys.posix.mkdir(tconcat(path, "\0").ptr, 493 /* 0755 */) != 0)
             return Result.success;
         r = errno_result();
     }
@@ -487,7 +482,7 @@ Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags 
                 flags |= O_DIRECT;
         }
 
-        int fd = core.sys.posix.fcntl.open(path.tstringz, flags, 0b110_110_110);
+        int fd = urt.internal.sys.posix.open(path.tstringz, flags, 0b110_110_110);
         if (fd < 0)
             return errno_result();
         file.fd = fd;
@@ -541,7 +536,7 @@ void close(ref File file)
     {
         if (file.fd == -1)
             return;
-        core.sys.posix.unistd.close(file.fd);
+        urt.internal.sys.posix.close(file.fd);
         file.fd = -1;
     }
     else
@@ -670,7 +665,7 @@ Result read(ref File file, void[] buffer, out size_t bytesRead)
     }
     else version (Posix)
     {
-        ptrdiff_t n = core.sys.posix.unistd.read(file.fd, buffer.ptr, buffer.length);
+        ptrdiff_t n = urt.internal.sys.posix.read(file.fd, buffer.ptr, buffer.length);
         if (n < 0)
             return errno_result();
         bytesRead = n;
@@ -723,7 +718,7 @@ Result write(ref File file, const(void)[] data, out size_t bytesWritten)
     }
     else version (Posix)
     {
-        ptrdiff_t n = core.sys.posix.unistd.write(file.fd, data.ptr, data.length);
+        ptrdiff_t n = urt.internal.sys.posix.write(file.fd, data.ptr, data.length);
         if (n < 0)
             return errno_result();
         bytesWritten = n;
@@ -839,7 +834,7 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
         if (file.fd == -1)
             return errno_result();
         Result r = get_path(file, buffer);
-        core.sys.posix.unistd.close(file.fd);
+        urt.internal.sys.posix.close(file.fd);
         return r;
     }
     else
@@ -870,4 +865,32 @@ else unittest
     assert(!file.is_open);
 
     assert(filename.delete_file());
+
+    // create a temp file with known content
+    filename = buffer[];
+    assert(get_temp_filename(filename, "", "stat_test"));
+
+    assert(file.open(filename, FileOpenMode.WriteTruncate));
+
+    // write exactly 42 bytes
+    ubyte[42] data;
+    size_t written;
+    assert(file.write(data[], written));
+    assert(written == 42);
+
+    // get_size exercises fstat + st_size
+    assert(file.get_size() == 42);
+
+    // set_size exercises ftruncate, then fstat again
+    assert(file.set_size(100));
+    assert(file.get_size() == 100);
+
+    file.close();
+
+    // file_exists exercises stat + S_ISREG + st_mode
+    assert(file_exists(filename));
+
+    // clean up and verify
+    assert(filename.delete_file());
+    assert(!file_exists(filename));
 }

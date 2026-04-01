@@ -62,7 +62,7 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 
     version (unittest)
     {
-        import urt.internal.stdc : exit;
+        import urt.internal.stdc.stdlib : exit;
 
         size_t executed, passed;
         foreach (m; modules)

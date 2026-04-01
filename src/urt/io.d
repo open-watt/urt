@@ -116,4 +116,6 @@ unittest
 
 private:
 
-import core.stdc.stdio : stdout, stderr, fwrite, fflush;
+version (FreeStanding) {}
+else
+    import urt.internal.stdc.stdio : stdout, stderr, fwrite, fflush;

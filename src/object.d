@@ -27,15 +27,27 @@ else version (AArch64)
     else version = WithArgTypes;
 }
 
-
 // ──────────────────────────────────────────────────────────────────────
 // Fundamental type aliases (compiler hardcodes references to these)
 // ──────────────────────────────────────────────────────────────────────
 
 alias size_t = typeof(int.sizeof);
-alias ptrdiff_t = typeof(cast(void*) 0 - cast(void*) 0);
+alias ptrdiff_t = typeof(cast(void*)0 - cast(void*)0);
 alias nullptr_t = typeof(null);
 alias noreturn = typeof(*null);
+
+// needed so druntime's core.stdc.stdio compiles on AArch64
+version (AArch64)
+{
+    extern (C++, std) struct __va_list
+    {
+        void* __stack;
+        void* __gr_top;
+        void* __vr_top;
+        int __gr_offs;
+        int __vr_offs;
+    }
+}
 
 version (Windows)
     alias wchar wchar_t;

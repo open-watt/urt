@@ -613,12 +613,14 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
         digits = cast(int)parse_uint(format[dot + 1 .. $]);
     version (Windows)
     {
+        import urt.internal.stdc.stdlib : _gcvt_s;
         int err = _gcvt_s(result.ptr, result.length, value, digits);
         if (err != 0)
             return -2;
     }
     else
     {
+        import urt.internal.stdc.stdlib : gcvt;
         if (gcvt(value, digits, result.ptr) is null)
             return -2;
     }
@@ -639,34 +641,24 @@ unittest
     import urt.io;
     char[64] buf;
     auto len = format_float(0.0, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "0");
     len = format_float(1.0, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "1");
     len = format_float(-1.0, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "-1");
     len = format_float(3.14159, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "3.14159");
     len = format_float(3.14159, buf, ".3");
-    writeln(buf[0..len]);
     assert(buf[0..len] == "3.14");
     len = format_float(1.5, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "1.5");
     len = format_float(1e6, buf);
-    writeln(buf[0..len]);
-    assert(buf[0..len] == "1.e+006");
+    assert(buf[0..len] == "1.e+006" || buf[0..len] == "1e+06");
     len = format_float(1e6, buf, ".7");
-    writeln(buf[0..len]);
     assert(buf[0..len] == "1000000");
     len = format_float(0.001, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "0.001" || buf[0..len] == "1.e-003"); // i don't know why it emits e-3 :/
     len = format_float(-0.0, buf);
-    writeln(buf[0..len]);
     assert(buf[0..len] == "-0"); // do we want to print -0?
 }
 
@@ -733,11 +725,6 @@ template to(T)
 
 
 private:
-
-version (Windows)
-    extern(C) int _gcvt_s(const char* buffer, size_t size_in_bytes, double value, int digits) pure nothrow @nogc;
-else
-    extern(C) char* gcvt(double value, int ndigit, char* buf) pure nothrow @nogc;
 
 // valid result is 0 .. 35; result is garbage outside that bound
 uint get_digit(char c) pure

@@ -40,7 +40,7 @@ void[] alloc_aligned(size_t size, size_t alignment) pure
     }
     else version (Posix)
     {
-        import core.sys.posix.stdlib;
+        import urt.internal.sys.posix;
         void* mem;
         return posix_memalign(&mem, alignment, size) ? null : mem[0 .. size];
     }

@@ -10,7 +10,7 @@ version (Windows)
 }
 else version (Posix)
 {
-    import core.sys.posix.time;
+    import urt.internal.sys.posix;
 }
 else version (BL808)
 {

@@ -36,6 +36,8 @@ private:
 // (_Dmain), then run destructors.
 // ----------------------------------------------------------------------
 
+extern(C) void nothing(int x, ...);
+
 extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 {
     import urt.mem;

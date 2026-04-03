@@ -15,7 +15,15 @@ template write_to(WriteTarget target, bool newline = false)
     {
         static if (target == WriteTarget.stdout || target == WriteTarget.stderr)
         {
-            version (FreeStanding)
+            version (Espressif)
+            {
+                foreach (ch; str)
+                    esp_rom_uart_putc(ch);
+                static if (newline)
+                    esp_rom_uart_putc('\n');
+                return cast(int) str.length;
+            }
+            else version (FreeStanding)
             {
                 import sys.bl808.uart : uart0_puts;
                 uart0_puts(str);
@@ -83,7 +91,11 @@ alias writeln_debug = write_to!(WriteTarget.debugstring, true);
 
 void flush(WriteTarget target = WriteTarget.stdout)() nothrow @nogc
 {
-    version (FreeStanding)
+    version (Espressif)
+    {
+        // ROM UART writes are unbuffered
+    }
+    else version (FreeStanding)
     {
         // UART writes are unbuffered — nothing to flush
     }
@@ -116,6 +128,11 @@ unittest
 
 private:
 
-version (FreeStanding) {}
+version (Espressif)
+{
+    // ROM UART putc -- in mask ROM, zero code size
+    extern(C) void esp_rom_uart_putc(char c) nothrow @nogc;
+}
+else version (FreeStanding) {}
 else
     import urt.internal.stdc.stdio : stdout, stderr, fwrite, fflush;

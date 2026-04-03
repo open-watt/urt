@@ -44,6 +44,12 @@ void[] alloc_aligned(size_t size, size_t alignment) pure
         void* mem;
         return posix_memalign(&mem, alignment, size) ? null : mem[0 .. size];
     }
+    else version (Espressif)
+    {
+        enum MALLOC_CAP_DEFAULT = 1 << 12;
+        void* mem = heap_caps_aligned_alloc(alignment, size, MALLOC_CAP_DEFAULT);
+        return mem ? mem[0 .. size] : null;
+    }
     else version (FreeStanding)
     {
         size_t header_size = (void*).sizeof + alignment;
@@ -88,6 +94,8 @@ void free_aligned(void[] mem) pure
         _aligned_free(mem.ptr);
     else version (Posix)
         urt.mem.free(mem.ptr);
+    else version (Espressif)
+        heap_caps_aligned_free(mem.ptr);
     else version (FreeStanding)
     {
         void* p = (cast(void**)mem.ptr)[-1];
@@ -116,6 +124,8 @@ size_t memsize(void* ptr) pure
         return _aligned_msize(ptr);
     else version (Posix)
         return malloc_usable_size(ptr);
+    else version (Espressif)
+        return heap_caps_get_allocated_size(ptr);
     else version (FreeStanding)
     {
         void* mem = (cast(void**)ptr)[-1];
@@ -148,7 +158,14 @@ version (Windows)
     extern(C) size_t _aligned_msize(void* memblock) pure;
 }
 
-version (Posix)
+version (Espressif)
+{
+    // ESP-IDF heap_caps API — provides aligned alloc and size query
+    extern(C) void* heap_caps_aligned_alloc(size_t alignment, size_t size, uint caps) pure;
+    extern(C) void heap_caps_aligned_free(void* ptr) pure;
+    extern(C) size_t heap_caps_get_allocated_size(void* ptr) pure;
+}
+else version (Posix)
 {
     extern(C) size_t malloc_usable_size(void *__ptr) pure;
 }

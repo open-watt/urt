@@ -31,9 +31,9 @@ nothrow @nogc:
 // Register definitions
 // ══════════════════════════════════════════════════════════════════════════════
 
-enum UartId : uint { uart0 = 0, uart1 = 1, uart2 = 2, uart3 = 3 }
+enum NUM_UARTS = 4;
 
-private immutable uint[4] uart_base = [
+private immutable uint[NUM_UARTS] uart_base = [
     0x2000_A000, // UART0
     0x2000_A100, // UART1
     0x2000_AA00, // UART2 (shared with ISO11898 CAN)
@@ -173,18 +173,18 @@ struct UartConfig
 }
 
 // Per-UART state
-private __gshared Ring[4] rx_ring;
-private __gshared Ring[4] tx_ring;
-private __gshared bool[4] uart_open_flag;
+private __gshared Ring[NUM_UARTS] rx_ring;
+private __gshared Ring[NUM_UARTS] tx_ring;
+private __gshared bool[NUM_UARTS] uart_open_flag;
 private __gshared IrqHandler prev_irq_handler;
 private __gshared bool irq_handler_installed;
 
 // Open a UART: configure baud rate, frame format, clear FIFOs, enable TX+RX.
 // UART3 gets interrupt-driven I/O. UART0/1/2 require uart_poll().
 // Returns false if id is out of range.
-bool uart_open(UartId id, UartConfig cfg)
+bool uart_open(uint id, UartConfig cfg)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return false;
 
     immutable base = uart_base[id];
@@ -253,7 +253,7 @@ bool uart_open(UartId id, UartConfig cfg)
     uart_open_flag[id] = true;
 
     // UART3: set up interrupt-driven I/O
-    if (id == UartId.uart3)
+    if (id == 3)
     {
         // Install our IRQ handler (chain with previous)
         if (!irq_handler_installed)
@@ -279,9 +279,9 @@ bool uart_open(UartId id, UartConfig cfg)
 }
 
 // Disable TX and RX, mask interrupts.
-void uart_close(UartId id)
+void uart_close(uint id)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return;
 
     immutable base = uart_base[id];
@@ -289,7 +289,7 @@ void uart_close(UartId id)
     // Mask all interrupts
     reg_write(base, INT_MASK, INT_MASK_ALL);
 
-    if (id == UartId.uart3)
+    if (id == 3)
         disable_irq(UART3_PLIC_IRQ);
 
     auto tx_cfg = reg_read(base, UTX_CONFIG);
@@ -304,18 +304,18 @@ void uart_close(UartId id)
 
 // Poll hardware FIFOs and transfer to/from ring buffers.
 // Required for UART0/1/2 (no D0 interrupt). Harmless for UART3.
-void uart_poll(UartId id)
+void uart_poll(uint id)
 {
-    if (id > UartId.max || !uart_open_flag[id])
+    if (id >= NUM_UARTS || !uart_open_flag[id])
         return;
     drain_rx_fifo(id);
     fill_tx_fifo(id);
 }
 
 // Non-blocking read: pull from RX ring buffer, return bytes read.
-ptrdiff_t uart_read(UartId id, void[] buffer)
+ptrdiff_t uart_read(uint id, void[] buffer)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -326,9 +326,9 @@ ptrdiff_t uart_read(UartId id, void[] buffer)
 
 // Non-blocking write: push into TX ring buffer, kick TX if needed.
 // Returns bytes accepted (may be less than data.length if ring is full).
-ptrdiff_t uart_write(UartId id, const(void)[] data)
+ptrdiff_t uart_write(uint id, const(void)[] data)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -339,7 +339,7 @@ ptrdiff_t uart_write(UartId id, const(void)[] data)
     fill_tx_fifo(id);
 
     // For UART3, unmask TX FIFO interrupt so ISR continues draining
-    if (id == UartId.uart3 && !tx_ring[id].empty)
+    if (id == 3 && !tx_ring[id].empty)
     {
         auto mask = reg_read(uart_base[id], INT_MASK);
         mask &= ~INT_UTX_FIFO;
@@ -351,9 +351,9 @@ ptrdiff_t uart_write(UartId id, const(void)[] data)
 }
 
 // Return number of bytes available to read from RX ring.
-ptrdiff_t uart_rx_pending(UartId id)
+ptrdiff_t uart_rx_pending(uint id)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -363,9 +363,9 @@ ptrdiff_t uart_rx_pending(UartId id)
 }
 
 // Clear RX ring buffer and hardware FIFO. Returns bytes discarded.
-ptrdiff_t uart_flush(UartId id)
+ptrdiff_t uart_flush(uint id)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -384,9 +384,9 @@ ptrdiff_t uart_flush(UartId id)
 
 // Check and clear FIFO error flags (overflow/underflow).
 // Returns true if any error was detected.
-bool uart_check_errors(UartId id)
+bool uart_check_errors(uint id)
 {
-    if (id > UartId.max)
+    if (id >= NUM_UARTS)
         return true;
 
     immutable base = uart_base[id];
@@ -411,7 +411,7 @@ bool uart_check_errors(UartId id)
 private:
 
 // Drain hardware RX FIFO into software ring buffer.
-void drain_rx_fifo(UartId id)
+void drain_rx_fifo(uint id)
 {
     immutable base = uart_base[id];
     ubyte[1] b = void;
@@ -427,7 +427,7 @@ void drain_rx_fifo(UartId id)
 }
 
 // Fill hardware TX FIFO from software ring buffer.
-void fill_tx_fifo(UartId id)
+void fill_tx_fifo(uint id)
 {
     immutable base = uart_base[id];
     ubyte[1] b = void;
@@ -448,7 +448,7 @@ void uart_irq_handler(uint irq)
 {
     if (irq == UART3_PLIC_IRQ)
     {
-        immutable base = uart_base[UartId.uart3];
+        immutable base = uart_base[3];
         immutable sts = reg_read(base, INT_STS);
         immutable mask = reg_read(base, INT_MASK);
         immutable active = sts & ~mask;
@@ -456,7 +456,7 @@ void uart_irq_handler(uint irq)
         // RX FIFO threshold or RX timeout — drain into ring
         if (active & (INT_URX_FIFO | INT_URX_RTO))
         {
-            drain_rx_fifo(UartId.uart3);
+            drain_rx_fifo(3);
             if (active & INT_URX_RTO)
                 reg_write(base, INT_CLEAR, INT_URX_RTO);
         }
@@ -464,9 +464,9 @@ void uart_irq_handler(uint irq)
         // TX FIFO has space — refill from ring
         if (active & INT_UTX_FIFO)
         {
-            fill_tx_fifo(UartId.uart3);
+            fill_tx_fifo(3);
             // If ring is drained, mask TX interrupt until more data arrives
-            if (tx_ring[UartId.uart3].empty)
+            if (tx_ring[3].empty)
             {
                 auto m = reg_read(base, INT_MASK);
                 m |= INT_UTX_FIFO;

@@ -4,6 +4,17 @@ import urt.platform;
 import urt.processor;
 import urt.time;
 
+version (Espressif)
+{
+    enum uint MALLOC_CAP_DEFAULT = 1 << 12;
+    extern(C) nothrow @nogc
+    {
+        size_t heap_caps_get_total_size(uint caps);
+        size_t heap_caps_get_free_size(uint caps);
+        size_t heap_caps_get_minimum_free_size(uint caps);
+    }
+}
+
 nothrow @nogc:
 
 
@@ -116,6 +127,14 @@ SystemInfo get_sysinfo()
         r.avail_memory = (avail >= 0) ? cast(ulong)avail * page_size : 0;
         r.used_memory = r.total_memory - r.avail_memory;
         r.reserved_memory = r.used_memory;
+    }
+    else version (Espressif)
+    {
+        r.total_memory = heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
+        r.avail_memory = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+        r.used_memory = r.total_memory - r.avail_memory;
+        r.peak_memory = r.total_memory - heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
+        r.uptime = getAppTime();
     }
     else version (BL808)
     {

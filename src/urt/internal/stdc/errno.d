@@ -39,6 +39,11 @@ version (SystemZ) version = IBMZ_Any;
 version (X86)     version = X86_Any;
 version (X86_64)  version = X86_Any;
 
+// Picolibc forked from newlib and shares its errno constant values.
+// The accessor differs (picolibc uses a plain global, newlib uses __errno()),
+version (CRuntime_Picolibc) version = NewlibCompat;
+version (CRuntime_Newlib)   version = NewlibCompat;
+
 @trusted: // Only manipulates errno.
 nothrow:
 @nogc:
@@ -65,6 +70,21 @@ else version (CRuntime_Musl)
     {
         ref int __errno_location();
         alias errno = __errno_location;
+    }
+}
+else version (CRuntime_Picolibc)
+{
+    version (FreeRTOS)
+    {
+        // On FreeRTOS, picolibc defines errno as _Thread_local which conflicts
+        // with emulated-TLS. Use a C shim to access it indirectly.
+        extern (C) int* ow_errno_location() nothrow @nogc;
+        @property ref int errno() nothrow @nogc { return *ow_errno_location(); }
+    }
+    else
+    {
+        // Bare-metal single-threaded: errno is a plain global.
+        extern (C) extern int errno;
     }
 }
 else version (CRuntime_Newlib)
@@ -250,7 +270,7 @@ version (CRuntime_Microsoft)
     enum ETXTBSY            = 139;
     enum EWOULDBLOCK        = 140;
 }
-else version (CRuntime_Newlib)
+else version (NewlibCompat)
 {
     enum EPERM = 1;
     enum ENOENT = 2;

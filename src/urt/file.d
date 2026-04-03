@@ -127,7 +127,7 @@ bool file_exists(const(char)[] path)
         return stat(path.tstringz, &st) == 0 && S_ISREG(st.st_mode);
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return false;
 }
 
 Result delete_file(const(char)[] path)
@@ -143,7 +143,7 @@ Result delete_file(const(char)[] path)
             return errno_result();
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
 
     return Result.success;
 }
@@ -161,7 +161,7 @@ Result rename_file(const(char)[] oldPath, const(char)[] newPath)
            return posix_result(result);
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
 
     return Result.success;
 }
@@ -179,7 +179,7 @@ Result copy_file(const(char)[] oldPath, const(char)[] newPath, bool overwriteExi
         assert(false);
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
 
     return Result.success;
 }
@@ -232,7 +232,7 @@ Result get_path(ref const File file, ref char[] buffer)
         buffer = buffer[0..r];
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -269,7 +269,7 @@ Result get_file_attributes(const(char)[] path, out FileAttributes outAttributes)
         assert(false);
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
 
     return Result.success;
 }
@@ -313,7 +313,7 @@ Result get_attributes(ref const File file, out FileAttributes outAttributes)
         assert(false);
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
 
     return InternalResult.unsupported;
 }
@@ -322,9 +322,12 @@ void[] load_file(const(char)[] path, NoGCAllocator allocator = defaultAllocator(
 {
     File f;
     Result r = f.open(path, FileOpenMode.ReadExisting);
-    if (!r && r.file_result == FileResult.NotFound)
-        return null;
-    assert(r, "TODO: handle error");
+    if (!r)
+    {
+        if (r.file_result == FileResult.NotFound)
+            return null;
+        return null; // TODO: are there any errors we can handle?
+    }
     ulong size = f.get_size();
     assert(size <= size_t.max, "File is too large");
     void[] buffer = allocator.alloc(cast(size_t)size);
@@ -368,8 +371,7 @@ Result create_directory(const(char)[] path)
     }
     else
     {
-        assert(0, "File: not implemented for this platform");
-        return InternalResult.unsupported;
+        return InternalResult.unsupported; // no filesystem on this platform
     }
 
     if (r == InternalResult.already_exists)
@@ -508,7 +510,7 @@ Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags 
             lseek(file.fd, 0, SEEK_END);
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
 
     return Result.success;
 }
@@ -520,7 +522,7 @@ bool is_open(ref const File file)
     else version (Posix)
         return file.fd != -1;
     else
-        assert(0, "File: not implemented for this platform");
+        return false;
 }
 
 void close(ref File file)
@@ -539,8 +541,6 @@ void close(ref File file)
         urt.internal.sys.posix.close(file.fd);
         file.fd = -1;
     }
-    else
-        assert(0, "File: not implemented for this platform");
 }
 
 ulong get_size(ref const File file)
@@ -560,7 +560,7 @@ ulong get_size(ref const File file)
         return fs.st_size;
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return 0;
 }
 
 Result set_size(ref File file, ulong size)
@@ -609,7 +609,7 @@ Result set_size(ref File file, ulong size)
             return errno_result();
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -626,7 +626,7 @@ ulong get_pos(ref const File file)
     else version (Posix)
         return lseek(file.fd, 0, SEEK_CUR);
     else
-        assert(0, "File: not implemented for this platform");
+        return 0;
 }
 
 Result set_pos(ref File file, ulong offset)
@@ -645,7 +645,7 @@ Result set_pos(ref File file, ulong offset)
             return errno_result();
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -671,7 +671,7 @@ Result read(ref File file, void[] buffer, out size_t bytesRead)
         bytesRead = n;
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -703,7 +703,7 @@ Result read_at(ref File file, void[] buffer, ulong offset, out size_t bytesRead)
         bytesRead = n;
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -724,7 +724,7 @@ Result write(ref File file, const(void)[] data, out size_t bytesWritten)
         bytesWritten = n;
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -752,7 +752,7 @@ Result write_at(ref File file, const(void)[] data, ulong offset, out size_t byte
         bytesWritten = n;
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -769,7 +769,7 @@ Result flush(ref File file)
             return errno_result();
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 
@@ -804,7 +804,7 @@ FileResult file_result(Result result)
         }
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return FileResult.Failure; // no filesystem on this platform
 }
 
 Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] prefix)
@@ -838,7 +838,7 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
         return r;
     }
     else
-        assert(0, "File: not implemented for this platform");
+        return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
 }
 

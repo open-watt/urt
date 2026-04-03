@@ -32,11 +32,14 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
         import sys.bl808.uart : uart0_puts, uart0_hex;
         import urt.mem.temp : tconcat;
         uart0_puts(tconcat("\n*** ASSERT: ", msg, " at ", file, ':', line, '\n'));
-        while (true)
-        {
-            // SPIN!
-            // (we should probably reboot)
-        }
+        while (true) {}
+    }
+    else version (Espressif)
+    {
+        import urt.io : writef_to, WriteTarget;
+        writef_to!(WriteTarget.stdout, true)("*** ASSERT: {2} at {0}:{1}", file, line, msg);
+        import urt.internal.stdc.stdlib : exit;
+        exit(-1);
     }
     else
     {

@@ -88,6 +88,13 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
         flush!(WriteTarget.stderr)();
         run_module_dtors(modules);
         int result = executed > 0 && passed == executed ? 0 : 1;
+
+        version (FreeStanding)
+        {
+            import urt.internal.stdc.stdlib : abort;
+            writeln_err("Process restarting...");
+            abort();
+        }
     }
     else
     {

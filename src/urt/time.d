@@ -16,6 +16,10 @@ else version (BL808)
 {
     import sys.bl808.timer;
 }
+else version (Espressif)
+{
+    extern(C) long esp_timer_get_time() nothrow @nogc;
+}
 
 nothrow @nogc:
 
@@ -724,6 +728,10 @@ MonoTime getTime()
     {
         return MonoTime(mtime_read());
     }
+    else version (Espressif)
+    {
+        return MonoTime(esp_timer_get_time());
+    }
     else version (FreeStanding)
     {
         assert(0, "getTime: not yet implemented for bare-metal");
@@ -751,6 +759,10 @@ SysTime getSysTime()
     else version (BL808)
     {
         return SysTime(mtime_read() + sys_time_offset);
+    }
+    else version (Espressif)
+    {
+        return SysTime(esp_timer_get_time() + sys_time_offset);
     }
     else version (FreeStanding)
     {
@@ -793,6 +805,8 @@ ulong unixTimeNs(SysTime t) pure
         return t.ticks;
     else version (BL808)
         return t.ticks * nsec_multiplier;
+    else version (Espressif)
+        return t.ticks * nsec_multiplier;
     else version (FreeStanding)
         return t.ticks;
     else
@@ -806,6 +820,8 @@ SysTime from_unix_time_ns(ulong ns) pure
     else version (Posix)
         return SysTime(ns);
     else version (BL808)
+        return SysTime(ns / nsec_multiplier);
+    else version (Espressif)
         return SysTime(ns / nsec_multiplier);
     else version (FreeStanding)
         return SysTime(ns);
@@ -852,6 +868,11 @@ void set_utc_time(ulong unix_ns)
         p.utc_offset = cast(long)hbn_ticks - cast(long)rtc_read();
         p.magic = HbnPersist.HBN_MAGIC;
     }
+    else version (Espressif)
+    {
+        // Offset stored in RAM; lost on reboot.
+        // TODO: persist to NVS or RTC memory for deep-sleep survival
+    }
 }
 
 
@@ -878,6 +899,11 @@ else version (BL808)
 {
     enum uint ticks_per_second = mtime_freq_hz;
     enum uint nsec_multiplier = 1_000_000_000 / mtime_freq_hz;
+}
+else version (Espressif)
+{
+    enum uint ticks_per_second = 1_000_000;
+    enum uint nsec_multiplier = 1_000;
 }
 else version (FreeStanding)
 {
@@ -935,6 +961,11 @@ package(urt) void init_clock()
     {
         rtc_enable();
         recalc_sys_time_offset();
+    }
+    else version (Espressif)
+    {
+        // No wall-clock reference until set_utc_time() is called (e.g. via NTP/SNTP)
+        cast()sys_time_offset = 0;
     }
     else version (FreeStanding)
     {

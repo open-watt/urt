@@ -67,6 +67,10 @@ nothrow @nogc:
 // TODO: should we have a way to convert Result to StringResult, so we can format error messages?
 
 
+version (Posix)             version = Errno;
+version (CRuntime_Picolibc) version = Errno;
+version (CRuntime_Newlib)   version = Errno;
+
 version (Windows)
 {
     import urt.internal.sys.windows;
@@ -91,14 +95,14 @@ version (Windows)
     Result getlasterror_result()
         => Result(GetLastError());
 }
-else version (Posix)
+else version (Errno)
 {
     import urt.internal.stdc.errno;
 
     enum InternalResult : Result
     {
         success =           Result.success,
-        failed =            Result(EIO), // not a good general failure, but a lot of people use it this way
+        failed =            Result(EIO),
         buffer_too_small =  Result(ERANGE),
         invalid_parameter = Result(EINVAL),
         data_error =        Result(EILSEQ),
@@ -131,15 +135,4 @@ else version (FreeStanding)
         aborted =           Result(9),
         no_memory =         Result(10),
     }
-
-    // Bare-metal errno support — provided by the IP stack or libc shim
-    extern (C) private int* __errno_location() nothrow @nogc;
-
-    @property int errno() nothrow @nogc @trusted
-    {
-        return *__errno_location();
-    }
-
-    Result errno_result()
-        => Result(errno);
 }

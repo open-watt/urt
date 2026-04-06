@@ -13,8 +13,6 @@ extern(C) extern __gshared {
     pragma(mangle, "__heap_end") void* _heap_end_ptr;
 }
 
-__gshared int errno_val = 0;
-
 public:
 
 // ================================================================
@@ -56,7 +54,6 @@ extern(C) int _getpid() @nogc nothrow { return 1; }
 // POSIX networking stubs (replaced by XRAM WiFi IPC when ready)
 // ================================================================
 
-extern(C) int* __errno_location() @nogc nothrow { return &errno_val; }
 extern(C) int socket(int domain, int type, int protocol) @nogc nothrow { return -1; }
 extern(C) int close(int fd) @nogc nothrow { return -1; }
 extern(C) int poll(void* fds, uint nfds, int timeout) @nogc nothrow { return -1; }

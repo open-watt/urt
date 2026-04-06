@@ -33,6 +33,7 @@ else version (Posix)
         _recv = urt.internal.os.recv, _recvfrom = urt.internal.os.recvfrom, _shutdown = urt.internal.os.shutdown,
         _close = urt.internal.os.close, _poll = urt.internal.os.poll;
 
+    version = BSDSockets;
     version = HasUnixSocket;
     version = HasIPv6;
 
@@ -47,9 +48,11 @@ else version (Posix)
     enum AF_BRIDGE = 7;     // Multiprotocol bridge
     enum AF_INET6 = 10;     // IP version 6
 }
-else version (FreeStanding)
+else version (lwIP)
 {
-    // Bare-metal: BSD socket constants compatible with lwIP
+    // lwIP BSD socket API -- constants and structs match lwIP defaults
+    version = BSDSockets;
+
     alias SocketHandle = int;
     enum INVALID_SOCKET = -1;
 
@@ -71,63 +74,109 @@ else version (FreeStanding)
 
     enum SOL_SOCKET = 0xFFF;
 
-    enum MSG_PEEK = 0x02;
+    enum MSG_PEEK = 0x01;
+
+    enum SHUT_RD   = 0;
+    enum SHUT_WR   = 1;
+    enum SHUT_RDWR = 2;
+
+    // fcntl constants for non-blocking mode
+    enum F_GETFL   = 3;
+    enum F_SETFL   = 4;
+    enum O_NONBLOCK = 1;
+
+    // socket options
+    enum SO_REUSEADDR  = 0x0004;
+    enum SO_KEEPALIVE  = 0x0008;
+    enum SO_LINGER     = 0x0080;
+    enum SO_SNDBUF     = 0x1001;
+    enum SO_RCVBUF     = 0x1002;
+    enum SO_ERROR      = 0x1007;
+    enum TCP_NODELAY   = 0x01;
+    enum TCP_KEEPIDLE  = 0x03;
+    enum TCP_KEEPINTVL = 0x04;
+    enum TCP_KEEPCNT   = 0x05;
+    enum IP_ADD_MEMBERSHIP = 3;
+    enum IP_MULTICAST_TTL  = 5;
+    enum IP_MULTICAST_LOOP = 7;
 
     alias socklen_t = uint;
     struct in_addr { uint s_addr; }
     struct in6_addr { ubyte[16] s6_addr; }
-    struct sockaddr { ushort sa_family; ubyte[14] sa_data; }
-    struct sockaddr_in { ushort sin_family; ushort sin_port; in_addr sin_addr; ubyte[8] sin_zero; }
-    struct sockaddr_in6 { ushort sin6_family; ushort sin6_port; uint sin6_flowinfo; in6_addr sin6_addr; uint sin6_scope_id; }
-    struct sockaddr_storage { ushort ss_family; ubyte[126] _pad; }
-    struct linger { ushort l_onoff; ushort l_linger; }
+    struct sockaddr { ubyte sa_len; ubyte sa_family; ubyte[14] sa_data; }
+    struct sockaddr_in { ubyte sin_len; ubyte sin_family; ushort sin_port; in_addr sin_addr; ubyte[8] sin_zero; }
+    struct sockaddr_in6 { ubyte sin6_len; ubyte sin6_family; ushort sin6_port; uint sin6_flowinfo; in6_addr sin6_addr; uint sin6_scope_id; }
+    struct sockaddr_storage { ubyte s2_len; ubyte ss_family; ubyte[2] s2_data1; uint[3] s2_data2; uint[3] s2_data3; }
+    struct linger { int l_onoff; int l_linger; }
     struct ip_mreq { in_addr imr_multiaddr; in_addr imr_interface; }
     struct iovec { void* iov_base; size_t iov_len; }
-    struct msghdr { void* msg_name; socklen_t msg_namelen; iovec* msg_iov; size_t msg_iovlen; void* msg_control; size_t msg_controllen; int msg_flags; }
+    struct msghdr { void* msg_name; socklen_t msg_namelen; iovec* msg_iov; int msg_iovlen; void* msg_control; socklen_t msg_controllen; int msg_flags; }
 
-    enum SO_ERROR = 0x1007;
-
-    enum POLLRDNORM = 0x0040;
-    enum POLLWRNORM = 0x0100;
-    enum POLLERR    = 0x0008;
-    enum POLLHUP    = 0x0010;
-    enum POLLNVAL   = 0x0020;
+    enum POLLRDNORM = 0x10;
+    enum POLLWRNORM = 0x80;
+    enum POLLERR    = 0x04;
+    enum POLLHUP    = 0x200;
+    enum POLLNVAL   = 0x08;
 
     enum AI_PASSIVE     = 0x01;
     enum AI_CANONNAME   = 0x02;
     enum AI_NUMERICHOST = 0x04;
-    enum AI_V4MAPPED    = 0x08;
-    enum AI_ALL         = 0x10;
-    enum AI_ADDRCONFIG  = 0x20;
-    enum AI_NUMERICSERV = 0x400;
+    enum AI_NUMERICSERV = 0x08;
+    enum AI_V4MAPPED    = 0x10;
+    enum AI_ALL         = 0x20;
+    enum AI_ADDRCONFIG  = 0x40;
 
     struct pollfd { int fd; short events; short revents; }
     struct addrinfo { int ai_flags; int ai_family; int ai_socktype; int ai_protocol; socklen_t ai_addrlen; sockaddr* ai_addr; char* ai_canonname; addrinfo* ai_next; }
 
-    // BSD socket function stubs — will be provided by the IP stack
+    // lwIP socket functions -- actual symbol names are lwip_* prefixed
     extern(C) nothrow @nogc
     {
-        int poll(pollfd*, uint, int);
-        SocketHandle socket(int domain, int type, int protocol);
-        int _bind(SocketHandle, const(sockaddr)*, socklen_t);
-        int _listen(SocketHandle, int);
-        int _connect(SocketHandle, const(sockaddr)*, socklen_t);
-        SocketHandle _accept(SocketHandle, sockaddr*, socklen_t*);
-        ptrdiff_t _send(SocketHandle, const(void)*, size_t, int);
-        ptrdiff_t _sendto(SocketHandle, const(void)*, size_t, int, const(sockaddr)*, socklen_t);
-        ptrdiff_t _sendmsg(SocketHandle, const(msghdr)*, int);
-        ptrdiff_t _recv(SocketHandle, void*, size_t, int);
-        ptrdiff_t _recvfrom(SocketHandle, void*, size_t, int, sockaddr*, socklen_t*);
-        int _shutdown(SocketHandle, int);
-        int setsockopt(SocketHandle, int, int, const(void)*, socklen_t);
-        int getsockopt(SocketHandle, int, int, void*, socklen_t*);
-        int getsockname(SocketHandle, sockaddr*, socklen_t*);
-        int getpeername(SocketHandle, sockaddr*, socklen_t*);
-        int getaddrinfo(const(char)*, const(char)*, const(addrinfo)*, addrinfo**);
-        void freeaddrinfo(addrinfo*);
-        int gethostname(char*, size_t);
-        int close(int);
+        int lwip_poll(pollfd*, uint, int);
+        SocketHandle lwip_socket(int, int, int);
+        int lwip_bind(SocketHandle, const(sockaddr)*, socklen_t);
+        int lwip_listen(SocketHandle, int);
+        int lwip_connect(SocketHandle, const(sockaddr)*, socklen_t);
+        SocketHandle lwip_accept(SocketHandle, sockaddr*, socklen_t*);
+        ptrdiff_t lwip_send(SocketHandle, const(void)*, size_t, int);
+        ptrdiff_t lwip_sendto(SocketHandle, const(void)*, size_t, int, const(sockaddr)*, socklen_t);
+        ptrdiff_t lwip_sendmsg(SocketHandle, const(msghdr)*, int);
+        ptrdiff_t lwip_recv(SocketHandle, void*, size_t, int);
+        ptrdiff_t lwip_recvfrom(SocketHandle, void*, size_t, int, sockaddr*, socklen_t*);
+        int lwip_shutdown(SocketHandle, int);
+        int lwip_setsockopt(SocketHandle, int, int, const(void)*, socklen_t);
+        int lwip_getsockopt(SocketHandle, int, int, void*, socklen_t*);
+        int lwip_getsockname(SocketHandle, sockaddr*, socklen_t*);
+        int lwip_getpeername(SocketHandle, sockaddr*, socklen_t*);
+        int ow_lwip_getaddrinfo(const(char)*, const(char)*, const(addrinfo)*, addrinfo**);
+        void ow_lwip_freeaddrinfo(addrinfo*);
+        int lwip_close(int);
+        int lwip_fcntl(int, int, int);
     }
+
+    // Aliases so the rest of the codebase uses POSIX names
+    alias _poll = lwip_poll;
+    alias socket = lwip_socket;
+    alias _bind = lwip_bind;
+    alias _listen = lwip_listen;
+    alias _connect = lwip_connect;
+    alias _accept = lwip_accept;
+    alias _send = lwip_send;
+    alias _sendto = lwip_sendto;
+    alias _sendmsg = lwip_sendmsg;
+    alias _recv = lwip_recv;
+    alias _recvfrom = lwip_recvfrom;
+    alias _shutdown = lwip_shutdown;
+    alias setsockopt = lwip_setsockopt;
+    alias getsockopt = lwip_getsockopt;
+    alias getsockname = lwip_getsockname;
+    alias getpeername = lwip_getpeername;
+    alias getaddrinfo = ow_lwip_getaddrinfo;
+    alias freeaddrinfo = ow_lwip_freeaddrinfo;
+    alias _close = lwip_close;
+    alias fcntl = lwip_fcntl;
+
+    int gethostname(char*, size_t) nothrow @nogc { return -1; }
 }
 else
     static assert(false, "Platform not supported");
@@ -284,7 +333,7 @@ Result close(Socket socket)
     int result;
     version (Windows)
         result = closesocket(socket.handle);
-    else version (Posix)
+    else version (BSDSockets)
         result = _close(socket.handle);
     else
         assert(false, "Not implemented!");
@@ -304,7 +353,7 @@ Result shutdown(Socket socket, SocketShutdownMode how)
             case SocketShutdownMode.write:      t = SD_SEND;    break;
             case SocketShutdownMode.read_write: t = SD_BOTH;    break;
         }
-        else version (Posix)
+        else version (BSDSockets)
         {
             case SocketShutdownMode.read:       t = SHUT_RD;    break;
             case SocketShutdownMode.write:      t = SHUT_WR;    break;
@@ -518,9 +567,9 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
             hdr.msg_name = sock_addr;
             hdr.msg_namelen = cast(socklen_t)addr_len;
             hdr.msg_iov = iov.ptr;
-            hdr.msg_iovlen = n;
+            hdr.msg_iovlen = cast(typeof(hdr.msg_iovlen))n;
             hdr.msg_control = cast(void*)control.ptr;
-            hdr.msg_controllen = control.length;
+            hdr.msg_controllen = cast(typeof(hdr.msg_controllen))control.length;
             hdr.msg_flags = 0;
 
             sent = _sendmsg(socket.handle, &hdr, map_message_flags(flags));
@@ -670,7 +719,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
             uint opt = value ? 1 : 0;
             r.system_code = ioctlsocket(socket.handle, FIONBIO, &opt);
         }
-        else version (Posix)
+        else version (BSDSockets)
         {
             int flags = fcntl(socket.handle, F_GETFL, 0);
             r.system_code = fcntl(socket.handle, F_SETFL, value ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
@@ -732,7 +781,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
                         break;
                     case OptType.linger:
                         itmp = cast(int)value.as!"seconds";
-                        ling = linger(!!itmp, cast(ushort)itmp);
+                        ling = linger(!!itmp, cast(typeof(linger.l_linger))itmp);
                         arg = &ling;
                         break;
                     default: assert(false, "Unexpected");
@@ -1067,10 +1116,10 @@ Result poll(PollFd[] pollFds, Duration timeout, out uint numEvents)
     int r;
     version (Windows)
         r = WSAPoll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
-    else version (Posix)
-        r = _poll(fds.ptr, pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
+    else version (BSDSockets)
+        r = _poll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
     else
-        r = poll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
+        assert(false, "Not implemented!");
     if (r < 0)
     {
         numEvents = 0;
@@ -1214,7 +1263,7 @@ SocketResult socket_result(Result result)
         if (result.system_code == WSAEINVAL)
             return SocketResult.invalid_argument;
     }
-    else version (Posix)
+    else version (Errno)
     {
         static if (EAGAIN != EWOULDBLOCK)
             if (result.system_code == EAGAIN)
@@ -1254,6 +1303,8 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 
             sockaddr_in* ain = cast(sockaddr_in*)sock_addr;
             memzero(ain, sockaddr_in.sizeof);
+            version (lwIP)
+                ain.sin_len = sockaddr_in.sizeof;
             ain.sin_family = s_addressFamily[AddressFamily.ipv4];
             version (Windows)
             {
@@ -1262,7 +1313,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                 ain.sin_addr.S_un.S_un_b.s_b3 = address._a.ipv4.addr.b[2];
                 ain.sin_addr.S_un.S_un_b.s_b4 = address._a.ipv4.addr.b[3];
             }
-            else version (Posix)
+            else version (BSDSockets)
                 ain.sin_addr.s_addr = address._a.ipv4.addr.address;
             else
                 assert(false, "Not implemented!");
@@ -1279,6 +1330,8 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
 
                 sockaddr_in6* ain6 = cast(sockaddr_in6*)sock_addr;
                 memzero(ain6, sockaddr_in6.sizeof);
+                version (lwIP)
+                    ain6.sin6_len = sockaddr_in6.sizeof;
                 ain6.sin6_family = s_addressFamily[AddressFamily.ipv6];
                 storeBigEndian(&ain6.sin6_port, cast(ushort)address._a.ipv6.port);
                 storeBigEndian(cast(uint*)&ain6.sin6_flowinfo, address._a.ipv6.flow_info);
@@ -1289,6 +1342,8 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                         storeBigEndian(&ain6.sin6_addr.in6_u.u6_addr16[a], address._a.ipv6.addr.s[a]);
                     else version (Posix)
                         storeBigEndian(&ain6.sin6_addr.__in6_u.__u6_addr16[a], address._a.ipv6.addr.s[a]);
+                    else version (BSDSockets)
+                        storeBigEndian(cast(ushort*)&ain6.sin6_addr.s6_addr[a * 2], address._a.ipv6.addr.s[a]);
                     else
                         assert(false, "Not implemented!");
                 }
@@ -1389,7 +1444,7 @@ IPAddr make_IPAddr(ref const in_addr in4)
         addr.b[2] = in4.S_un.S_un_b.s_b3;
         addr.b[3] = in4.S_un.S_un_b.s_b4;
     }
-    else version (Posix)
+    else version (BSDSockets)
         addr.address = in4.s_addr;
     else
         assert(false, "Not implemented!");
@@ -1405,6 +1460,8 @@ IPv6Addr make_IPv6Addr(ref const in6_addr in6)
             addr.s[a] = loadBigEndian(&in6.in6_u.u6_addr16[a]);
         else version (Posix)
             addr.s[a] = loadBigEndian(&in6.__in6_u.__u6_addr16[a]);
+        else version (BSDSockets)
+            addr.s[a] = loadBigEndian(cast(const(ushort)*)&in6.s6_addr[a * 2]);
         else
             assert(false, "Not implemented!");
     }
@@ -1452,7 +1509,12 @@ struct OptInfo
     OptType platform_type;
 }
 
-__gshared immutable ushort[AddressFamily.max+1] s_addressFamily = [
+version (lwIP)
+    alias sa_family_t = ubyte;
+else
+    alias sa_family_t = ushort;
+
+__gshared immutable sa_family_t[AddressFamily.max+1] s_addressFamily = [
     AF_UNSPEC,
     AF_UNIX,
     AF_INET,
@@ -1610,15 +1672,29 @@ else version (Darwin)
         OptInfo( TCP_NODELAY, OptType.bool_, OptType.int_ ),
     ];
 }
-else version (FreeStanding)
+else version (lwIP)
 {
-    // Bare-metal stub — socket options not yet supported
-    __gshared immutable OptInfo[SocketOption.max] s_socketOptions = () {
-        OptInfo[SocketOption.max] r;
-        foreach (ref o; r)
-            o = OptInfo(-1, OptType.unsupported, OptType.unsupported);
-        return r;
-    }();
+    __gshared immutable OptInfo[SocketOption.max] s_socketOptions = [
+        OptInfo( -1, OptType.bool_, OptType.bool_ ), // NonBlocking
+        OptInfo( SO_KEEPALIVE, OptType.bool_, OptType.int_ ),
+        OptInfo( SO_LINGER, OptType.duration, OptType.linger ),
+        OptInfo( -1, OptType.unsupported, OptType.unsupported ), // RandomizePort
+        OptInfo( SO_SNDBUF, OptType.int_, OptType.int_ ),
+        OptInfo( SO_RCVBUF, OptType.int_, OptType.int_ ),
+        OptInfo( SO_REUSEADDR, OptType.bool_, OptType.int_ ),
+        OptInfo( -1, OptType.unsupported, OptType.unsupported ), // NoSigPipe
+        OptInfo( SO_ERROR, OptType.int_, OptType.int_ ),
+        OptInfo( IP_ADD_MEMBERSHIP, OptType.multicast_group, OptType.multicast_group ),
+        OptInfo( IP_MULTICAST_LOOP, OptType.bool_, OptType.int_ ),
+        OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
+        OptInfo( -1, OptType.unsupported, OptType.unsupported ), // IP_PKTINFO
+        OptInfo( -1, OptType.unsupported, OptType.unsupported ), // IPV6_PKTINFO
+        OptInfo( TCP_KEEPIDLE, OptType.duration, OptType.seconds ),
+        OptInfo( TCP_KEEPINTVL, OptType.duration, OptType.seconds ),
+        OptInfo( TCP_KEEPCNT, OptType.int_, OptType.int_ ),
+        OptInfo( -1, OptType.unsupported, OptType.unsupported ), // TcpKeepAlive (Apple)
+        OptInfo( TCP_NODELAY, OptType.bool_, OptType.int_ ),
+    ];
 }
 else
     static assert(false, "TODO");

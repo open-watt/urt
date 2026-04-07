@@ -172,7 +172,7 @@ int32_t ow_uart_flush(int port)
 
 static esp_netif_t *ow_wifi_netif_sta;
 static esp_netif_t *ow_wifi_netif_ap;
-static bool ow_wifi_initialized;
+static int ow_wifi_refcount;
 
 typedef void (*ow_wifi_event_cb_t)(int event_id, void *data, int data_len);
 
@@ -212,34 +212,35 @@ static void ow_wifi_event_handler(void *arg, esp_event_base_t base,
 
 int ow_wifi_init(void)
 {
-    if (ow_wifi_initialized)
-        return 1;
-
-    esp_err_t err = esp_netif_init();
-    if (err != ESP_OK)
-        return 0;
-
-    err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    if (ow_wifi_refcount++ > 0)
         return 0;
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    err = esp_wifi_init(&cfg);
+    esp_err_t err = esp_wifi_init(&cfg);
     if (err != ESP_OK)
-        return 0;
+    {
+        ow_wifi_refcount--;
+        return (int)err;
+    }
+
+    // Create netifs before registering RX callbacks or starting WiFi,
+    // so esp_netif_receive() always has valid targets.
+    if (!ow_wifi_netif_sta)
+        ow_wifi_netif_sta = esp_netif_create_default_wifi_sta();
+    if (!ow_wifi_netif_ap)
+        ow_wifi_netif_ap = esp_netif_create_default_wifi_ap();
 
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                &ow_wifi_event_handler, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                &ow_wifi_event_handler, NULL);
 
-    ow_wifi_initialized = true;
-    return 1;
+    return 0;
 }
 
 void ow_wifi_deinit(void)
 {
-    if (!ow_wifi_initialized)
+    if (--ow_wifi_refcount > 0)
         return;
 
     esp_wifi_stop();
@@ -255,8 +256,6 @@ void ow_wifi_deinit(void)
         esp_netif_destroy(ow_wifi_netif_ap);
         ow_wifi_netif_ap = NULL;
     }
-
-    ow_wifi_initialized = false;
 }
 
 int ow_wifi_set_mode(int mode)
@@ -277,9 +276,6 @@ int ow_wifi_stop(void)
 
 int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bssid)
 {
-    if (!ow_wifi_netif_sta)
-        ow_wifi_netif_sta = esp_netif_create_default_wifi_sta();
-
     wifi_config_t cfg = {0};
     if (ssid)
     {
@@ -315,9 +311,6 @@ int ow_wifi_sta_disconnect(void)
 int ow_wifi_ap_config(const char *ssid, const char *password,
                       uint8_t channel, uint8_t max_conn, uint8_t hidden)
 {
-    if (!ow_wifi_netif_ap)
-        ow_wifi_netif_ap = esp_netif_create_default_wifi_ap();
-
     wifi_config_t cfg = {0};
     if (ssid)
     {

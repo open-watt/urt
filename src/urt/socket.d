@@ -36,6 +36,7 @@ else version (Posix)
     version = BSDSockets;
     version = HasUnixSocket;
     version = HasIPv6;
+    version = Errno;
 
     alias SocketHandle = int;
     enum INVALID_SOCKET = -1;
@@ -52,6 +53,8 @@ else version (lwIP)
 {
     // lwIP BSD socket API -- constants and structs match lwIP defaults
     version = BSDSockets;
+    version = HasIPv6;
+    version = Errno;
 
     alias SocketHandle = int;
     enum INVALID_SOCKET = -1;
@@ -152,7 +155,10 @@ else version (lwIP)
         void ow_lwip_freeaddrinfo(addrinfo*);
         int lwip_close(int);
         int lwip_fcntl(int, int, int);
+        int lwip_ioctl(int, int, void*);
     }
+
+    enum FIONBIO = 0x8004667e; // _IOW('f', 126, unsigned long)
 
     // Aliases so the rest of the codebase uses POSIX names
     alias _poll = lwip_poll;
@@ -175,6 +181,7 @@ else version (lwIP)
     alias freeaddrinfo = ow_lwip_freeaddrinfo;
     alias _close = lwip_close;
     alias fcntl = lwip_fcntl;
+    alias ioctlsocket = lwip_ioctl;
 
     int gethostname(char*, size_t) nothrow @nogc { return -1; }
 }
@@ -721,8 +728,17 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
         }
         else version (BSDSockets)
         {
-            int flags = fcntl(socket.handle, F_GETFL, 0);
-            r.system_code = fcntl(socket.handle, F_SETFL, value ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
+            version (lwIP)
+            {
+                // lwIP's fcntl has quirks with F_SETFL; use ioctlsocket(FIONBIO) instead.
+                int opt = value ? 1 : 0;
+                r.system_code = ioctlsocket(socket.handle, FIONBIO, &opt);
+            }
+            else
+            {
+                int flags = fcntl(socket.handle, F_GETFL, 0);
+                r.system_code = fcntl(socket.handle, F_SETFL, value ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK));
+            }
         }
         else
             assert(false, "Not implemented!");
@@ -857,7 +873,7 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
 
     // determine the option 'level'
     OptLevel level = get_optlevel(option);
-    version (HasIPv6)
+    version (HasIPv6) {} else
         assert(level != OptLevel.ipv6 && level != OptLevel.icmpv6, "Platform does not support IPv6!");
 
     // platforms don't all agree on option data formats!
@@ -1220,8 +1236,10 @@ Result socket_getlasterror()
 {
     version (Windows)
         return Result(WSAGetLastError());
-    else
+    else version (Errno)
         return errno_result();
+    else
+        static assert(false, "socket_getlasterror not implemented for this platform");
 }
 
 Result get_socket_error(Socket socket)
@@ -1265,6 +1283,7 @@ SocketResult socket_result(Result result)
     }
     else version (Errno)
     {
+        import urt.internal.stdc.errno;
         static if (EAGAIN != EWOULDBLOCK)
             if (result.system_code == EAGAIN)
                 return SocketResult.would_block;

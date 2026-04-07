@@ -115,14 +115,16 @@ public import urt.util : min, max, swap;
 
 static if (__VERSION__ >= 2113)
 {
+    static import urt.atomic;
+    alias _d_atomicOp = urt.atomic.atomic_op;
+
     static import urt.math;
     alias _d_pow = urt.math.pow;
 
     auto _d_sqrt(T)(T x)
     {
         // TODO: should we have a `float` one?
-        import urt.math : sqrt;
-        return sqrt(x);
+        return urt.math.sqrt(x);
     }
 }
 

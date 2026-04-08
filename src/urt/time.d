@@ -12,9 +12,10 @@ else version (Posix)
 {
     import urt.internal.sys.posix;
 }
-else version (BL808)
+else version (Bouffalo)
 {
-    import sys.bl808.timer;
+    version (BL808) import sys.bl808.timer;
+    else            import sys.bl618.timer;
 }
 else version (Espressif)
 {
@@ -724,7 +725,7 @@ MonoTime getTime()
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return MonoTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
-    else version (BL808)
+    else version (Bouffalo)
     {
         return MonoTime(mtime_read());
     }
@@ -756,7 +757,7 @@ SysTime getSysTime()
         clock_gettime(CLOCK_REALTIME, &ts);
         return SysTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
-    else version (BL808)
+    else version (Bouffalo)
     {
         return SysTime(mtime_read() + sys_time_offset);
     }
@@ -803,7 +804,7 @@ ulong unixTimeNs(SysTime t) pure
         return (t.ticks - unix_epoch_as_filetime) * 100UL;
     else version (Posix)
         return t.ticks;
-    else version (BL808)
+    else version (Bouffalo)
         return t.ticks * nsec_multiplier;
     else version (Espressif)
         return t.ticks * nsec_multiplier;
@@ -819,7 +820,7 @@ SysTime from_unix_time_ns(ulong ns) pure
         return SysTime(ns / 100UL + unix_epoch_as_filetime);
     else version (Posix)
         return SysTime(ns);
-    else version (BL808)
+    else version (Bouffalo)
         return SysTime(ns / nsec_multiplier);
     else version (Espressif)
         return SysTime(ns / nsec_multiplier);
@@ -895,7 +896,7 @@ else version (Posix)
     enum uint ticks_per_second = 1_000_000_000;
     enum uint nsec_multiplier = 1;
 }
-else version (BL808)
+else version (Bouffalo)
 {
     enum uint ticks_per_second = mtime_freq_hz;
     enum uint nsec_multiplier = 1_000_000_000 / mtime_freq_hz;

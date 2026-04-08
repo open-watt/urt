@@ -53,6 +53,13 @@ void sleep(Duration duration)
         if (!was_enabled)
             disable_irq(IrqClass.timer);
     }
+    else version (BL618)
+    {
+        // TODO: use mtimecmp + WFI once IRQ driver is implemented
+        import sys.bl618.timer : mtime_read;
+        ulong deadline = mtime_read() + duration.as!"usecs";
+        while (mtime_read() < deadline) {}
+    }
     else
     {
         usleep(cast(uint)duration.as!"usecs");
@@ -136,7 +143,7 @@ SystemInfo get_sysinfo()
         r.peak_memory = r.total_memory - heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
         r.uptime = getAppTime();
     }
-    else version (BL808)
+    else version (Bouffalo)
     {
         auto mi = mallinfo();
         r.total_memory = heap_len();
@@ -201,7 +208,7 @@ unittest
 
 package:
 
-version (BL808)
+version (Bouffalo)
 {
     extern(C) extern __gshared {
         void* __heap_start;

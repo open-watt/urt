@@ -6,7 +6,7 @@ public import urt.mem;
 public import urt.result;
 public import urt.time;
 
-version (BL808)
+version (BareMetal)
     version = SocketCallbacks;
 
 version (SocketCallbacks)

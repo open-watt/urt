@@ -1,13 +1,17 @@
-/// BL618 interrupt controller driver
-///
-/// BL616/BL618 uses a CLIC-style interrupt controller.
-///
-/// TODO: Implement from BL616 register map.
+// BL618 interrupt controller driver (CLIC-style)
 module sys.bl618.irq;
 
 @nogc nothrow:
 
-/// Globally disable interrupts
+enum bool has_plic = false;
+enum bool has_nvic = false;
+enum bool has_per_irq_control = false;
+enum bool has_irq_priority = false;
+enum bool has_wait_for_interrupt = false;
+enum bool has_irq_diagnostics = false;
+enum uint irq_max = 0;
+
+// Globally disable interrupts
 void irq_disable()
 {
     asm @nogc nothrow

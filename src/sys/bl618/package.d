@@ -27,12 +27,12 @@ extern(C) void sys_init()
     // handling works (required for fibre abort, etc.).
     __register_frame_info(&__eh_frame_start, &__eh_frame_object);
 
-    uart0_puts("BL618: sys_init\n");
+    uart0_hw_puts("BL618: sys_init\n");
 
     // Timer: set up 20Hz tick (50ms) for the main loop
     timer_set_periodic(50_000, &tick_stub);
 
-    uart0_puts("BL618: ready\n");
+    uart0_hw_puts("BL618: ready\n");
 }
 
 private void tick_stub() @nogc nothrow

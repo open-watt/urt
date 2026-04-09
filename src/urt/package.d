@@ -46,6 +46,9 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     import urt.time : init_clock;
     init_clock();
 
+    import sys.baremetal.uart : uart_init, uart_deinit;
+    uart_init();
+
     import urt.rand;
     init_rand();
 
@@ -104,6 +107,8 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     }
 
     run_module_dtors(modules);
+
+    uart_deinit();
 
     deinit_string_heap();
 

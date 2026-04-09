@@ -32,7 +32,7 @@ extern(C) void sys_init()
 
     // UART0 is already initialized by M0 before D0 boots.
     // Just confirm we're alive.
-    uart0_puts("BL808 D0: sys_init\n");
+    uart0_hw_puts("BL808 D0: sys_init\n");
 
     // Timer: set up 20Hz tick (50ms) for the main loop
     // TODO: wire this to Application.run() instead of a stub
@@ -41,7 +41,7 @@ extern(C) void sys_init()
     // IPC: initialize XRAM ring buffers
     ipc_init();
 
-    uart0_puts("BL808 D0: ready\n");
+    uart0_hw_puts("BL808 D0: ready\n");
 }
 
 private void tick_stub() @nogc nothrow

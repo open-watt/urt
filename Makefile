@@ -23,6 +23,7 @@ DEPFILE := $(OBJDIR)/$(TARGETNAME).d
 DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=nosharedaccess -preview=in
 
 SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d' -not -path '$(SRCDIR)/sys/*')
+SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/baremetal" -type f -name '*.d')
 SOURCES := $(SOURCES) $(SRCDIR)/urt/internal/mbedtls.c
 
 ifeq ($(PLATFORM),riscv64)

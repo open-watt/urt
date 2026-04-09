@@ -12,14 +12,9 @@ else version (Posix)
 {
     import urt.internal.sys.posix;
 }
-else version (Bouffalo)
+else version (Embedded)
 {
-    version (BL808) import sys.bl808.timer;
-    else            import sys.bl618.timer;
-}
-else version (Espressif)
-{
-    extern(C) long esp_timer_get_time() nothrow @nogc;
+    import sys.baremetal.timer;
 }
 
 nothrow @nogc:
@@ -725,17 +720,12 @@ MonoTime getTime()
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return MonoTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
-    else version (Bouffalo)
+    else version (Embedded)
     {
-        return MonoTime(mtime_read());
-    }
-    else version (Espressif)
-    {
-        return MonoTime(esp_timer_get_time());
-    }
-    else version (FreeStanding)
-    {
-        assert(0, "getTime: not yet implemented for bare-metal");
+        static if (has_mtime)
+            return MonoTime(mtime_read());
+        else
+            static assert(false, "getTime: no monotonic timer for this platform");
     }
     else
     {
@@ -757,17 +747,12 @@ SysTime getSysTime()
         clock_gettime(CLOCK_REALTIME, &ts);
         return SysTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
     }
-    else version (Bouffalo)
+    else version (Embedded)
     {
-        return SysTime(mtime_read() + sys_time_offset);
-    }
-    else version (Espressif)
-    {
-        return SysTime(esp_timer_get_time() + sys_time_offset);
-    }
-    else version (FreeStanding)
-    {
-        assert(0, "getSysTime: not yet implemented for bare-metal");
+        static if (has_mtime)
+            return SysTime(mtime_read() + sys_time_offset);
+        else
+            static assert(false, "getSysTime: no monotonic timer for this platform");
     }
     else
     {
@@ -804,12 +789,8 @@ ulong unixTimeNs(SysTime t) pure
         return (t.ticks - unix_epoch_as_filetime) * 100UL;
     else version (Posix)
         return t.ticks;
-    else version (Bouffalo)
+    else version (Embedded)
         return t.ticks * nsec_multiplier;
-    else version (Espressif)
-        return t.ticks * nsec_multiplier;
-    else version (FreeStanding)
-        return t.ticks;
     else
         static assert(false, "TODO");
 }
@@ -820,12 +801,8 @@ SysTime from_unix_time_ns(ulong ns) pure
         return SysTime(ns / 100UL + unix_epoch_as_filetime);
     else version (Posix)
         return SysTime(ns);
-    else version (Bouffalo)
+    else version (Embedded)
         return SysTime(ns / nsec_multiplier);
-    else version (Espressif)
-        return SysTime(ns / nsec_multiplier);
-    else version (FreeStanding)
-        return SysTime(ns);
     else
         static assert(false, "TODO");
 }
@@ -859,20 +836,18 @@ void set_utc_time(ulong unix_ns)
         ts.tv_nsec = cast(uint)(unix_ns % 1_000_000_000);
         clock_settime(CLOCK_REALTIME, &ts);
     }
-    else version (BL808)
+    else version (Embedded)
     {
-        auto p = hbn_persist();
-        ulong mtime_ticks = unix_ns / nsec_multiplier;
-        ulong sec = mtime_ticks / mtime_freq_hz;
-        ulong frac = mtime_ticks % mtime_freq_hz;
-        ulong hbn_ticks = sec * rtc_freq_hz + frac * rtc_freq_hz / mtime_freq_hz;
-        p.utc_offset = cast(long)hbn_ticks - cast(long)rtc_read();
-        p.magic = HbnPersist.HBN_MAGIC;
-    }
-    else version (Espressif)
-    {
-        // Offset stored in RAM; lost on reboot.
-        // TODO: persist to NVS or RTC memory for deep-sleep survival
+        static if (has_rtc)
+        {
+            auto p = hbn_persist();
+            ulong mtime_ticks = unix_ns / nsec_multiplier;
+            ulong sec = mtime_ticks / mtime_freq_hz;
+            ulong frac = mtime_ticks % mtime_freq_hz;
+            ulong hbn_ticks = sec * rtc_freq_hz + frac * rtc_freq_hz / mtime_freq_hz;
+            p.utc_offset = cast(long)hbn_ticks - cast(long)rtc_read();
+            p.magic = HbnPersist.HBN_MAGIC;
+        }
     }
 }
 
@@ -896,20 +871,10 @@ else version (Posix)
     enum uint ticks_per_second = 1_000_000_000;
     enum uint nsec_multiplier = 1;
 }
-else version (Bouffalo)
+else version (Embedded)
 {
     enum uint ticks_per_second = mtime_freq_hz;
     enum uint nsec_multiplier = 1_000_000_000 / mtime_freq_hz;
-}
-else version (Espressif)
-{
-    enum uint ticks_per_second = 1_000_000;
-    enum uint nsec_multiplier = 1_000;
-}
-else version (FreeStanding)
-{
-    enum uint ticks_per_second = 1_000_000_000;
-    enum uint nsec_multiplier = 1;
 }
 
 __gshared immutable ulong sys_time_offset;
@@ -958,20 +923,19 @@ package(urt) void init_clock()
         cast()sys_time_offset = boot_time;
         has_wall_time = true;
     }
-    else version (BL808)
+    else version (Embedded)
     {
-        rtc_enable();
-        recalc_sys_time_offset();
-    }
-    else version (Espressif)
-    {
-        // No wall-clock reference until set_utc_time() is called (e.g. via NTP/SNTP)
-        cast()sys_time_offset = 0;
-    }
-    else version (FreeStanding)
-    {
-        // Bare-metal: no wall-clock reference until set_utc_time() is called.
-        cast()sys_time_offset = 0;
+        timer_init();
+
+        static if (has_rtc)
+        {
+            rtc_enable();
+            recalc_sys_time_offset();
+        }
+        else
+        {
+            cast()sys_time_offset = 0;
+        }
     }
     else
         static assert(false, "TODO");
@@ -1213,12 +1177,10 @@ ulong datetime_to_unix_ns(DateTime dt) pure
     return total_sec * 1_000_000_000 + dt.ns;
 }
 
-version (BL808)
+version (Embedded) static if (has_rtc)
 {
     __gshared ulong last_hbn;
 
-    /// call periodically to correct HBN drift against mtime
-    /// also detects 40-bit HBN counter wrap (~388 days) and compensate
     void correct_drift()
     {
         auto p = hbn_persist();
@@ -1237,7 +1199,7 @@ version (BL808)
         // What does HBN + offset think it is (converted to mtime ticks)?
         ulong hbn_total = now_hbn + p.utc_offset;
         ulong sys_hbn = hbn_total / rtc_freq_hz * mtime_freq_hz
-                      + hbn_total % rtc_freq_hz * mtime_freq_hz / rtc_freq_hz;
+                        + hbn_total % rtc_freq_hz * mtime_freq_hz / rtc_freq_hz;
 
         // difference is accumulated drift; fold into utc_offset
         long drift_mtime = sys_mtime - sys_hbn;

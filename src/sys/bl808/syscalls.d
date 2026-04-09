@@ -25,7 +25,7 @@ extern(C) int _read(int fd, void* buf, size_t n) @nogc nothrow { return 0; }
 extern(C) int _write(int fd, const(void)* buf, size_t n) @nogc nothrow
 {
     if (fd == 1 || fd == 2)
-        uart0_puts((cast(const(char)*) buf)[0 .. n]);
+        uart0_hw_puts((cast(const(char)*) buf)[0 .. n]);
     return cast(int) n;
 }
 

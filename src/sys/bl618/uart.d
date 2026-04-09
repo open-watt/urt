@@ -12,70 +12,56 @@
 ///       Stubbed to provide the API surface needed by serial.d.
 module sys.bl618.uart;
 
+import sys.baremetal.uart : Parity, StopBits, UartConfig;
+
 nothrow @nogc:
 
-enum UartId : uint { uart0 = 0, uart1 = 1 }
+enum num_uarts = 2;
+enum uint uart_clock_hz = 40_000_000;
+enum bool has_irq_driven_uart = false;
+enum bool has_dma_driven_uart = false;
 
-enum UartParity : ubyte { none, even, odd }
-enum UartStopBits : ubyte { one, one_point_five, two }
-
-struct UartConfig
-{
-    uint baud_rate = 115200;
-    ubyte data_bits = 8;
-    UartParity parity = UartParity.none;
-    UartStopBits stop_bits = UartStopBits.one;
-}
-
-/// Open and configure a UART.
-bool uart_open(UartId id, UartConfig cfg)
+bool uart_hw_open(uint id, UartConfig cfg)
 {
     // TODO: configure UART registers
     return true;
 }
 
-/// Close a UART.
-void uart_close(UartId id)
+void uart_hw_close(uint id)
 {
     // TODO: disable UART
 }
 
-/// Read available bytes from UART RX ring buffer.
-ptrdiff_t uart_read(UartId id, void[] buffer)
+ptrdiff_t uart_hw_read(uint id, void[] buffer)
 {
     // TODO: read from RX ring buffer
     return 0;
 }
 
-/// Write bytes to UART TX.
-ptrdiff_t uart_write(UartId id, const(void)[] data)
+ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 {
     // TODO: write to TX FIFO/ring buffer
     return 0;
 }
 
-/// Poll hardware FIFOs — call from update() to drain/fill ring buffers.
-void uart_poll(UartId id)
+void uart_hw_poll(uint id)
 {
     // TODO: poll RX/TX FIFOs
 }
 
-/// Check for UART errors (framing, parity, overflow).
-bool uart_check_errors(UartId id)
+bool uart_hw_check_errors(uint id)
 {
     // TODO: check error status register
     return false;
 }
 
-/// Return number of bytes available in RX buffer.
-ptrdiff_t uart_rx_pending(UartId id)
+ptrdiff_t uart_hw_rx_pending(uint id)
 {
     // TODO: return ring buffer count
     return 0;
 }
 
-/// Flush TX buffer (blocking).
-ptrdiff_t uart_flush(UartId id)
+ptrdiff_t uart_hw_flush(uint id)
 {
     // TODO: drain TX ring buffer
     return 0;
@@ -83,7 +69,7 @@ ptrdiff_t uart_flush(UartId id)
 
 /// Transmit a string on UART0 (blocking, polled).
 /// Used for early boot messages before the full console is up.
-void uart0_puts(const(char)[] s)
+void uart0_hw_puts(const(char)[] s)
 {
     // TODO: direct register write to UART0 TX FIFO
     // UART0 base: 0x2000_A000, FIFO_WDATA offset: 0x88

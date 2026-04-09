@@ -6,21 +6,23 @@ module sys.bl618.syscalls;
 
 @nogc nothrow:
 
-private extern(C) extern const void* __heap_start;
-private extern(C) extern const void* __heap_end;
+private extern(C) extern __gshared {
+    pragma(mangle, "__heap_start") void* _heap_start_ptr;
+    pragma(mangle, "__heap_end") void* _heap_end_ptr;
+}
 
 private __gshared void* _heap_ptr;
 
 extern(C) void* _sbrk(ptrdiff_t incr)
 {
     if (_heap_ptr is null)
-        _heap_ptr = cast(void*) &__heap_start;
+        _heap_ptr = cast(void*)&_heap_start_ptr;
 
     void* prev = _heap_ptr;
     void* next = _heap_ptr + incr;
 
-    if (next > cast(void*) &__heap_end)
-        return cast(void*) -1;
+    if (next > cast(void*)&_heap_end_ptr)
+        return cast(void*)-1;
 
     _heap_ptr = next;
     return prev;
@@ -28,9 +30,9 @@ extern(C) void* _sbrk(ptrdiff_t incr)
 
 extern(C) int _write(int fd, const void* buf, size_t count)
 {
-    import sys.bl618.uart : uart0_puts;
+    import sys.bl618.uart : uart0_hw_puts;
     if (fd == 1 || fd == 2)
-        uart0_puts((cast(const(char)*) buf)[0 .. count]);
+        uart0_hw_puts((cast(const(char)*) buf)[0 .. count]);
     return cast(int) count;
 }
 

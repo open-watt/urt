@@ -27,10 +27,9 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
     if (msg.length == 0)
         msg = "Assertion failed";
 
-    version (Bouffalo)
+    version (BareMetal)
     {
-        version (BL808) import sys.bl808.uart : uart0_puts;
-        else            import sys.bl618.uart : uart0_puts;
+        import sys.baremetal.uart : uart0_puts;
         import urt.mem.temp : tconcat;
         uart0_puts(tconcat("\n*** ASSERT: ", msg, " at ", file, ':', line, '\n'));
         while (true) {}

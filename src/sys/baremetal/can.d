@@ -153,7 +153,7 @@ Result can_open(ref Can can, ubyte port, ref const CanConfig cfg, CanRxCallback 
         if (port >= num_can)
             return InternalResult.invalid_parameter;
 
-        if (!can_open(port, cfg))
+        if (!can_hw_open(port, cfg))
             return InternalResult.failed;
 
         can.port = port;
@@ -171,26 +171,28 @@ void can_close(ref Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        can_close(can.port);
+        can_hw_close(can.port);
     can.port = ubyte.max;
 }
 
 // Transmit
 
-int can_transmit(ref Can can, ref const CanFrame frame, CanTxOp* op = null)
+Result can_transmit(ref Can can, ref const CanFrame frame, CanTxOp* op = null)
 {
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
     {
-        int ret = can_transmit(can.port, frame);
+        bool ok = can_hw_transmit(can.port, frame);
         if (op !is null)
         {
-            op.status = ret >= 0 ? CanTxOp.Status.complete : CanTxOp.Status.error;
+            op.status = ok ? CanTxOp.Status.complete : CanTxOp.Status.error;
             if (op.cb !is null)
                 op.cb(&can, *op);
         }
-        return ret;
+        if (!ok)
+            return InternalResult.failed;
+        return Result.success;
     }
 }
 
@@ -200,7 +202,7 @@ void can_tx_abort(ref Can can, CanTxOp* op)
         assert(false, "no CAN on this platform");
     else
     {
-        can_tx_abort(can.port);
+        can_hw_tx_abort(can.port);
         if (op !is null)
         {
             op.status = CanTxOp.Status.cancelled;
@@ -217,7 +219,7 @@ bool can_receive(ref Can can, out CanFrame frame)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        return can_receive(can.port, frame);
+        return can_hw_receive(can.port, frame);
 }
 
 size_t can_rx_available(ref const Can can)
@@ -225,7 +227,7 @@ size_t can_rx_available(ref const Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        return can_rx_available(can.port);
+        return can_hw_rx_available(can.port);
 }
 
 void can_rx_flush(ref Can can)
@@ -233,7 +235,7 @@ void can_rx_flush(ref Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        can_rx_flush(can.port);
+        can_hw_rx_flush(can.port);
 }
 
 // Filters
@@ -260,7 +262,7 @@ CanBusState can_bus_state(ref const Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        return can_bus_state(can.port);
+        return can_hw_bus_state(can.port);
 }
 
 ubyte can_tx_error_count(ref const Can can)
@@ -268,7 +270,7 @@ ubyte can_tx_error_count(ref const Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        return can_tx_error_count(can.port);
+        return can_hw_tx_error_count(can.port);
 }
 
 ubyte can_rx_error_count(ref const Can can)
@@ -276,7 +278,7 @@ ubyte can_rx_error_count(ref const Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        return can_rx_error_count(can.port);
+        return can_hw_rx_error_count(can.port);
 }
 
 CanError can_check_errors(ref Can can)
@@ -284,7 +286,7 @@ CanError can_check_errors(ref Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        return can_check_errors(can.port);
+        return can_hw_check_errors(can.port);
 }
 
 // Bus recovery
@@ -295,9 +297,9 @@ Result can_bus_recover(ref Can can)
         assert(false, "no CAN on this platform");
     else
     {
-        if (can_bus_recover(can.port))
-            return Result.success;
-        return InternalResult.failed;
+        if (!can_hw_bus_recover(can.port))
+            return InternalResult.failed;
+        return Result.success;
     }
 }
 
@@ -325,7 +327,7 @@ void can_poll(ref Can can)
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
-        can_poll(can.port);
+        can_hw_poll(can.port);
 }
 
 

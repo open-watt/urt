@@ -30,7 +30,7 @@ else               enum bool has_can_fd = false;
 static if (num_can > 0):
 
 
-bool can_open(uint port, ref const CanConfig cfg)
+bool can_hw_open(uint port, ref const CanConfig cfg)
 {
     if (port >= num_can)
         return false;
@@ -43,7 +43,7 @@ bool can_open(uint port, ref const CanConfig cfg)
     return _handles[port] !is null;
 }
 
-void can_close(uint port)
+void can_hw_close(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return;
@@ -52,20 +52,20 @@ void can_close(uint port)
     _handles[port] = null;
 }
 
-int can_transmit(uint port, ref const CanFrame frame)
+bool can_hw_transmit(uint port, ref const CanFrame frame)
 {
     if (port >= num_can || _handles[port] is null)
-        return -1;
+        return false;
     twai_message_t msg;
     msg.flags = cast(uint)frame.extended | (cast(uint)frame.rtr << 1);
     msg.identifier = frame.id;
     msg.data_length_code = frame.dlc;
     if (frame.dlc > 0)
         msg.data[0 .. frame.dlc] = frame.data[0 .. frame.dlc];
-    return twai_transmit_v2(_handles[port], &msg, 0) == ESP_OK ? 0 : -1;
+    return twai_transmit_v2(_handles[port], &msg, 0) == ESP_OK;
 }
 
-bool can_receive(uint port, out CanFrame frame)
+bool can_hw_receive(uint port, out CanFrame frame)
 {
     if (port >= num_can || _handles[port] is null)
         return false;
@@ -81,7 +81,7 @@ bool can_receive(uint port, out CanFrame frame)
     return true;
 }
 
-CanError can_check_errors(uint port)
+CanError can_hw_check_errors(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return CanError.none;
@@ -97,7 +97,7 @@ CanError can_check_errors(uint port)
     return err;
 }
 
-CanBusState can_bus_state(uint port)
+CanBusState can_hw_bus_state(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return CanBusState.bus_off;
@@ -113,7 +113,7 @@ CanBusState can_bus_state(uint port)
     return CanBusState.error_active;
 }
 
-ubyte can_tx_error_count(uint port)
+ubyte can_hw_tx_error_count(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
@@ -123,7 +123,7 @@ ubyte can_tx_error_count(uint port)
     return info.tx_error_counter > 255 ? 255 : cast(ubyte)info.tx_error_counter;
 }
 
-ubyte can_rx_error_count(uint port)
+ubyte can_hw_rx_error_count(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
@@ -133,7 +133,7 @@ ubyte can_rx_error_count(uint port)
     return info.rx_error_counter > 255 ? 255 : cast(ubyte)info.rx_error_counter;
 }
 
-size_t can_rx_available(uint port)
+size_t can_hw_rx_available(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
@@ -143,28 +143,28 @@ size_t can_rx_available(uint port)
     return cast(size_t)info.msgs_to_rx;
 }
 
-void can_rx_flush(uint port)
+void can_hw_rx_flush(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return;
     twai_clear_receive_queue_v2(_handles[port]);
 }
 
-void can_tx_abort(uint port)
+void can_hw_tx_abort(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return;
     twai_clear_transmit_queue_v2(_handles[port]);
 }
 
-bool can_bus_recover(uint port)
+bool can_hw_bus_recover(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return false;
     return twai_initiate_recovery_v2(_handles[port]) == ESP_OK;
 }
 
-void can_poll(uint port)
+void can_hw_poll(uint port)
 {
     // TWAI driver buffers RX internally
 }

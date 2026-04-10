@@ -24,6 +24,9 @@ DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=noshared
 
 SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d' -not -path '$(SRCDIR)/sys/*')
 SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/baremetal" -type f -name '*.d')
+ifeq ($(OS),windows)
+    SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/windows" -type f -name '*.d')
+endif
 SOURCES := $(SOURCES) $(SRCDIR)/urt/internal/mbedtls.c
 
 ifeq ($(PLATFORM),riscv64)

@@ -16,13 +16,13 @@ nothrow @nogc:
 
 enum WifiError : ubyte
 {
-    none          = 0,
-    auth_failed   = 1 << 0,
-    no_ap         = 1 << 1, // target AP not found
-    assoc_failed  = 1 << 2, // association rejected
-    timeout       = 1 << 3,
-    tx_failed     = 1 << 4,
-    internal      = 1 << 5,
+    none,
+    auth_failed,
+    no_ap,          // target AP not found
+    assoc_failed,   // association rejected
+    timeout,
+    tx_failed,
+    internal,
 }
 
 // Virtual interface type within a radio.
@@ -34,10 +34,11 @@ enum WifiVif : ubyte
 
 enum WifiMode : ubyte
 {
-    none,   // radio idle, no virtual interfaces active
-    sta,    // station only
-    ap,     // access point only
-    apsta,  // concurrent AP + STA
+    none,      // radio off, no virtual interfaces active
+    monitor,   // radio on, raw 802.11 only — no stack
+    sta,       // station only
+    ap,        // access point only
+    apsta,     // concurrent AP + STA
 }
 
 enum WifiAuth : ubyte
@@ -129,7 +130,7 @@ struct WifiScanResult
     ubyte ssid_len;
     char[32] ssid_buf;
 
-    const(char)[] ssid() const pure
+    const(char)[] ssid() const pure nothrow @nogc
         => ssid_buf[0 .. ssid_len];
 }
 
@@ -142,6 +143,12 @@ struct WifiStaInfo
 // Called from ISR/driver when an Ethernet frame is received on a
 // virtual interface. Data includes the 14-byte Ethernet header.
 alias WifiRxCallback = void function(Wifi wifi, WifiVif vif, const(ubyte)[] data) nothrow @nogc;
+
+// Called from ISR/driver when a raw 802.11 frame is received
+// (promiscuous/monitor tap). Data is the full 802.11 frame
+// starting at the MAC header. Delivered independently of the
+// Ethernet RX callback — both can be active simultaneously.
+alias WifiRawRxCallback = void function(Wifi wifi, const(ubyte)[] frame, byte rssi, ubyte channel) nothrow @nogc;
 
 // Called when a wifi event occurs. Replaces per-event callbacks
 // to match the single-callback pattern used by the router layer.
@@ -202,7 +209,7 @@ Result wifi_open(ref Wifi wifi, ubyte port, ref const WifiConfig cfg)
         if (port >= num_wifi)
             return InternalResult.invalid_parameter;
 
-        if (!wifi_open(port, cfg))
+        if (!wifi_hw_open(port, cfg))
             return InternalResult.failed;
 
         wifi.port = port;
@@ -215,7 +222,7 @@ void wifi_close(ref Wifi wifi)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        wifi_close(wifi.port);
+        wifi_hw_close(wifi.port);
     wifi.port = ubyte.max;
 }
 
@@ -225,7 +232,7 @@ Result wifi_set_mode(ref Wifi wifi, WifiMode mode)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_set_mode(wifi.port, mode))
+        if (!wifi_hw_set_mode(wifi.port, mode))
             return InternalResult.failed;
         return Result.success;
     }
@@ -239,7 +246,7 @@ Result wifi_sta_configure(ref Wifi wifi, ref const WifiStaConfig cfg)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_sta_configure(wifi.port, cfg))
+        if (!wifi_hw_sta_configure(wifi.port, cfg))
             return InternalResult.failed;
         return Result.success;
     }
@@ -253,7 +260,7 @@ Result wifi_sta_connect(ref Wifi wifi)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_sta_connect(wifi.port))
+        if (!wifi_hw_sta_connect(wifi.port))
             return InternalResult.failed;
         return Result.success;
     }
@@ -265,7 +272,7 @@ Result wifi_sta_disconnect(ref Wifi wifi)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_sta_disconnect(wifi.port))
+        if (!wifi_hw_sta_disconnect(wifi.port))
             return InternalResult.failed;
         return Result.success;
     }
@@ -279,7 +286,7 @@ Result wifi_ap_configure(ref Wifi wifi, ref const WifiApConfig cfg)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_ap_configure(wifi.port, cfg))
+        if (!wifi_hw_ap_configure(wifi.port, cfg))
             return InternalResult.failed;
         return Result.success;
     }
@@ -292,7 +299,7 @@ size_t wifi_ap_get_clients(ref Wifi wifi, WifiStaInfo[] buf)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        return wifi_ap_get_clients(wifi.port, buf);
+        return wifi_hw_ap_get_clients(wifi.port, buf);
 }
 
 // Scanning
@@ -303,7 +310,7 @@ Result wifi_scan_start(ref Wifi wifi, ref const WifiScanConfig cfg)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_scan_start(wifi.port, cfg))
+        if (!wifi_hw_scan_start(wifi.port, cfg))
             return InternalResult.failed;
         return Result.success;
     }
@@ -314,7 +321,7 @@ void wifi_scan_stop(ref Wifi wifi)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        wifi_scan_stop(wifi.port);
+        wifi_hw_scan_stop(wifi.port);
 }
 
 // Retrieve scan results after WifiEvent.scan_done.
@@ -324,19 +331,23 @@ size_t wifi_scan_get_results(ref Wifi wifi, WifiScanResult[] buf)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        return wifi_scan_get_results(wifi.port, buf);
+        return wifi_hw_scan_get_results(wifi.port, buf);
 }
 
 // Frame TX/RX
 
 // Transmit an Ethernet frame (including 14-byte header) on a
-// virtual interface. Returns 0 on success, negative on error.
-int wifi_tx(ref Wifi wifi, WifiVif vif, const(ubyte)[] data)
+// virtual interface.
+Result wifi_tx(ref Wifi wifi, WifiVif vif, const(ubyte)[] data)
 {
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        return wifi_tx(wifi.port, vif, data);
+    {
+        if (!wifi_hw_tx(wifi.port, vif, data))
+            return InternalResult.failed;
+        return Result.success;
+    }
 }
 
 void wifi_set_rx_callback(ref Wifi wifi, WifiRxCallback cb)
@@ -344,7 +355,31 @@ void wifi_set_rx_callback(ref Wifi wifi, WifiRxCallback cb)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        wifi_set_rx_callback(wifi.port, cb);
+        wifi_hw_set_rx_callback(wifi.port, cb);
+}
+
+// Raw 802.11 frame TX/RX (monitor/promiscuous)
+
+// Transmit a raw 802.11 frame. Data must include the full MAC header.
+// Requires monitor mode or promiscuous capability on the platform.
+Result wifi_raw_tx(ref Wifi wifi, const(ubyte)[] frame)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else
+    {
+        if (!wifi_hw_raw_tx(wifi.port, frame))
+            return InternalResult.failed;
+        return Result.success;
+    }
+}
+
+void wifi_set_raw_rx_callback(ref Wifi wifi, WifiRawRxCallback cb)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else
+        wifi_hw_set_raw_rx_callback(wifi.port, cb);
 }
 
 // Queries
@@ -355,18 +390,18 @@ Result wifi_get_mac(ref Wifi wifi, WifiVif vif, ref ubyte[6] mac)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_get_mac(wifi.port, vif, mac))
+        if (!wifi_hw_get_mac(wifi.port, vif, mac))
             return InternalResult.failed;
         return Result.success;
     }
 }
 
-ubyte wifi_get_channel(ref Wifi wifi)
+ubyte wifi_get_channel(ref const Wifi wifi)
 {
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        return wifi_get_channel(wifi.port);
+        return wifi_hw_get_channel(wifi.port);
 }
 
 // STA-only: signal strength of current connection.
@@ -375,7 +410,7 @@ byte wifi_get_rssi(ref Wifi wifi)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        return wifi_get_rssi(wifi.port);
+        return wifi_hw_get_rssi(wifi.port);
 }
 
 Result wifi_set_tx_power(ref Wifi wifi, byte power_dbm)
@@ -384,7 +419,7 @@ Result wifi_set_tx_power(ref Wifi wifi, byte power_dbm)
         assert(false, "no WiFi on this platform");
     else
     {
-        if (!wifi_set_tx_power(wifi.port, power_dbm))
+        if (!wifi_hw_set_tx_power(wifi.port, power_dbm))
             return InternalResult.failed;
         return Result.success;
     }
@@ -397,7 +432,7 @@ void wifi_set_event_callback(ref Wifi wifi, WifiEventCallback cb)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        wifi_set_event_callback(wifi.port, cb);
+        wifi_hw_set_event_callback(wifi.port, cb);
 }
 
 // Poll (for platforms without native event delivery)
@@ -407,7 +442,7 @@ void wifi_poll(ref Wifi wifi)
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        wifi_poll(wifi.port);
+        wifi_hw_poll(wifi.port);
 }
 
 

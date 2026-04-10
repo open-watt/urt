@@ -28,7 +28,7 @@ enum uint uart_clock_hz = 80_000_000;
 enum bool has_irq_driven_uart = false;
 enum bool has_dma_driven_uart = false;
 
-bool uart_hw_open(uint id, UartConfig cfg)
+bool uart_hw_open(uint id, ref const UartConfig cfg)
 {
     if (id >= num_uarts)
         return false;

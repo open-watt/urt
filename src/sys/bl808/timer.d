@@ -51,6 +51,11 @@ private enum ulong HBN_RTC_TIME_H = HBN_BASE + 0x10;
 // ================================================================
 
 enum uint mtime_freq_hz = 1_000_000;
+enum bool has_mtime = true;
+enum bool has_rtc = true;
+enum bool has_mcycle = true;
+enum bool has_timer_stop = true;
+enum bool has_wfi_sleep = true;
 
 // ================================================================
 // Time reading

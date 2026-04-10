@@ -221,7 +221,8 @@ version (OldStatLayout)
     }
 }
 
-bool S_ISREG(mode_t mode) { return (mode & 0xF000) == 0x8000; }
+bool S_ISREG(mode_t mode)
+    => (mode & 0xF000) == 0x8000;
 
 version (X86)
 {

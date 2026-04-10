@@ -4,6 +4,13 @@ import core.volatile;
 
 nothrow @nogc:
 
+enum bool has_plic = true;
+enum bool has_nvic = false;
+enum bool has_per_irq_control = true;
+enum bool has_irq_priority = false;
+enum bool has_wait_for_interrupt = true;
+enum bool has_irq_diagnostics = true;
+
 
 // ================================================================
 // CPU interrupt control

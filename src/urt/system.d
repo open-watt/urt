@@ -40,18 +40,28 @@ void sleep(Duration duration)
         import urt.internal.sys.windows.winbase : Sleep;
         Sleep(cast(uint)duration.as!"msecs");
     }
-    else version (BL808)
+    else version (Embedded)
     {
-        import sys.bl808.irq : IrqClass, enable_irq, disable_irq, wait_for_interrupt;
-        import sys.bl808.timer : mtime_read, mtimecmp_write_oneshot;
+        import sys.baremetal.timer;
+        import sys.baremetal.irq;
 
-        ulong deadline = mtime_read() + duration.as!"usecs";
-        mtimecmp_write_oneshot(deadline);
-        auto was_enabled = enable_irq(IrqClass.timer);
-        while (mtime_read() < deadline)
-            wait_for_interrupt();
-        if (!was_enabled)
-            disable_irq(IrqClass.timer);
+        static if (has_mtime)
+        {
+            ulong deadline = mtime_read() + duration.as!"usecs";
+            static if (has_wfi_sleep)
+            {
+                mtimecmp_write_oneshot(deadline);
+                auto was_enabled = enable_irq(IrqClass.timer);
+                while (mtime_read() < deadline)
+                    wait_for_interrupt();
+                if (!was_enabled)
+                    disable_irq(IrqClass.timer);
+            }
+            else
+            {
+                while (mtime_read() < deadline) {}
+            }
+        }
     }
     else
     {
@@ -136,7 +146,7 @@ SystemInfo get_sysinfo()
         r.peak_memory = r.total_memory - heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
         r.uptime = getAppTime();
     }
-    else version (BL808)
+    else version (Bouffalo)
     {
         auto mi = mallinfo();
         r.total_memory = heap_len();
@@ -186,14 +196,17 @@ unittest
         info.reserved_memory / 1024, info.avail_memory / 1024,
         info.peak_memory / 1024);
 
-    version (BL808)
+    version (Embedded)
     {
-        import sys.bl808.irq : irq_count, irq_histogram;
-        writelnf("  IRQ total: {0}", irq_count);
-        foreach (i; 0 .. irq_histogram.length)
+        import sys.baremetal.irq;
+        static if (has_irq_diagnostics)
         {
-            if (irq_histogram[i] > 0)
-                writelnf("    IRQ {0}: {1}", i, irq_histogram[i]);
+            writelnf("  IRQ total: {0}", irq_count);
+            foreach (i; 0 .. irq_histogram.length)
+            {
+                if (irq_histogram[i] > 0)
+                    writelnf("    IRQ {0}: {1}", i, irq_histogram[i]);
+            }
         }
     }
 }
@@ -201,7 +214,7 @@ unittest
 
 package:
 
-version (BL808)
+version (Bouffalo)
 {
     extern(C) extern __gshared {
         void* __heap_start;

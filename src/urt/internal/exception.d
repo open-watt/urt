@@ -3560,7 +3560,9 @@ _Unwind_Reason_Code dwarfeh_personality_common(_Unwind_Action actions, _Unwind_E
 // FreeStanding ARM (bare-metal) uses DWARF EH, not ARM EHABI, so use the standard personality.
 version (ARM)
 {
-    version (FreeStanding)
+    version (Beken)
+        enum UseArmEhabi = true;
+    else version (FreeStanding)
         enum UseArmEhabi = false;
     else version (LDC)
         enum UseArmEhabi = true;

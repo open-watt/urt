@@ -8,7 +8,14 @@
 #include "hal/uart_types.h"
 #include "hal/uart_periph.h"
 #include "esp_rom_gpio.h"
+#include "esp_rom_serial_output.h"
 #include "lwip/netdb.h"
+
+// ESP32-C3 ROM exports uart_tx_one_char but not esp_rom_uart_putc.
+// Provide the missing symbol so the D object links.
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(esp_rom_uart_putc)
+void esp_rom_uart_putc(char c) { esp_rom_output_tx_one_char(c); }
+#endif
 
 // -- errno accessor (picolibc uses _Thread_local errno, incompatible with emulated-TLS) --
 
@@ -17,6 +24,31 @@
 int *ow_errno_location(void)
 {
     return &errno;
+}
+
+// -- IRQ wrappers --
+
+static portMUX_TYPE ow_irq_mux = portMUX_INITIALIZER_UNLOCKED;
+
+uint32_t ow_irq_disable(void)
+{
+    portENTER_CRITICAL(&ow_irq_mux);
+    return 1;
+}
+
+void ow_irq_enable(uint32_t prev)
+{
+    (void)prev;
+    portEXIT_CRITICAL(&ow_irq_mux);
+}
+
+void ow_irq_wait(void)
+{
+#if CONFIG_IDF_TARGET_ARCH_XTENSA
+    __asm__ volatile("waiti 0");
+#elif CONFIG_IDF_TARGET_ARCH_RISCV
+    __asm__ volatile("wfi");
+#endif
 }
 
 // -- FreeRTOS task wrappers --
@@ -57,33 +89,46 @@ uint32_t ow_task_priority_get(void *handle)
 
 // -- UART HAL wrappers --
 
-#define NUM_UARTS 3
+#include "soc/soc_caps.h"
+#include "hal/uart_ll.h"
+#include "esp_private/periph_ctrl.h"
+#define NUM_UARTS SOC_UART_NUM
 
 static uart_hal_context_t uart_ctx[NUM_UARTS];
 static bool uart_initialized[NUM_UARTS];
 
-// D enums: StopBits { one=0, one_point_five=1, two=2 }
+// D enums: StopBits { half=0, one=1, one_point_five=2, two=3 }
 //          Parity   { none=0, even=1, odd=2, mark=3, space=4 }
 // HAL enums: UART_STOP_BITS_1=1, _1_5=2, _2=3
 //            UART_PARITY_DISABLE=0, _EVEN=2, _ODD=3
 static const uart_stop_bits_t stop_bits_map[] = {
-    UART_STOP_BITS_1, UART_STOP_BITS_1_5, UART_STOP_BITS_2
+    UART_STOP_BITS_1, UART_STOP_BITS_1, UART_STOP_BITS_1_5, UART_STOP_BITS_2
 };
 static const uart_parity_t parity_map[] = {
     UART_PARITY_DISABLE, UART_PARITY_EVEN, UART_PARITY_ODD,
     UART_PARITY_DISABLE, UART_PARITY_DISABLE
 };
 
-int ow_uart_open(int port, uint32_t baud_rate, uint8_t data_bits,
+int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits,
                  uint8_t stop_bits, uint8_t parity,
                  int8_t tx_gpio, int8_t rx_gpio)
 {
-    if (port < 0 || port >= NUM_UARTS)
+    if (port >= NUM_UARTS)
         return 0;
 
+    // Enable peripheral clock before touching any registers
+    PERIPH_RCC_ATOMIC()
+    {
+        uart_ll_enable_bus_clock(port, true);
+        uart_ll_reset_register(port);
+    }
+
+    // Set device pointer before calling hal_init (v6 API expects it pre-set)
+    uart_ctx[port].dev = UART_LL_GET_HW(port);
     uart_hal_init(&uart_ctx[port], port);
 
-    uart_ll_set_sclk(uart_ctx[port].dev, UART_SCLK_APB);
+    int __DECLARE_RCC_ATOMIC_ENV __attribute__((unused));
+    uart_ll_set_sclk(uart_ctx[port].dev, UART_SCLK_DEFAULT);
     uart_ll_set_baudrate(uart_ctx[port].dev, baud_rate, 80000000);
     uart_ll_set_data_bit_num(uart_ctx[port].dev, data_bits - 5);
     uart_ll_set_stop_bits(uart_ctx[port].dev, stop_bits < sizeof(stop_bits_map) ? stop_bits_map[stop_bits] : 1);
@@ -112,58 +157,63 @@ int ow_uart_open(int port, uint32_t baud_rate, uint8_t data_bits,
     return 1;
 }
 
-void ow_uart_close(int port)
+void ow_uart_close(unsigned port)
 {
-    if (port < 0 || port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS || !uart_initialized[port])
         return;
     uart_hal_txfifo_rst(&uart_ctx[port]);
     uart_hal_rxfifo_rst(&uart_ctx[port]);
+    PERIPH_RCC_ATOMIC()
+    {
+        uart_ll_enable_bus_clock(port, false);
+    }
     uart_initialized[port] = false;
 }
 
-int32_t ow_uart_read(int port, uint8_t *buf, int32_t len)
+int32_t ow_uart_read(unsigned port, uint8_t *buf, int32_t len)
 {
-    if (port < 0 || port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS || !uart_initialized[port])
         return 0;
     int rd_len = (int)len;
     uart_hal_read_rxfifo(&uart_ctx[port], buf, &rd_len);
     return rd_len;
 }
 
-int32_t ow_uart_write(int port, const uint8_t *buf, int32_t len)
+int32_t ow_uart_write(unsigned port, const uint8_t *buf, int32_t len)
 {
-    if (port < 0 || port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS || !uart_initialized[port])
         return 0;
     uint32_t written = 0;
     uart_hal_write_txfifo(&uart_ctx[port], buf, (uint32_t)len, &written);
     return (int32_t)written;
 }
 
-int32_t ow_uart_rx_pending(int port)
+int32_t ow_uart_rx_pending(unsigned port)
 {
-    if (port < 0 || port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS || !uart_initialized[port])
         return 0;
     return (int32_t)uart_ll_get_rxfifo_len(uart_ctx[port].dev);
 }
 
-int ow_uart_tx_idle(int port)
+int ow_uart_tx_idle(unsigned port)
 {
-    if (port < 0 || port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS || !uart_initialized[port])
         return 1;
     return uart_ll_is_tx_idle(uart_ctx[port].dev) ? 1 : 0;
 }
 
-int32_t ow_uart_flush(int port)
+int32_t ow_uart_flush(unsigned port)
 {
-    if (port < 0 || port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS || !uart_initialized[port])
         return 0;
     while (!uart_ll_is_tx_idle(uart_ctx[port].dev))
-        ;
+    {}
     return 0;
 }
 
 // -- WiFi wrappers --
 
+#if CONFIG_ESP_WIFI_ENABLED
 #include "esp_wifi.h"
 #include "esp_private/wifi.h"
 #include "esp_netif.h"
@@ -258,22 +308,6 @@ void ow_wifi_deinit(void)
     }
 }
 
-int ow_wifi_set_mode(int mode)
-{
-    // mode: 0=none, 1=sta, 2=ap, 3=apsta
-    return esp_wifi_set_mode((wifi_mode_t)mode) == ESP_OK ? 1 : 0;
-}
-
-int ow_wifi_start(void)
-{
-    return esp_wifi_start() == ESP_OK ? 1 : 0;
-}
-
-int ow_wifi_stop(void)
-{
-    return esp_wifi_stop() == ESP_OK ? 1 : 0;
-}
-
 int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bssid)
 {
     wifi_config_t cfg = {0};
@@ -296,16 +330,6 @@ int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bs
     }
 
     return esp_wifi_set_config(WIFI_IF_STA, &cfg) == ESP_OK ? 1 : 0;
-}
-
-int ow_wifi_sta_connect(void)
-{
-    return esp_wifi_connect() == ESP_OK ? 1 : 0;
-}
-
-int ow_wifi_sta_disconnect(void)
-{
-    return esp_wifi_disconnect() == ESP_OK ? 1 : 0;
 }
 
 int ow_wifi_ap_config(const char *ssid, const char *password,
@@ -334,27 +358,6 @@ int ow_wifi_ap_config(const char *ssid, const char *password,
     cfg.ap.ssid_hidden = hidden;
 
     return esp_wifi_set_config(WIFI_IF_AP, &cfg) == ESP_OK ? 1 : 0;
-}
-
-int ow_wifi_set_tx_power(int8_t power)
-{
-    return esp_wifi_set_max_tx_power(power) == ESP_OK ? 1 : 0;
-}
-
-int ow_wifi_get_channel(uint8_t *channel)
-{
-    uint8_t primary;
-    wifi_second_chan_t second;
-    if (esp_wifi_get_channel(&primary, &second) != ESP_OK)
-        return 0;
-    *channel = primary;
-    return 1;
-}
-
-int ow_wifi_get_mac(int iface, uint8_t *mac)
-{
-    // iface: 0=sta, 1=ap
-    return esp_read_mac(mac, iface == 0 ? ESP_MAC_WIFI_STA : ESP_MAC_WIFI_SOFTAP) == ESP_OK ? 1 : 0;
 }
 
 // Ethernet frame RX callbacks -- one per netif (STA=0, AP=1).
@@ -390,11 +393,6 @@ int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb)
     return err == ESP_OK ? 1 : 0;
 }
 
-int ow_wifi_tx(int iface, const uint8_t *data, int len)
-{
-    return esp_wifi_internal_tx((wifi_interface_t)iface, (void *)data, (uint16_t)len) == ESP_OK ? 1 : 0;
-}
-
 void ow_wifi_set_sta_callback(ow_wifi_event_cb_t cb)
 {
     ow_wifi_sta_cb = cb;
@@ -404,103 +402,109 @@ void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb)
 {
     ow_wifi_ap_cb = cb;
 }
+#else // !CONFIG_ESP_WIFI_ENABLED
 
-// -- TWAI (CAN) wrappers --
+typedef void (*ow_wifi_event_cb_t)(int, void *, int);
+typedef void (*ow_wifi_rx_cb_t)(const uint8_t *, int, int);
 
-// Legacy TWAI driver -- TODO: port to esp_twai.h node-handle API
+int ow_wifi_init(void) { return -1; }
+void ow_wifi_deinit(void) {}
+int ow_wifi_sta_config(const char *s, const char *p, const uint8_t *b) { (void)s;(void)p;(void)b; return 0; }
+int ow_wifi_ap_config(const char *s, const char *p, uint8_t c, uint8_t m, uint8_t h) { (void)s;(void)p;(void)c;(void)m;(void)h; return 0; }
+int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb) { (void)cb; return 0; }
+void ow_wifi_set_sta_callback(ow_wifi_event_cb_t cb) { (void)cb; }
+void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb) { (void)cb; }
+
+#endif // CONFIG_ESP_WIFI_ENABLED
+
+// -- CAN (TWAI) driver --
+//
+// Only ow_can_open lives here -- it builds the timing/general/filter config
+// structs and does install+start.  Everything else is called directly from D
+// via the ESP-IDF _v2 handle API.
+
+#include "soc/soc_caps.h"
+#if SOC_TWAI_SUPPORTED
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcpp"
 #include "driver/twai.h"
 #pragma GCC diagnostic pop
 
-static bool ow_twai_initialized;
-
-int ow_twai_init(uint32_t baud_rate, int tx_io, int rx_io)
+twai_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2, uint16_t brp)
 {
-    if (ow_twai_initialized)
-        return 1;
+    if (port >= SOC_TWAI_CONTROLLER_NUM)
+        return NULL;
 
     twai_timing_config_t timing;
-    switch (baud_rate)
+    if (brp > 0)
     {
-    case 25000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_25KBITS();   break;
-    case 50000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_50KBITS();   break;
-    case 100000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_100KBITS();  break;
-    case 125000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_125KBITS();  break;
-    case 250000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_250KBITS();  break;
-    case 500000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_500KBITS();  break;
-    case 800000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_800KBITS();  break;
-    case 1000000: timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_1MBITS();    break;
-    default: return 0;
+        memset(&timing, 0, sizeof(timing));
+        timing.clk_src = TWAI_CLK_SRC_DEFAULT;
+        timing.brp = brp;
+        timing.tseg_1 = tseg1;
+        timing.tseg_2 = tseg2;
+        timing.sjw = sjw;
+    }
+    else
+    {
+        switch (bitrate)
+        {
+        case 1000:    timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_1KBITS();     break;
+        case 5000:    timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_5KBITS();     break;
+        case 10000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_10KBITS();    break;
+        case 12500:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_12_5KBITS();  break;
+        case 16000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_16KBITS();    break;
+        case 20000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_20KBITS();    break;
+        case 25000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_25KBITS();    break;
+        case 50000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_50KBITS();    break;
+        case 100000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_100KBITS();   break;
+        case 125000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_125KBITS();   break;
+        case 250000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_250KBITS();   break;
+        case 500000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_500KBITS();   break;
+        case 800000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_800KBITS();   break;
+        case 1000000: timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_1MBITS();     break;
+        default: return NULL;
+        }
     }
 
-    twai_general_config_t general = TWAI_GENERAL_CONFIG_DEFAULT(tx_io, rx_io, TWAI_MODE_NORMAL);
+    twai_general_config_t general = TWAI_GENERAL_CONFIG_DEFAULT_V2(
+        port, tx_gpio, rx_gpio, TWAI_MODE_NORMAL);
+    general.alerts_enabled = TWAI_ALERT_BUS_ERROR | TWAI_ALERT_ERR_PASS
+        | TWAI_ALERT_ERR_ACTIVE | TWAI_ALERT_BUS_OFF | TWAI_ALERT_ABOVE_ERR_WARN
+        | TWAI_ALERT_BELOW_ERR_WARN | TWAI_ALERT_RX_FIFO_OVERRUN
+        | TWAI_ALERT_RX_QUEUE_FULL | TWAI_ALERT_ARB_LOST | TWAI_ALERT_TX_FAILED;
     twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
-    if (twai_driver_install(&general, &timing, &filter) != ESP_OK)
-        return 0;
+    twai_handle_t handle = NULL;
+    if (twai_driver_install_v2(&general, &timing, &filter, &handle) != ESP_OK)
+        return NULL;
 
-    if (twai_start() != ESP_OK)
+    if (twai_start_v2(handle) != ESP_OK)
     {
-        twai_driver_uninstall();
-        return 0;
+        twai_driver_uninstall_v2(handle);
+        return NULL;
     }
 
-    ow_twai_initialized = true;
-    return 1;
+    return handle;
 }
 
-void ow_twai_deinit(void)
+#else // !SOC_TWAI_SUPPORTED
+
+typedef struct twai_obj_t *twai_handle_t;
+
+twai_handle_t ow_can_open(unsigned, uint32_t, int, int, uint8_t, uint8_t, uint8_t, uint16_t)
 {
-    if (!ow_twai_initialized)
-        return;
-    twai_stop();
-    twai_driver_uninstall();
-    ow_twai_initialized = false;
+    return (twai_handle_t)0;
 }
 
-int ow_twai_transmit(uint32_t id, int extended, int rtr, const uint8_t *data, uint8_t len)
-{
-    if (!ow_twai_initialized)
-        return 0;
-
-    twai_message_t msg = {0};
-    msg.identifier = id;
-    msg.extd = extended ? 1 : 0;
-    msg.rtr = rtr ? 1 : 0;
-    msg.data_length_code = len;
-    if (len > 0 && data)
-        memcpy(msg.data, data, len > 8 ? 8 : len);
-
-    return twai_transmit(&msg, 0) == ESP_OK ? 1 : 0;
-}
-
-int ow_twai_receive(uint32_t *id, int *extended, int *rtr, uint8_t *data, uint8_t *len)
-{
-    if (!ow_twai_initialized)
-        return 0;
-
-    twai_message_t msg;
-    if (twai_receive(&msg, 0) != ESP_OK)
-        return 0;
-
-    *id = msg.identifier;
-    *extended = msg.extd;
-    *rtr = msg.rtr;
-    *len = msg.data_length_code;
-    if (msg.data_length_code > 0)
-        memcpy(data, msg.data, msg.data_length_code > 8 ? 8 : msg.data_length_code);
-
-    return 1;
-}
+#endif // SOC_TWAI_SUPPORTED
 
 // -- lwIP netdb wrappers (link-order fix) --
 // D object references lwip_getaddrinfo/lwip_freeaddrinfo but the D object
 // appears after liblwip.a in the link. These wrappers are in libmain.a
 // which is linked with --whole-archive, ensuring they're always present.
 
-int ow_lwip_getaddrinfo(const char *nodename, const char *servname,
-                        const struct addrinfo *hints, struct addrinfo **res)
+int ow_lwip_getaddrinfo(const char *nodename, const char *servname, const struct addrinfo *hints, struct addrinfo **res)
 {
     return lwip_getaddrinfo(nodename, servname, hints, res);
 }

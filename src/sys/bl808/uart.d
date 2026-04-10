@@ -24,6 +24,8 @@ module sys.bl808.uart;
 import core.volatile;
 import sys.bl808.irq;
 
+import sys.baremetal.uart : Parity, StopBits, UartConfig;
+
 nothrow @nogc:
 
 
@@ -31,9 +33,12 @@ nothrow @nogc:
 // Register definitions
 // ══════════════════════════════════════════════════════════════════════════════
 
-enum NUM_UARTS = 4;
+enum num_uarts = 4;
+enum uint uart_clock_hz = 40_000_000;
+enum bool has_irq_driven_uart = true;
+enum bool has_dma_driven_uart = false;
 
-private immutable uint[NUM_UARTS] uart_base = [
+private immutable uint[num_uarts] uart_base = [
     0x2000_A000, // UART0
     0x2000_A100, // UART1
     0x2000_AA00, // UART2 (shared with ISO11898 CAN)
@@ -130,7 +135,7 @@ private enum : uint
 }
 
 // FIFO depth
-enum UART_FIFO_MAX = 32;
+private enum UART_FIFO_MAX = 32;
 
 // RX FIFO threshold — interrupt fires when RX FIFO count >= this value.
 // Set to 16 so we drain before the 32-byte FIFO overflows.
@@ -161,30 +166,19 @@ private alias Ring = RingBuffer!512;
 // Driver API
 // ══════════════════════════════════════════════════════════════════════════════
 
-enum UartParity : ubyte { none, odd, even }
-enum UartStopBits : ubyte { half, one, one_point_five, two }
-
-struct UartConfig
-{
-    uint baud_rate = 9600;
-    ubyte data_bits = 8;         // 5..8
-    UartStopBits stop_bits = UartStopBits.one;
-    UartParity parity = UartParity.none;
-}
-
 // Per-UART state
-private __gshared Ring[NUM_UARTS] rx_ring;
-private __gshared Ring[NUM_UARTS] tx_ring;
-private __gshared bool[NUM_UARTS] uart_open_flag;
+private __gshared Ring[num_uarts] rx_ring;
+private __gshared Ring[num_uarts] tx_ring;
+private __gshared bool[num_uarts] uart_open_flag;
 private __gshared IrqHandler prev_irq_handler;
 private __gshared bool irq_handler_installed;
 
 // Open a UART: configure baud rate, frame format, clear FIFOs, enable TX+RX.
 // UART3 gets interrupt-driven I/O. UART0/1/2 require uart_poll().
 // Returns false if id is out of range.
-bool uart_open(uint id, UartConfig cfg)
+bool uart_hw_open(uint id, UartConfig cfg)
 {
-    if (id >= NUM_UARTS)
+    if (id >= num_uarts)
         return false;
 
     immutable base = uart_base[id];
@@ -206,20 +200,20 @@ bool uart_open(uint id, UartConfig cfg)
     tx_cfg |= cast(uint)(cfg.data_bits - 4) << CR_UTX_BIT_CNT_D_SHIFT;
     tx_cfg |= cast(uint)cfg.stop_bits << CR_UTX_BIT_CNT_P_SHIFT;
     tx_cfg |= CR_UTX_FRM_EN;
-    if (cfg.parity != UartParity.none)
+    if (cfg.parity != Parity.none)
     {
         tx_cfg |= CR_UTX_PRT_EN;
-        if (cfg.parity == UartParity.odd)
+        if (cfg.parity == Parity.odd)
             tx_cfg |= CR_UTX_PRT_SEL;
     }
 
     // RX config: data bits, parity (stop bits are TX-only in hardware)
     rx_cfg &= ~(CR_URX_BIT_CNT_D_MASK | CR_URX_PRT_EN | CR_URX_PRT_SEL);
     rx_cfg |= cast(uint)(cfg.data_bits - 4) << CR_URX_BIT_CNT_D_SHIFT;
-    if (cfg.parity != UartParity.none)
+    if (cfg.parity != Parity.none)
     {
         rx_cfg |= CR_URX_PRT_EN;
-        if (cfg.parity == UartParity.odd)
+        if (cfg.parity == Parity.odd)
             rx_cfg |= CR_URX_PRT_SEL;
     }
 
@@ -279,10 +273,9 @@ bool uart_open(uint id, UartConfig cfg)
 }
 
 // Disable TX and RX, mask interrupts.
-void uart_close(uint id)
+void uart_hw_close(uint id)
 {
-    if (id >= NUM_UARTS)
-        return;
+    assert(id < num_uarts);
 
     immutable base = uart_base[id];
 
@@ -304,18 +297,18 @@ void uart_close(uint id)
 
 // Poll hardware FIFOs and transfer to/from ring buffers.
 // Required for UART0/1/2 (no D0 interrupt). Harmless for UART3.
-void uart_poll(uint id)
+void uart_hw_poll(uint id)
 {
-    if (id >= NUM_UARTS || !uart_open_flag[id])
+    if (id >= num_uarts || !uart_open_flag[id])
         return;
     drain_rx_fifo(id);
     fill_tx_fifo(id);
 }
 
 // Non-blocking read: pull from RX ring buffer, return bytes read.
-ptrdiff_t uart_read(uint id, void[] buffer)
+ptrdiff_t uart_hw_read(uint id, void[] buffer)
 {
-    if (id >= NUM_UARTS)
+    if (id >= num_uarts)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -326,9 +319,9 @@ ptrdiff_t uart_read(uint id, void[] buffer)
 
 // Non-blocking write: push into TX ring buffer, kick TX if needed.
 // Returns bytes accepted (may be less than data.length if ring is full).
-ptrdiff_t uart_write(uint id, const(void)[] data)
+ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 {
-    if (id >= NUM_UARTS)
+    if (id >= num_uarts)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -351,9 +344,9 @@ ptrdiff_t uart_write(uint id, const(void)[] data)
 }
 
 // Return number of bytes available to read from RX ring.
-ptrdiff_t uart_rx_pending(uint id)
+ptrdiff_t uart_hw_rx_pending(uint id)
 {
-    if (id >= NUM_UARTS)
+    if (id >= num_uarts)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -363,9 +356,9 @@ ptrdiff_t uart_rx_pending(uint id)
 }
 
 // Clear RX ring buffer and hardware FIFO. Returns bytes discarded.
-ptrdiff_t uart_flush(uint id)
+ptrdiff_t uart_hw_flush(uint id)
 {
-    if (id >= NUM_UARTS)
+    if (id >= num_uarts)
         return -1;
 
     immutable prev = disable_interrupts();
@@ -384,9 +377,9 @@ ptrdiff_t uart_flush(uint id)
 
 // Check and clear FIFO error flags (overflow/underflow).
 // Returns true if any error was detected.
-bool uart_check_errors(uint id)
+bool uart_hw_check_errors(uint id)
 {
-    if (id >= NUM_UARTS)
+    if (id >= num_uarts)
         return true;
 
     immutable base = uart_base[id];
@@ -498,7 +491,7 @@ void uart0_putc(char c)
     volatileStore(u0_wr, cast(uint)c);
 }
 
-void uart0_puts(const(char)[] s)
+void uart0_hw_puts(const(char)[] s)
 {
     foreach (c; s)
     {

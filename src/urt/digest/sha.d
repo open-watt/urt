@@ -2,90 +2,24 @@ module urt.digest.sha;
 
 import urt.endian;
 
+version (Espressif)
+{
+    version (ESP32) {} else
+        version = Espressif_Modern;
+}
+
 nothrow @nogc: // pure
 
 
-version (Espressif)
+struct SHA1Context
 {
-    // Uses the hardware SHA accelerator via mask ROM functions.
-    // The ROM API is consistent across S2/S3/C3/C6/H2 but differs on original ESP32.
-    version (ESP32) { static assert(false, "Original ESP32 has a different SHA ROM API; not yet supported"); }
+    enum DigestBits = 160;
+    enum DigestLen = DigestBits / 8;
 
-    private extern(C) nothrow @nogc
-    {
-        void ets_sha_enable();
-        void ets_sha_disable();
-        int ets_sha_init(SHA_CTX* ctx, SHA_TYPE type);
-        int ets_sha_starts(SHA_CTX* ctx, ushort sha512_t);
-        void ets_sha_update(SHA_CTX* ctx, const ubyte* input, uint input_bytes, bool update_ctx);
-        int ets_sha_finish(SHA_CTX* ctx, ubyte* output);
-    }
-
-    private enum SHA_TYPE : int { SHA1 = 0, SHA2_224, SHA2_256 }
-
-    private struct SHA_CTX
-    {
-        bool start;
-        bool in_hardware;
-        SHA_TYPE type;
-        uint[16] state;
-        ubyte[128] buffer;
-        uint[4] total_bits;
-    }
-
-    struct SHA1Context
-    {
-        enum DigestBits = 160;
-        enum DigestLen = DigestBits / 8;
+    version (Espressif)
         private SHA_CTX ctx;
-    }
-
-    struct SHA224Context
+    else
     {
-        enum DigestBits = 224;
-        enum DigestLen = DigestBits / 8;
-        private SHA_CTX ctx;
-    }
-
-    struct SHA256Context
-    {
-        enum DigestBits = 256;
-        enum DigestLen = DigestBits / 8;
-        private SHA_CTX ctx;
-    }
-
-    void sha_init(Context)(ref Context ctx)
-    {
-        ets_sha_enable();
-        static if (is(Context == SHA1Context))
-            ets_sha_init(&ctx.ctx, SHA_TYPE.SHA1);
-        else static if (is(Context == SHA224Context))
-            ets_sha_init(&ctx.ctx, SHA_TYPE.SHA2_224);
-        else
-            ets_sha_init(&ctx.ctx, SHA_TYPE.SHA2_256);
-        ets_sha_starts(&ctx.ctx, 0);
-    }
-
-    void sha_update(Context)(ref Context ctx, const void[] input)
-    {
-        ets_sha_update(&ctx.ctx, cast(const ubyte*)input.ptr, cast(uint)input.length, true);
-    }
-
-    ubyte[Context.DigestLen] sha_finalise(Context)(ref Context ctx)
-    {
-        ubyte[Context.DigestLen] digest;
-        ets_sha_finish(&ctx.ctx, digest.ptr);
-        ets_sha_disable();
-        return digest;
-    }
-}
-else
-{
-    struct SHA1Context
-    {
-        enum DigestBits = 160;
-
-        enum DigestLen = DigestBits / 8;
         enum DigestElements = DigestBits / 32;
 
         ubyte[64] data;
@@ -99,12 +33,19 @@ else
 
         __gshared immutable uint[4] K = [ 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6 ];
     }
+}
 
-    struct SHA224Context
+struct SHA224Context
+{
+    enum DigestBits = 224;
+    enum DigestLen = DigestBits / 8;
+
+    // TODO: ESP32 hardware SHA-224 should be possible by writing the SHA-224 IV to SHA_TEXT_BASE,
+    // triggering SHA_256_LOAD_REG, then running as SHA2_256 with truncated output.
+    version (Espressif_Modern)
+        private SHA_CTX ctx;
+    else
     {
-        enum DigestBits = 224;
-
-        enum DigestLen = DigestBits / 8;
         enum DigestElements = DigestBits / 32;
         enum StateElements = 256 / 32;
 
@@ -118,12 +59,17 @@ else
         enum uint[StateElements] initState = [ 0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939,
                                                0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4 ];
     }
+}
 
-    struct SHA256Context
+struct SHA256Context
+{
+    enum DigestBits = 256;
+    enum DigestLen = DigestBits / 8;
+
+    version (Espressif)
+        private SHA_CTX ctx;
+    else
     {
-        enum DigestBits = 256;
-
-        enum DigestLen = DigestBits / 8;
         enum DigestElements = DigestBits / 32;
         enum StateElements = DigestBits / 32;
 
@@ -148,15 +94,53 @@ else
             0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
         ];
     }
+}
 
-    void sha_init(Context)(ref Context ctx)
+void sha_init(Context)(ref Context ctx)
+{
+    static if (esp_hardware)
+    {
+        version (ESP32)
+        {
+            ets_sha_enable();
+            ets_sha_init(&ctx.ctx);
+        }
+        else
+        {
+            ets_sha_enable();
+            static if (is(Context == SHA1Context))
+                ets_sha_init(&ctx.ctx, SHA_TYPE.SHA1);
+            else static if (is(Context == SHA224Context))
+                ets_sha_init(&ctx.ctx, SHA_TYPE.SHA2_224);
+            else
+                ets_sha_init(&ctx.ctx, SHA_TYPE.SHA2_256);
+            ets_sha_starts(&ctx.ctx, 0);
+        }
+    }
+    else
     {
         ctx.datalen = 0;
         ctx.bitlen = 0;
         ctx.state = Context.initState;
     }
+}
 
-    void sha_update(Context)(ref Context ctx, const void[] input)
+void sha_update(Context)(ref Context ctx, const void[] input)
+{
+    static if (esp_hardware)
+    {
+        version (ESP32)
+        {
+            static if (is(Context == SHA1Context))
+                enum sha_type = SHA_TYPE.SHA1;
+            else
+                enum sha_type = SHA_TYPE.SHA2_256;
+            ets_sha_update(&ctx.ctx, sha_type, cast(const ubyte*)input.ptr, input.length * 8);
+        }
+        else
+            ets_sha_update(&ctx.ctx, cast(const ubyte*)input.ptr, cast(uint)input.length, true);
+    }
+    else
     {
         const(ubyte)[] data = cast(ubyte[])input;
 
@@ -176,8 +160,32 @@ else
             Context.transform(ctx, ctx.data);
         }
     }
+}
 
-    ubyte[Context.DigestLen] sha_finalise(Context)(ref Context ctx)
+ubyte[Context.DigestLen] sha_finalise(Context)(ref Context ctx)
+{
+    static if (esp_hardware)
+    {
+        version (ESP32)
+        {
+            static if (is(Context == SHA1Context))
+                enum sha_type = SHA_TYPE.SHA1;
+            else
+                enum sha_type = SHA_TYPE.SHA2_256;
+            ubyte[Context.DigestLen] digest;
+            ets_sha_finish(&ctx.ctx, sha_type, digest.ptr);
+            ets_sha_disable();
+            return digest;
+        }
+        else
+        {
+            ubyte[Context.DigestLen] digest;
+            ets_sha_finish(&ctx.ctx, digest.ptr);
+            ets_sha_disable();
+            return digest;
+        }
+    }
+    else
     {
         uint i = ctx.datalen;
 
@@ -306,11 +314,18 @@ unittest
 
 private:
 
-uint ROTLEFT(uint a, uint b) => (a << b) | (a >> (32 - b));
-uint ROTRIGHT(uint a, uint b) => (a >> b) | (a << (32 - b));
+version (Espressif_Modern)
+    enum esp_hardware = true;
+else version (Espressif)
+    enum esp_hardware = !is(Context == SHA224Context);
+else
+    enum esp_hardware = false;
 
+version (Espressif) {} else
 void sha1_transform(Context)(ref Context ctx, const ubyte[] data)
 {
+    static uint ROTLEFT(uint a, uint b) => (a << b) | (a >> (32 - b));
+
     uint a, b, c, d, e, i, j, t;
     uint[80] m = void;
 
@@ -372,8 +387,11 @@ void sha1_transform(Context)(ref Context ctx, const ubyte[] data)
     ctx.state[4] += e;
 }
 
+version (Espressif_Modern) {} else
 void sha256_transform(Context)(ref Context ctx, const ubyte[] data)
 {
+    static uint ROTRIGHT(uint a, uint b) => (a >> b) | (a << (32 - b));
+
     static uint CH(uint x, uint y, uint z) => (x & y) ^ (~x & z);
     static uint MAJ(uint x, uint y, uint z) => (x & y) ^ (x & z) ^ (y & z);
     static uint EP0(uint x) => ROTRIGHT(x, 2) ^ ROTRIGHT(x, 13) ^ ROTRIGHT(x, 22);
@@ -420,4 +438,57 @@ void sha256_transform(Context)(ref Context ctx, const ubyte[] data)
     ctx.state[5] += f;
     ctx.state[6] += g;
     ctx.state[7] += h;
+}
+
+
+// ESP32 (original) has a different ROM API from all later chips:
+//   - ets_sha_init takes no type; type passed to update/finish instead
+//   - ets_sha_update size is in bits, not bytes; no ets_sha_starts
+//   - smaller SHA_CTX struct
+//   - no SHA224 in ROM (only SHA1=0, SHA2_256=1)
+version (Espressif):
+
+private extern(C) nothrow @nogc
+{
+    void ets_sha_enable();
+    void ets_sha_disable();
+
+    version (Espressif_Modern)
+    {
+        int ets_sha_init(SHA_CTX* ctx, SHA_TYPE type);
+        int ets_sha_starts(SHA_CTX* ctx, ushort sha512_t);
+        void ets_sha_update(SHA_CTX* ctx, const ubyte* input, uint input_bytes, bool update_ctx);
+        int ets_sha_finish(SHA_CTX* ctx, ubyte* output);
+    }
+    else
+    {
+        void ets_sha_init(SHA_CTX* ctx);
+        void ets_sha_update(SHA_CTX* ctx, SHA_TYPE type, const ubyte* input, size_t input_bits);
+        void ets_sha_finish(SHA_CTX* ctx, SHA_TYPE type, ubyte* output);
+    }
+}
+
+version (Espressif_Modern)
+{
+    private enum SHA_TYPE : int { SHA1 = 0, SHA2_224, SHA2_256 }
+
+    private struct SHA_CTX
+    {
+        bool start;
+        bool in_hardware;
+        SHA_TYPE type;
+        uint[16] state;
+        ubyte[128] buffer;
+        uint[4] total_bits;
+    }
+}
+else
+{
+    private enum SHA_TYPE : int { SHA1 = 0, SHA2_256 }
+
+    private struct SHA_CTX
+    {
+        bool start;
+        uint[4] total_input_bits;
+    }
 }

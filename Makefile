@@ -27,6 +27,9 @@ SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/baremetal" -type f -name '*.d'
 ifeq ($(OS),windows)
     SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/windows" -type f -name '*.d')
 endif
+ifneq ($(filter linux ubuntu freebsd,$(OS)),)
+    SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/posix" -type f -name '*.d')
+endif
 SOURCES := $(SOURCES) $(SRCDIR)/urt/internal/mbedtls.c
 
 ifeq ($(PLATFORM),riscv64)

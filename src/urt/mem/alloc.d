@@ -5,171 +5,201 @@ import urt.mem;
 nothrow @nogc:
 
 
-void[] alloc(size_t size) pure
+enum MemFlags : ubyte
 {
-    // TODO: pure malloc is meant to copy and restore errno around the call, because that's user-accessible state...
+    none     = 0,
 
-    // TODO: we might pin the length to a debug table somewhere...
-    return malloc(size)[0 .. size];
+    fast     = 1,   // internal SRAM, lowest latency
+    slow     = 2,   // external PSRAM, bulk storage
+    fastest  = 3,   // TCM / tightly-coupled, single cycle
+
+    dma      = 0x4, // DMA-accessible
 }
 
-void[] realloc(void[] mem, size_t newSize) pure
+MemFlags mem_speed(MemFlags flags) pure => cast(MemFlags)(flags & 3);
+bool mem_is_dma(MemFlags flags) pure => (flags & MemFlags.dma) != 0;
+
+
+void[] alloc(size_t size, MemFlags flags = MemFlags.none) pure
+    => alloc(size, size_t.sizeof, flags);
+
+void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
 {
-    // TODO: we might pin the length to a debug table somewhere...
-    return urt.mem.realloc(mem.ptr, newSize)[0 .. newSize];
+    import urt.util : is_power_of_2;
+
+    assert(is_power_of_2(alignment), "Alignment must be a power of two!");
+
+    return _alloc(size, alignment, flags);
+}
+
+void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags = MemFlags.none) pure
+{
+    import urt.util : min;
+
+    if (new_size == 0)
+    {
+        free(mem);
+        return null;
+    }
+    if (mem.ptr is null)
+        return alloc(new_size, alignment, flags);
+
+    static if (has_realloc)
+        return _realloc(mem, new_size, alignment, flags);
+    else
+    {
+        void[] new_mem = alloc(new_size, alignment, flags);
+        if (new_mem.ptr !is null)
+        {
+            size_t copy = min(mem.length, new_size);
+            new_mem[0 .. copy] = mem[0 .. copy];
+        }
+        free(mem);
+        return new_mem;
+    }
 }
 
 void free(void[] mem) pure
 {
-    // maybe check the length passed to free matches the alloc?
-    // ... or you know, just don't do that.
-    urt.mem.free(mem.ptr);
-}
-
-void[] alloc_aligned(size_t size, size_t alignment) pure
-{
-    import urt.util : align_down, is_power_of_2, max;
-
-    alignment = max(alignment, (void*).sizeof);
-    assert(is_power_of_2(alignment), "Alignment must be a power of two!");
-
-    version (Windows)
-    {
-        void* mem = _aligned_malloc(size, alignment);
-        return mem ? mem[0 .. size] : null;
-    }
-    else version (Posix)
-    {
-        import urt.internal.sys.posix;
-        void* mem;
-        return posix_memalign(&mem, alignment, size) ? null : mem[0 .. size];
-    }
-    else version (Espressif)
-    {
-        enum MALLOC_CAP_DEFAULT = 1 << 12;
-        void* mem = heap_caps_aligned_alloc(alignment, size, MALLOC_CAP_DEFAULT);
-        return mem ? mem[0 .. size] : null;
-    }
-    else version (FreeStanding)
-    {
-        size_t header_size = (void*).sizeof + alignment;
-        size_t total = header_size + size;
-
-        void* mem = malloc(total);
-        if (mem is null)
-            return null;
-
-        size_t ptr = cast(size_t)mem;
-        size_t allocptr = align_down(ptr + header_size, alignment);
-        (cast(void**)allocptr)[-1] = mem;
-
-        return (cast(void*)allocptr)[0 .. size];
-    }
-    else
-        assert(false, "Unsupported platform");
-}
-
-void[] realloc_aligned(void[] mem, size_t newSize, size_t alignment) pure
-{
-    import urt.util : is_power_of_2, min, max;
-
-    alignment = max(alignment, (void*).sizeof);
-    assert(is_power_of_2(alignment), "Alignment must be a power of two!");
-
-    void[] newAlloc = newSize > 0 ? alloc_aligned(newSize, alignment) : null;
-    if (newAlloc !is null && mem !is null)
-    {
-        size_t toCopy = min(mem.length, newSize);
-        newAlloc[0 .. toCopy] = mem[0 .. toCopy];
-    }
-    free_aligned(mem);
-    return newAlloc;
-}
-
-void free_aligned(void[] mem) pure
-{
     if (mem.ptr is null)
         return;
-    version (Windows)
-        _aligned_free(mem.ptr);
-    else version (Posix)
-        urt.mem.free(mem.ptr);
-    else version (Espressif)
-        heap_caps_aligned_free(mem.ptr);
-    else version (FreeStanding)
-    {
-        void* p = (cast(void**)mem.ptr)[-1];
-        urt.mem.free(p);
-    }
-    else
-        assert(false, "Unsupported platform");
+    _free(mem.ptr);
 }
 
-// NOTE: This function is only compatible with alloc_aligned!
-void[] expand(void[] mem, size_t newSize) pure
+void[] expand(void[] mem, size_t new_size) pure
 {
     if (mem.ptr is null)
         return null;
-    if (newSize <= memsize(mem.ptr))
-        return mem.ptr[0 .. newSize];
-    return null;
+    static if (has_expand)
+        return _expand(mem, new_size);
+    else static if (has_memsize)
+    {
+        if (new_size <= _memsize(mem.ptr))
+            return mem.ptr[0 .. new_size];
+        return null;
+    }
+    else
+        assert(false, "unsupported");
 }
 
-// NOTE: This function is only compatible with alloc_aligned!
 size_t memsize(void* ptr) pure
 {
     if (ptr is null)
         return 0;
-    version (Windows)
-        return _aligned_msize(ptr);
-    else version (Posix)
-        return malloc_usable_size(ptr);
-    else version (Espressif)
-        return heap_caps_get_allocated_size(ptr);
-    else version (FreeStanding)
-    {
-        void* mem = (cast(void**)ptr)[-1];
-        size_t offset = cast(size_t)ptr - cast(size_t)mem;
-        return malloc_usable_size(mem) - offset;
-    }
+    static if (has_memsize)
+        return _memsize(ptr);
     else
-        assert(false, "Unsupported platform");
+        assert(false, "unsupported");
 }
+
+void[] alloc_exec(size_t size) pure
+{
+    static if (has_exec)
+        return _alloc_exec(size);
+    else
+        return null;
+}
+
+void free_exec(void[] mem) pure
+{
+    static if (has_exec)
+    {
+        if (mem.ptr !is null)
+            _free_exec(mem);
+    }
+}
+
+void[] alloc_retain(size_t size) pure
+{
+    static if (has_retain)
+        return _alloc_retain(size);
+    else
+        return null;
+}
+
+void free_retain(void[] mem) pure
+{
+    static if (has_retain)
+    {
+        if (mem.ptr !is null)
+            _free_retain(mem);
+    }
+}
+
+
+// pointer tagging utilities -- for containers to store flags in low 3 bits
+// of 8-byte aligned pointers. the allocator itself returns clean pointers.
+T* tag(T)(T* ptr, MemFlags flags) pure
+    => cast(T*)(cast(size_t)ptr | flags);
+
+T* untag(T)(T* ptr) pure
+    => cast(T*)(cast(size_t)ptr & ~cast(size_t)0x7);
+
+MemFlags get_flags(void* ptr) pure
+    => cast(MemFlags)(cast(size_t)ptr & 0x7);
+
+
+version (Espressif)
+    public import sys.esp32.alloc;
+else version (BL808_M0)
+    public import sys.bl618.alloc;
+else version (BL808)
+    public import sys.bl808.alloc;
+else version (BL618)
+    public import sys.bl618.alloc;
+else version (RP2350)
+    public import sys.rp2350.alloc;
+else version (BK7231N)
+    public import sys.bk7231.alloc;
+else version (BK7231T)
+    public import sys.bk7231.alloc;
+else version (STM32F4)
+    public import sys.stm32.alloc;
+else version (STM32F7)
+    public import sys.stm32.alloc;
+else version (Windows)
+    public import sys.windows.alloc;
+else version (Posix)
+    public import sys.posix.alloc;
+else
+    static assert(false, "No alloc driver for this platform");
 
 
 unittest
 {
-    void[] mem = alloc_aligned(16, 8);
+    // basic alloc/free
+    void[] mem = alloc(32, 8);
+    assert(mem !is null);
+    assert((cast(size_t)mem.ptr & 0x7) == 0); // 8-byte aligned
+    assert(mem.length == 32);
+    free(mem);
+
+    // alloc with flags (on desktop, flags are ignored but API works)
+    mem = alloc(64, 8, MemFlags.fast);
     assert(mem !is null);
     size_t s = memsize(mem.ptr);
-    assert(s >= 16);
-    mem = expand(mem, 8);
+    assert(s >= 64);
+    free(mem);
+
+    // realloc preserves data
+    mem = alloc(16, 8);
+    (cast(ubyte*)mem.ptr)[0 .. 16] = 0xAB;
+    mem = realloc(mem, 64);
     assert(mem !is null);
-    mem = expand(mem, 16);
-    assert(mem !is null);
-    free_aligned(mem);
-}
+    assert((cast(ubyte*)mem.ptr)[0] == 0xAB);
+    free(mem);
 
+    // expand
+    mem = alloc(16, 8);
+    void[] expanded = expand(mem, 8);
+    if (expanded !is null)
+        assert(expanded.ptr is mem.ptr);
+    free(mem);
 
-version (Windows)
-{
-    extern(C) void* _aligned_malloc(size_t size, size_t alignment) pure;
-    extern(C) void _aligned_free(void* memblock) pure;
-    extern(C) size_t _aligned_msize(void* memblock) pure;
-}
-
-version (Espressif)
-{
-    // ESP-IDF heap_caps API — provides aligned alloc and size query
-    extern(C) void* heap_caps_aligned_alloc(size_t alignment, size_t size, uint caps) pure;
-    extern(C) void heap_caps_aligned_free(void* ptr) pure;
-    extern(C) size_t heap_caps_get_allocated_size(void* ptr) pure;
-}
-else version (Posix)
-{
-    extern(C) size_t malloc_usable_size(void *__ptr) pure;
-}
-else version (FreeStanding)
-{
-    extern(C) size_t malloc_usable_size(void *__ptr) pure;
+    // pointer tagging utilities
+    void* p = mem.ptr;
+    enum test_flags = cast(MemFlags)(MemFlags.fast | MemFlags.dma);
+    void* tagged = tag(p, test_flags);
+    assert(get_flags(tagged) == test_flags);
+    assert(untag(tagged) is p);
 }

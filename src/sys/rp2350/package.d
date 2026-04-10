@@ -18,27 +18,27 @@ private extern(C) extern const ubyte __eh_frame_start;
 private ubyte[48] __eh_frame_object;  // storage for libgcc (no-op on ARM EHABI)
 
 // RP2350 peripheral base addresses
-enum ulong RESETS_BASE    = 0x40020000;
-enum ulong CLOCKS_BASE    = 0x40010000;
-enum ulong XOSC_BASE      = 0x40048000;
-enum ulong PLL_SYS_BASE   = 0x40060000;
-enum ulong SIO_BASE       = 0xD0000000;
-enum ulong IO_BANK0_BASE  = 0x40028000;
-enum ulong PADS_BANK0_BASE = 0x40038000;
+enum ulong RESETS_BASE      = 0x40020000;
+enum ulong CLOCKS_BASE      = 0x40010000;
+enum ulong XOSC_BASE        = 0x40048000;
+enum ulong PLL_SYS_BASE     = 0x40060000;
+enum ulong SIO_BASE         = 0xD0000000;
+enum ulong IO_BANK0_BASE    = 0x40028000;
+enum ulong PADS_BANK0_BASE  = 0x40038000;
 
 // Atomic set/clear/xor aliases (RP2350 address alias trick)
-enum ulong REG_ALIAS_SET = 0x00002000;
-enum ulong REG_ALIAS_CLR = 0x00003000;
+enum ulong REG_ALIAS_SET    = 0x00002000;
+enum ulong REG_ALIAS_CLR    = 0x00003000;
 
 // RESETS register offsets
-enum ulong RESETS_RESET    = 0x00;
-enum ulong RESETS_DONE     = 0x08;
+enum ulong RESETS_RESET     = 0x00;
+enum ulong RESETS_DONE      = 0x08;
 
 // Reset bits for peripherals we need early
-enum uint RESET_UART0    = 1 << 26;
-enum uint RESET_UART1    = 1 << 27;
-enum uint RESET_IO_BANK0 = 1 << 8;
-enum uint RESET_PADS_BANK0 = 1 << 9;
+enum uint RESET_UART0       = 1 << 26;
+enum uint RESET_UART1       = 1 << 27;
+enum uint RESET_IO_BANK0    = 1 << 8;
+enum uint RESET_PADS_BANK0  = 1 << 9;
 
 private void mmio_write(ulong addr, uint val) @nogc nothrow
 {

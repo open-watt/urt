@@ -371,12 +371,12 @@ nothrow @nogc:
 
     override void[] alloc(size_t size, size_t alignment = DefaultAlign) pure
     {
-        return urt.mem.alloc.alloc_aligned(size, alignment);
+        return urt.mem.alloc.alloc(size, alignment);
     }
 
     override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) pure
     {
-        return urt.mem.alloc.realloc_aligned(mem, newSize, alignment);
+        return urt.mem.alloc.realloc(mem, newSize, alignment);
     }
 
     override void[] expand(void[] mem, size_t newSize) pure
@@ -386,7 +386,7 @@ nothrow @nogc:
 
     override void free(void[] mem) pure
     {
-        urt.mem.alloc.free_aligned(mem);
+        urt.mem.alloc.free(mem);
     }
 
 private:

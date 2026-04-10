@@ -105,13 +105,10 @@ void log_warningf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { writ
 void log_noticef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.notice, tag, null, fmt, args); }
 void log_infof(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.info, tag, null, fmt, args); }
 
-debug
-{
-    void log_debug(T...)(const(char)[] tag, ref T args) { write_log(Severity.debug_, tag, null, args); }
-    void log_trace(T...)(const(char)[] tag, ref T args) { write_log(Severity.trace, tag, null, args); }
-    void log_debugf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.debug_, tag, null, fmt, args); }
-    void log_tracef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.trace, tag, null, fmt, args); }
-}
+void log_debug(T...)(const(char)[] tag, ref T args) { write_log(Severity.debug_, tag, null, args); }
+void log_trace(T...)(const(char)[] tag, ref T args) { write_log(Severity.trace, tag, null, args); }
+void log_debugf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.debug_, tag, null, fmt, args); }
+void log_tracef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.trace, tag, null, fmt, args); }
 
 // this can be declared in any scope to automatically prefix log messages with a tag (e.g. module name)
 // eg: alias log = Log!"my.module";
@@ -134,13 +131,10 @@ template Log(string tag)
     void alertf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.alert, tag, null, fmt, args); }
     void emergencyf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.emergency, tag, null, fmt, args); }
 
-    debug
-    {
-        void debug_(T...)(ref T args) { write_log(Severity.debug_, tag, null, args); }
-        void trace(T...)(ref T args) { write_log(Severity.trace, tag, null, args); }
-        void debugf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.debug_, tag, null, fmt, args); }
-        void tracef(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.trace, tag, null, fmt, args); }
-    }
+    void debug_(T...)(ref T args) { write_log(Severity.debug_, tag, null, args); }
+    void trace(T...)(ref T args) { write_log(Severity.trace, tag, null, args); }
+    void debugf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.debug_, tag, null, fmt, args); }
+    void tracef(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.trace, tag, null, fmt, args); }
 }
 
 void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_name, ref T args)

@@ -769,58 +769,35 @@ nothrow @nogc:
 
     ref MutableString!Embed append(Things...)(auto ref Things things)
     {
-        insert(length(), forward!things);
-        return this;
+        import urt.string.format : normalise_args;
+        return insert_impl(length(), normalise_args(things));
     }
 
     ref MutableString!Embed append_format(Things...)(const(char)[] format, auto ref Things args)
     {
-        insert_format(length(), format, forward!args);
-        return this;
+        return insert_format(length(), format, forward!args);
     }
 
     ref MutableString!Embed concat(Things...)(auto ref Things things)
     {
+        import urt.string.format : normalise_args;
         if (ptr)
             writeLength(0);
-        insert(0, forward!things);
-        return this;
+        return insert_impl(0, normalise_args(things));
     }
 
     ref MutableString!Embed format(Args...)(const(char)[] format, auto ref Args args)
     {
         if (ptr)
             writeLength(0);
-        insert_format(0, format, forward!args);
-        return this;
+        return insert_format(0, format, forward!args);
     }
 
     ref MutableString!Embed insert(Things...)(size_t offset, auto ref Things things)
     {
-        import urt.string.format : _concat = concat;
-        import urt.util : max, next_power_of_2;
-
-        char* oldPtr = ptr;
-        size_t oldLen = length();
-
-        size_t insertLen = _concat(null, things).length;
-        size_t newLen = oldLen + insertLen;
-        if (newLen == oldLen)
-            return this;
-        debug assert(newLen <= MaxStringLen, "String too long");
-
-        size_t oldAlloc = allocated();
-        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(max(16, cast(ushort)newLen + 4).next_power_of_2 - 4);
-        memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
-        _concat(ptr[offset .. offset + insertLen], forward!things);
-        writeLength(newLen);
-
-        if (oldPtr && ptr != oldPtr)
-        {
-            ptr[0 .. offset] = oldPtr[0 .. offset];
-            freeStringBuffer(oldPtr);
-        }
-        return this;
+        import urt.string.format : normalise_args;
+        auto args = normalise_args(things);
+        return insert_impl(offset, args);
     }
 
     ref MutableString!Embed insert_format(Things...)(size_t offset, const(char)[] format, auto ref Things args)
@@ -943,6 +920,35 @@ private:
                 return;
         buffer -= 4;
         defaultAllocator().free(buffer[0 .. 4 + *cast(ushort*)buffer]);
+    }
+
+    import urt.meta.tuple : Tuple;
+    ref MutableString!Embed insert_impl(Things...)(size_t offset, Tuple!Things args)
+    {
+        import urt.string.format : concat_impl;
+        import urt.util : max, next_power_of_2;
+
+        char* oldPtr = ptr;
+        size_t oldLen = length();
+
+        size_t insertLen = concat_impl(null, args).length;
+        size_t newLen = oldLen + insertLen;
+        if (newLen == oldLen)
+            return this;
+        debug assert(newLen <= MaxStringLen, "String too long");
+
+        size_t oldAlloc = allocated();
+        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(max(16, cast(ushort)newLen + 4).next_power_of_2 - 4);
+        memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
+        concat_impl(ptr[offset .. offset + insertLen], args);
+        writeLength(newLen);
+
+        if (oldPtr && ptr != oldPtr)
+        {
+            ptr[0 .. offset] = oldPtr[0 .. offset];
+            freeStringBuffer(oldPtr);
+        }
+        return this;
     }
 
     version (Windows)

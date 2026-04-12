@@ -150,17 +150,26 @@ const(char)[] tconcat(Args...)(ref Args args)
     }
     else
     {
-        import urt.string.format : concat;
-        const(char)[] r = concat(cast(char[])tempMem[alloc_offset..$], args);
-        if (!r)
-        {
-            alloc_offset = 0;
-            r = concat(cast(char[])tempMem[0..TempMemSize / 2], args);
-        }
-        alloc_offset += r.length;
-        return r;
+        pragma(inline, true);
+        import urt.string.format : normalise_args;
+        return tconcat_impl(normalise_args(args));
     }
 }
+
+import urt.meta.tuple : Tuple;
+const(char)[] tconcat_impl(Args...)(Tuple!Args args)
+{
+    import urt.string.format : concat_impl;
+    const(char)[] r = concat_impl(cast(char[])tempMem[alloc_offset..$], args);
+    if (!r)
+    {
+        alloc_offset = 0;
+        r = concat_impl(cast(char[])tempMem[0..TempMemSize / 2], args);
+    }
+    alloc_offset += r.length;
+    return r;
+}
+
 
 char[] tformat(Args...)(const(char)[] fmt, ref Args args)
 {

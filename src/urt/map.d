@@ -42,14 +42,14 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     }
 
     size_t length() const nothrow
-        => numNodes;
+        => _num_modes;
     bool empty() const nothrow
-        => numNodes == 0;
+        => _num_modes == 0;
 
     void clear() nothrow
     {
-        destroy(pRoot);
-        pRoot = null;
+        destroy(_root);
+        _root = null;
     }
 
     V* insert(_K, _V)(auto ref _K key, auto ref _V val)
@@ -167,11 +167,12 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     {
         Node* node = cast(Node*)Allocator.instance.alloc(Node.sizeof);
         emplace(&node.kvp, forward!key, forward!val);
-        node.left = node.right = null;
-        node.height = 1;
-        pRoot = insert(pRoot, node);
+        node._base.left = node._base.right = null;
+        node._base.height = 1;
+        _root = insert(_root, node);
         return node.kvp.value;
     }
+
 /+
   V& replace(K &&key, V &&val)
   {
@@ -180,7 +181,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     epConstruct(&node.kvp) KVP<K, V>(std::move(key), std::move(val));
     node.left = node.right = null;
     node.height = 1;
-    pRoot = insert(pRoot, node);
+    _root = insert(_root, node);
     return node.kvp.value;
   }
   V& replace(const K &key, V &&val)
@@ -190,7 +191,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     epConstruct(&node.kvp) KVP<K, V>(key, std::move(val));
     node.left = node.right = null;
     node.height = 1;
-    pRoot = insert(pRoot, node);
+    _root = insert(_root, node);
     return node.kvp.value;
   }
   V& replace(K &&key, const V &val)
@@ -200,7 +201,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     epConstruct(&node.kvp) KVP<K, V>(std::move(key), val);
     node.left = node.right = null;
     node.height = 1;
-    pRoot = insert(pRoot, node);
+    _root = insert(_root, node);
     return node.kvp.value;
   }
   V& replace(const K &key, const V &val)
@@ -210,7 +211,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     epConstruct(&node.kvp) KVP<K, V>(key, val);
     node.left = node.right = null;
     node.height = 1;
-    pRoot = insert(pRoot, node);
+    _root = insert(_root, node);
     return node.kvp.value;
   }
 
@@ -221,7 +222,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     epConstruct(&node.kvp) KVP<K, V>(std::move(kvp));
     node.left = node.right = null;
     node.height = 1;
-    pRoot = insert(pRoot, node);
+    _root = insert(_root, node);
     return node.kvp.value;
   }
   V& replace(const KVP<K, V> &kvp)
@@ -231,19 +232,19 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
     epConstruct(&node.kvp) KVP<K, V>(kvp);
     node.left = node.right = null;
     node.height = 1;
-    pRoot = insert(pRoot, node);
+    _root = insert(_root, node);
     return node.kvp.value;
   }
 +/
 
     void remove(_K)(ref const _K key)
     {
-        pRoot = deleteNode(pRoot, key);
+        _root = delete_node(_root, key);
     }
 
     inout(V)* get(_K)(ref const _K key) inout
     {
-        inout(Node)* n = find(pRoot, key);
+        inout(Node)* n = find(_root, key);
         return n ? &n.kvp.value : null;
     }
 
@@ -289,16 +290,16 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
 
     // TODO: why don't the const overloads work properly?
     auto keys() const nothrow
-        => Range!(IterateBy.Keys, true)(pRoot);
+        => Range!(IterateBy.Keys, true)(_root);
     auto values() nothrow
-        => Range!(IterateBy.Values)(pRoot);
+        => Range!(IterateBy.Values)(_root);
     auto values() const nothrow
-        => Range!(IterateBy.Values, true)(pRoot);
+        => Range!(IterateBy.Values, true)(_root);
 
     auto opIndex() nothrow
-        => Range!(IterateBy.KVP)(pRoot);
+        => Range!(IterateBy.KVP)(_root);
     auto opIndex() const nothrow
-        => Range!(IterateBy.KVP, true)(pRoot);
+        => Range!(IterateBy.KVP, true)(_root);
 
     import urt.string.format : FormatArg, formatValue;
     ptrdiff_t toString()(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
@@ -367,273 +368,39 @@ private:
 nothrow:
     alias Node = AVLTreeNode!(K, V);
 
-    size_t numNodes = 0;
-    Node* pRoot = null;
+    size_t _num_modes = 0;
+    Node* _root = null;
 
-    static int height(const(Node)* n) pure
+    static ptrdiff_t compare_node(const void* a, const void* b) pure
+        => Pred(*cast(K*)a, *cast(K*)b);
+
+    static void free_node(void* p)
     {
-        return n ? n.height : 0;
+        Allocator.instance.freeT(cast(Node*)p);
     }
 
-    static int maxHeight(const(Node)* n) pure
-    {
-        if (!n)
-            return 0;
-        if (n.left)
-        {
-            if (n.right)
-                return max(n.left.height, n.right.height);
-            else
-                return n.left.height;
-        }
-        if (n.right)
-            return n.right.height;
-        return 0;
-    }
-
-    static int getBalance(Node* n) pure
-    {
-        return n ? height(n.left) - height(n.right) : 0;
-    }
-
-    static Node* rightRotate(Node* y) pure
-    {
-        Node* x = y.left;
-        Node* T2 = x.right;
-
-        // Perform rotation
-        x.right = y;
-        y.left = T2;
-
-        // Update heights
-        y.height = maxHeight(y) + 1;
-        x.height = maxHeight(x) + 1;
-
-        // Return new root
-        return x;
-    }
-
-    static Node* leftRotate(Node* x) pure
-    {
-        Node* y = x.right;
-        Node* T2 = y.left;
-
-        // Perform rotation
-        y.left = x;
-        x.right = T2;
-
-        //  Update heights
-        x.height = maxHeight(x) + 1;
-        y.height = maxHeight(y) + 1;
-
-        // Return new root
-        return y;
-    }
-
-    static inout(Node)* find(_K)(inout(Node)* n, ref const _K key)
-    {
-        if (n is null)
-            return null;
-        ptrdiff_t c = Pred(n.kvp.key, key);
-        if (c > 0)
-            return find(n.left, key);
-        if (c < 0)
-            return find(n.right, key);
-        return n;
-    }
+    static inout(Node)* find(_K)(inout(Node)* n, ref const _K key) pure
+        => cast(inout(Node)*)find_node(n.base, (a, b) => Pred(*cast(K*)a, *cast(_K*)b), &key);
 
     void destroy(Node* n)
     {
-        if (n is null)
-            return;
-
-        destroy(n.left);
-        destroy(n.right);
-
-        Allocator.instance.freeT(n);
-
-        --numNodes;
+        _num_modes -= destroy_node(n.base, &free_node);
     }
 
     Node* insert(Node* n, Node* newnode)
     {
-        // 1.  Perform the normal BST rotation
-        if (n is null)
-        {
-            ++numNodes;
-            return newnode;
-        }
-
-        ptrdiff_t c = Pred(newnode.kvp.key, n.kvp.key);
-        if (c < 0)
-            n.left = insert(n.left, newnode);
-        else if (c > 0)
-            n.right = insert(n.right, newnode);
-        else
-        {
-            newnode.left = n.left;
-            newnode.right = n.right;
-            newnode.height = n.height;
-
-            Allocator.instance.freeT(n);
-
-            return newnode;
-        }
-
-        // 2. Update height of this ancestor Node
-        n.height = maxHeight(n) + 1;
-
-        // 3. get the balance factor of this ancestor Node to check whether
-        //    this Node became unbalanced
-        int balance = getBalance(n);
-
-        // If this Node becomes unbalanced, then there are 4 cases
-
-        if (balance > 1)
-        {
-            ptrdiff_t lc = Pred(newnode.kvp.key, n.left.kvp.key);
-            // Left Left Case
-            if (lc < 0)
-                return rightRotate(n);
-
-            // Left Right Case
-            if (lc > 0)
-            {
-                n.left = leftRotate(n.left);
-                return rightRotate(n);
-            }
-        }
-
-        if (balance < -1)
-        {
-            ptrdiff_t rc = Pred(newnode.kvp.key, n.right.kvp.key);
-
-            // Right Right Case
-            if (rc > 0)
-                return leftRotate(n);
-
-            // Right Left Case
-            if (rc < 0)
-            {
-                n.right = rightRotate(n.right);
-                return leftRotate(n);
-            }
-        }
-
-        // return the (unchanged) Node pointer
-        return n;
+        return cast(Node*)insert_node(n.base, newnode.base, _num_modes,
+                                      &compare_node,
+                                      &free_node);
     }
 
-    Node* deleteNode(_K)(Node* _pRoot, ref const _K key)
+    Node* delete_node(_K)(Node* _pRoot, ref const _K key)
     {
-        // STEP 1: PERFORM STANDARD BST DELETE
-
-        if (_pRoot is null)
-            return _pRoot;
-
-        ptrdiff_t c = Pred(_pRoot.kvp.key, key);
-
-        // If the key to be deleted is smaller than the _pRoot's key,
-        // then it lies in left subtree
-        if (c > 0)
-            _pRoot.left = deleteNode(_pRoot.left, key);
-
-        // If the key to be deleted is greater than the _pRoot's key,
-        // then it lies in right subtree
-        else if (c < 0)
-            _pRoot.right = deleteNode(_pRoot.right, key);
-
-        // if key is same as _pRoot's key, then this is the Node
-        // to be deleted
-        else
-            _pRoot = doDelete(_pRoot);
-
-        return rebalance(_pRoot);
-    }
-
-    Node* doDelete(Node* _pRoot)
-    {
-        // Node with only one child or no child
-        if ((_pRoot.left is null) || (_pRoot.right is null))
-        {
-            Node* temp = _pRoot.left ? _pRoot.left : _pRoot.right;
-
-            // No child case
-            if (temp is null)
-            {
-                temp = _pRoot;
-                _pRoot = null;
-            }
-            else // One child case
-            {
-                // TODO: FIX THIS!!
-                // this is copying the child node into the parent node because there is no parent pointer
-                // DO: add parent pointer, then fix up the parent's child pointer to the child, and do away with this pointless copy!
-                *_pRoot = (*temp).move; // Copy the contents of the non-empty child
-            }
-
-            Allocator.instance.freeT(temp);
-
-            --numNodes;
-        }
-        else
-        {
-            // Node with two children: we replace 'this' node with the next one in sequence...
-
-            // get the in-order successor: the 'next' item is the far left node on the right hand side)
-            Node* next = _pRoot.right;
-            while (next.left !is null) // find the leftmost leaf
-                next = next.left;
-
+        return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_node, (void* from, void* to) {
             // Copy the in-order successor's data to this Node
-            _pRoot.kvp.key = next.kvp.key; // we can't move the key, because deleteNode still needs to be able to find it
-            _pRoot.kvp.value = next.kvp.value.move;
-
-            // Delete the node we just shifted
-            _pRoot.right = deleteNode(_pRoot.right, next.kvp.key);
-        }
-
-        return _pRoot;
-    }
-
-    Node* rebalance(Node* _pRoot)
-    {
-        // If the tree had only one Node then return
-        if (_pRoot is null)
-            return null;
-
-        // STEP 2: UPDATE HEIGHT OF THE CURRENT NODE
-        _pRoot.height = max(height(_pRoot.left), height(_pRoot.right)) + 1;
-
-        // STEP 3: GET THE BALANCE FACTOR OF THIS NODE (to check whether
-        //  this Node became unbalanced)
-        int balance = getBalance(_pRoot);
-
-        // If this Node becomes unbalanced, then there are 4 cases
-
-        // Left Left Case
-        if (balance > 1 && getBalance(_pRoot.left) >= 0)
-            return rightRotate(_pRoot);
-
-        // Left Right Case
-        if (balance > 1 && getBalance(_pRoot.left) < 0)
-        {
-            _pRoot.left = leftRotate(_pRoot.left);
-            return rightRotate(_pRoot);
-        }
-
-        // Right Right Case
-        if (balance < -1 && getBalance(_pRoot.right) <= 0)
-            return leftRotate(_pRoot);
-
-        // Right Left Case
-        if (balance < -1 && getBalance(_pRoot.right) > 0)
-        {
-            _pRoot.right = rightRotate(_pRoot.right);
-            return leftRotate(_pRoot);
-        }
-
-        return _pRoot;
+            (cast(Node*)to).kvp.key = (cast(Node*)from).kvp.key; // we can't move the key, because delete_node still needs to be able to find it
+            (cast(Node*)to).kvp.value = (cast(Node*)from).kvp.value.move;
+        }, &free_node);
     }
 
 //    static Node* clone(Node* pOld)
@@ -749,14 +516,36 @@ public:
         }
     }
 }
+struct BaseNode
+{
+    BaseNode* left, right;
+    int height;
+}
 
 struct AVLTreeNode(K, V)
 {
 nothrow @nogc:
 
-    AVLTreeNode* left, right;
+    alias _base this;
+
+    BaseNode _base;
     KVP!(K, V) kvp;
-    int height;
+
+    inout(BaseNode)* base() inout pure @property
+        => &_base;
+
+    inout(AVLTreeNode)* left() inout pure @property
+        => cast(inout(AVLTreeNode)*)_base.left;
+    void left(AVLTreeNode* node) pure @property
+    {
+        _base.left = node.base;
+    }
+    inout(AVLTreeNode)* right() inout pure @property
+        => cast(inout(AVLTreeNode)*)_base.right;
+    void right(AVLTreeNode* node) pure @property
+    {
+        _base.right = node.base;
+    }
 
     this() @disable;
 
@@ -772,7 +561,7 @@ nothrow @nogc:
         left = rh.left;
         right = rh.right;
         kvp = rh.kvp;
-        height = rh.height;
+        _base.height = rh._base.height;
     }
 
     ref AVLTreeNode opAssign(ref AVLTreeNode rh)
@@ -789,49 +578,6 @@ nothrow @nogc:
         return this;
     }
 }
-
-/+
-template<typename K, typename V, typename PredFunctor, typename Allocator>
-ptrdiff_t epStringify(Slice<char> buffer, String epUnusedParam(format), const AVLTree<K, V, PredFunctor, Allocator> &tree, const VarArg* epUnusedParam(pArgs))
-{
-    size_t offset = 0;
-    if (buffer)
-        offset += String("{ ").copyTo(buffer);
-    else
-        offset += String("{ ").length;
-
-    bool bFirst = true;
-    for (auto &&kvp : tree)
-    {
-        if (!bFirst)
-        {
-            if (buffer)
-                offset += String(", ").copyTo(buffer.drop(offset));
-            else
-                offset += String(", ").length;
-        }
-        else
-            bFirst = false;
-
-        if (buffer)
-            offset += epStringify(buffer.drop(offset), null, kvp, null);
-        else
-            offset += epStringify(null, null, kvp, null);
-    }
-
-    if (buffer)
-        offset += String(" }").copyTo(buffer.drop(offset));
-    else
-        offset += String(" }").length;
-
-    return offset;
-}
-+/
-
-//// Range retrieval
-//template <typename K, typename V, typename P, typename A>
-//TreeRange<AVLTree<K, V, P, A>> range(const AVLTree<K, V, P, A> &input) { return TreeRange<AVLTree<K, V, P, A>>(input); }
-
 
 
 unittest
@@ -1064,4 +810,274 @@ unittest
         }
         assert(count == 2);
     }
+}
+
+
+private:
+
+alias CompFn = ptrdiff_t function(const void* a, const void* b) pure nothrow @nogc;
+alias MoveFn = void function(void* from, void* to) nothrow @nogc;
+alias DestroyFn = void function(void* a) nothrow @nogc;
+
+int height(const(BaseNode)* n) pure
+{
+    return n ? n.height : 0;
+}
+
+int max_height(const(BaseNode)* n) pure
+{
+    if (!n)
+        return 0;
+    if (n.left)
+    {
+        if (n.right)
+            return max(n.left.height, n.right.height);
+        else
+            return n.left.height;
+    }
+    if (n.right)
+        return n.right.height;
+    return 0;
+}
+
+int get_balance(BaseNode* n) pure
+{
+    return n ? height(n.left) - height(n.right) : 0;
+}
+
+BaseNode* right_rotate(BaseNode* y) pure
+{
+    BaseNode* x = y.left;
+    BaseNode* T2 = x.right;
+
+    // Perform rotation
+    x.right = y;
+    y.left = T2;
+
+    // Update heights
+    y.height = max_height(y) + 1;
+    x.height = max_height(x) + 1;
+
+    // Return new root
+    return x;
+}
+
+BaseNode* left_rotate(BaseNode* x) pure
+{
+    BaseNode* y = x.right;
+    BaseNode* T2 = y.left;
+
+    // Perform rotation
+    y.left = x;
+    x.right = T2;
+
+    //  Update heights
+    x.height = max_height(x) + 1;
+    y.height = max_height(y) + 1;
+
+    // Return new root
+    return y;
+}
+
+BaseNode* rebalance(BaseNode* root) pure
+{
+    // If the tree had only one Node then return
+    if (root is null)
+        return null;
+
+    // STEP 2: UPDATE HEIGHT OF THE CURRENT NODE
+    root.height = max(height(root.left), height(root.right)) + 1;
+
+    // STEP 3: GET THE BALANCE FACTOR OF THIS NODE (to check whether
+    //  this Node became unbalanced)
+    int balance = get_balance(root);
+
+    // If this Node becomes unbalanced, then there are 4 cases
+
+    // Left Left Case
+    if (balance > 1 && get_balance(root.left) >= 0)
+        return right_rotate(root);
+
+    // Left Right Case
+    if (balance > 1 && get_balance(root.left) < 0)
+    {
+        root.left = left_rotate(root.left);
+        return right_rotate(root);
+    }
+
+    // Right Right Case
+    if (balance < -1 && get_balance(root.right) <= 0)
+        return left_rotate(root);
+
+    // Right Left Case
+    if (balance < -1 && get_balance(root.right) > 0)
+    {
+        root.right = right_rotate(root.right);
+        return left_rotate(root);
+    }
+
+    return root;
+}
+
+inout(BaseNode)* find_node(inout(BaseNode)* n, CompFn pred, const void* key) pure
+{
+    if (n is null)
+        return null;
+    ptrdiff_t c = pred(&n[1], key);
+    if (c > 0)
+        return find_node(n.left, pred, key);
+    if (c < 0)
+        return find_node(n.right, pred, key);
+    return n;
+}
+
+size_t destroy_node(BaseNode* n, DestroyFn free_fun)
+{
+    if (n is null)
+        return 0;
+
+    size_t count = destroy_node(n.left, free_fun);
+    count += destroy_node(n.right, free_fun);
+    free_fun(n);
+    return count + 1;
+}
+
+BaseNode* insert_node(BaseNode* n, BaseNode* newnode, ref size_t num_nodes, CompFn pred, DestroyFn free_fun)
+{
+    // 1.  Perform the normal BST rotation
+    if (n is null)
+    {
+        ++num_nodes;
+        return newnode;
+    }
+
+    ptrdiff_t c = pred(&newnode[1], &n[1]);
+    if (c < 0)
+        n.left = insert_node(n.left, newnode, num_nodes, pred, free_fun);
+    else if (c > 0)
+        n.right = insert_node(n.right, newnode, num_nodes, pred, free_fun);
+    else
+    {
+        newnode.left = n.left;
+        newnode.right = n.right;
+        newnode.height = n.height;
+
+        free_fun(n);
+
+        return newnode;
+    }
+
+    // 2. Update height of this ancestor Node
+    n.height = max_height(n) + 1;
+
+    // 3. get the balance factor of this ancestor Node to check whether
+    //    this Node became unbalanced
+    int balance = get_balance(n);
+
+    // If this Node becomes unbalanced, then there are 4 cases
+
+    if (balance > 1)
+    {
+        ptrdiff_t lc = pred(&newnode[1], &n.left[1]);
+        // Left Left Case
+        if (lc < 0)
+            return right_rotate(n);
+
+        // Left Right Case
+        if (lc > 0)
+        {
+            n.left = left_rotate(n.left);
+            return right_rotate(n);
+        }
+    }
+
+    if (balance < -1)
+    {
+        ptrdiff_t rc = pred(&newnode[1], &n.right[1]);
+
+        // Right Right Case
+        if (rc > 0)
+            return left_rotate(n);
+
+        // Right Left Case
+        if (rc < 0)
+        {
+            n.right = right_rotate(n.right);
+            return left_rotate(n);
+        }
+    }
+
+    // return the (unchanged) Node pointer
+    return n;
+}
+
+BaseNode* delete_node(BaseNode* root, const void* key, ref size_t num_nodes, CompFn pred, MoveFn move_fun, DestroyFn free_fun)
+{
+    // STEP 1: PERFORM STANDARD BST DELETE
+
+    if (root is null)
+        return root;
+
+    ptrdiff_t c = pred(&root[1], key);
+
+    // If the key to be deleted is smaller than the root's key,
+    // then it lies in left subtree
+    if (c > 0)
+        root.left = delete_node(root.left, key, num_nodes, pred, move_fun, free_fun);
+
+    // If the key to be deleted is greater than the root's key,
+    // then it lies in right subtree
+    else if (c < 0)
+        root.right = delete_node(root.right, key, num_nodes, pred, move_fun, free_fun);
+
+    // if key is same as root's key, then this is the Node
+    // to be deleted
+    else
+        root = do_delete(root, num_nodes, pred, move_fun, free_fun);
+
+    return rebalance(root);
+}
+
+BaseNode* do_delete(BaseNode* root, ref size_t num_nodes, CompFn pred, MoveFn move_fun, DestroyFn free_fun)
+{
+    // Node with only one child or no child
+    if ((root.left is null) || (root.right is null))
+    {
+        BaseNode* temp = root.left ? root.left : root.right;
+
+        // No child case
+        if (temp is null)
+        {
+            temp = root;
+            root = null;
+        }
+        else // One child case
+        {
+            // TODO: FIX THIS!!
+            // this is copying the child node into the parent node because there is no parent pointer
+            // DO: add parent pointer, then fix up the parent's child pointer to the child, and do away with this pointless copy!
+            *root = (*temp).move; // Copy the tree structure (BaseNode fields)
+            move_fun(temp, root); // Copy the key/value data
+        }
+
+        free_fun(temp);
+
+        --num_nodes;
+    }
+    else
+    {
+        // Node with two children: we replace 'this' node with the next one in sequence...
+
+        // get the in-order successor: the 'next' item is the far left node on the right hand side)
+        BaseNode* next = root.right;
+        while (next.left !is null) // find the leftmost leaf
+            next = next.left;
+
+        move_fun(next, root);
+
+        // Delete the node we just shifted
+        root.right = delete_node(root.right, &next[1], num_nodes, pred, move_fun, free_fun);
+    }
+
+    return root;
 }

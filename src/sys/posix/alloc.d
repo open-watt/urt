@@ -1,6 +1,5 @@
 module sys.posix.alloc;
 
-import urt.mem : free;
 import urt.mem.alloc : MemFlags;
 
 nothrow @nogc:
@@ -22,6 +21,7 @@ void _free(void* ptr) pure
 {
     free(ptr);
 }
+
 
 size_t _memsize(void* ptr) pure
 {
@@ -46,6 +46,7 @@ extern(C) int posix_memalign(void** memptr, size_t alignment, size_t size) pure;
 extern(C) size_t malloc_usable_size(void* ptr) pure;
 extern(C) void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) pure;
 extern(C) int munmap(void* addr, size_t length) pure;
+extern(C) void free(void* ptr) pure;
 
 enum PROT_READ    = 0x1;
 enum PROT_WRITE   = 0x2;

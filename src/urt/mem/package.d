@@ -2,6 +2,7 @@ module urt.mem;
 
 // TODO: remove these public imports, because this is pulled by object.d!
 public import urt.lifetime : emplace, moveEmplace, forward, move;
+public import urt.mem.alloc;
 public import urt.mem.allocator;
 
 nothrow @nogc:
@@ -15,11 +16,6 @@ else
 extern(C)
 {
 nothrow @nogc:
-
-    void* malloc(size_t size) pure @trusted;
-    void* calloc(size_t num, size_t size) pure @trusted;
-    void* realloc(void* ptr, size_t new_size) pure @trusted;
-    void free(void* ptr) pure @trusted;
 
     void* memcpy(void* dest, const void* src, size_t n) pure;
     void* memmove(void* dest, const void* src, size_t n) pure;

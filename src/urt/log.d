@@ -1,6 +1,7 @@
 module urt.log;
 
-import urt.mem.temp : tconcat, tformat;
+import urt.mem.temp : tconcat, tconcat_impl, tformat;
+import urt.string.format : normalise_args;
 import urt.time;
 
 nothrow @nogc:
@@ -145,7 +146,7 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
     static if (T.length == 1 && (is(T[0] : const(char)[]) || is(T[0] : const String) || is(T[0] : const MutableString!N, size_t N) || is(T[0] : const Array!char)))
         auto msg = LogMessage(severity, tag, object_name, args[0][], getTime());
     else
-        auto msg = LogMessage(severity, tag, object_name, tconcat(args), getTime());
+        auto msg = LogMessage(severity, tag, object_name, tconcat_impl(normalise_args(args)), getTime());
     write_log(msg);
 }
 

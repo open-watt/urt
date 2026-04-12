@@ -17,99 +17,122 @@ debug
 
 alias StringifyFunc = ptrdiff_t delegate(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc;
 
+struct Arg
+{
+    StringifyFunc fn;
+}
+
+struct Format
+{
+    this(T)(ref const T value, const(char)[] format) pure nothrow @nogc
+    {
+        fn = get_to_string_func(value);
+        fmt = format;
+    }
+
+    StringifyFunc fn;
+    const(char)[] fmt;
+}
 
 ptrdiff_t toString(T)(ref const T value, char[] buffer, const(char)[] format = null, const(FormatArg)[] formatArgs = null)
 {
     debug InFormatFunction = true;
-    ptrdiff_t r = get_to_string_func(value)(buffer, null, null);
+    ptrdiff_t r = get_to_string_func(value)(buffer, format, formatArgs);
     debug InFormatFunction = false;
     return r;
 }
 
 alias formatValue = toString; // TODO: remove me?
 
-char[] concat(Args...)(char[] buffer, ref const Args args)
+auto normalise_args(Args...)(ref const Args args)
 {
+    import urt.meta.tuple : Tuple;
     alias NormalisedArgs = NormaliseArgs!Args;
-    enum is_normalised = is(Args == NormalisedArgs);
+    Tuple!(NormalisedArgs) result = void;
+
+//    pragma(msg, "[ ", Args, " ] --> [ ", NormalisedArgs, " ]");
+
+    static foreach (i; 0 .. Args.length)
+    {
+        static if (is(NormalisedArgs[i] == char) || is(NormalisedArgs[i] == Format))
+            result[i] = args[i];
+        else static if (is(NormalisedArgs[i] == Arg))
+            result[i] = Arg(get_to_string_func(args[i]));
+        else static if (is(NormalisedArgs[i] == Array!char) || is(NormalisedArgs[i] == String) || is(NormalisedArgs[i] == MutableString!N, size_t N))
+            static assert(false, "use container[] at the callsite!");
+        else
+            result[i] = args[i][];
+    }
+    return result;
+}
+
+char[] concat(Args...)(char[] buffer, auto ref const Args args)
+{
+    pragma(inline, true);
+
+    alias NormalisedArgs = NormaliseArgs!Args;
 
     static if (Args.length == 0)
-    {
         return buffer.ptr[0 .. 0];
-    }
-    else static if (!is_normalised)
-    {
-        pragma(inline, true);
-        return concat!(NormalisedArgs)(buffer, args);
-    }
     else
-    {
-        enum n = num_string_args!Args;
+        return concat_impl(buffer, normalise_args(forward!args));
+}
 
-        static if (n == Args.length)
+import urt.meta.tuple : Tuple;
+char[] concat_impl(Args...)(char[] buffer, Tuple!Args args)
+{
+    size_t[Args.length] lens = void;
+    size_t length = 0;
+    static foreach (i; 0 .. Args.length)
+    {
+        static if (is(Args[i] == char))
+            length += 1;
+        else static if (is(Args[i] == Arg))
         {
-            size_t[Args.length] lens = void;
-            size_t length = 0;
-            static foreach (i; 0 .. Args.length)
-            {
-                static if (is(Args[i] == char))
-                    length += 1;
-                else
-                {
-                    lens[i] = args[i].length;
-                    length += lens[i];
-                }
-            }
-            if (buffer.ptr)
-            {
-                if (length > buffer.length)
-                    return null;
-                char* p = buffer.ptr;
-                static foreach (i; 0 .. Args.length)
-                {
-                    static if (is(Args[i] == char))
-                        *p++ = args[i];
-                    else
-                    {
-                        p[0..lens[i]] = args[i].ptr[0..lens[i]];
-                        p += lens[i];
-                    }
-                }
-            }
-            return buffer.ptr[0 .. length];
+            lens[i] = args[i].fn(null, null, null);
+            length += lens[i];
         }
-        else static if (Args.length == 1)
+        else static if (is(Args[i] == Format))
         {
-            ptrdiff_t r = get_to_string_func(args[0])(buffer, null, null);
-            if (r < 0)
-                return null;
-            return buffer.ptr[0..r];
-        }
-        else static if (n > 2)
-        {
-            char[] r = concat(buffer, args[0 .. n]);
-            if (buffer.ptr && !r.ptr)
-                return null;
-            char[] r2 = concat(buffer.ptr ? buffer.ptr[r.length .. buffer.length] : null, args[n .. $]);
-            if (buffer.ptr && !r2.ptr)
-                return null;
-            return buffer.ptr[0 .. r.length + r2.length];
+            lens[i] = args[i].fn(null, args[i].fmt, null);
+            length += lens[i];
         }
         else
         {
-            // this implementation handles all the other kinds of things!
-            debug if (!__ctfe) InFormatFunction = true;
-            StringifyFunc[Args.length] arg_funcs = void;
-            static foreach(i; 0 .. args.length)
-                arg_funcs[i] = get_to_string_func(args[i]);
-            char[] r = concat_impl(buffer, arg_funcs);
-            debug if (!__ctfe) InFormatFunction = false;
-            return r;
+            lens[i] = args[i].length;
+            length += lens[i];
         }
     }
+    if (buffer.ptr)
+    {
+        if (length > buffer.length)
+            return null;
+        char* p = buffer.ptr;
+        static foreach (i; 0 .. Args.length)
+        {
+            static if (is(Args[i] == char))
+                *p++ = args[i];
+            else static if (is(Args[i] == Arg))
+            {
+                args[i].fn(p[0..lens[i]], null, null);
+                p += lens[i];
+            }
+            else static if (is(Args[i] == Format))
+            {
+                args[i].fn(p[0..lens[i]], args[i].fmt, null);
+                p += lens[i];
+            }
+            else
+            {
+                p[0..lens[i]] = args[i].ptr[0..lens[i]];
+                p += lens[i];
+            }
+        }
+    }
+    return buffer.ptr[0 .. length];
 }
 
-char[] format(Args...)(char[] buffer, const(char)[] fmt, ref Args args)
+char[] format(Args...)(char[] buffer, const(char)[] fmt, auto ref Args args)
 {
     debug InFormatFunction = true;
     FormatArg[Args.length] argArr = void;
@@ -172,7 +195,17 @@ template NormaliseArgs(Args...)
     import urt.meta : AliasSeq;
     alias NormaliseArgs = AliasSeq!();
     static foreach (Arg; Args)
-        NormaliseArgs = AliasSeq!(NormaliseArgs, NormaliseConst!Arg);
+        NormaliseArgs = AliasSeq!(NormaliseArgs, NormaliseOthers!(NormaliseConst!Arg));
+}
+
+template NormaliseOthers(T)
+{
+    static if (is(T : const(char)[]) || is(T == char))
+        alias NormaliseOthers = T;
+    else static if (is(T == String) || is(T == Array!char) || is(T == MutableString!N, size_t N))
+        alias NormaliseOthers = const(char)[];
+    else
+        alias NormaliseOthers = Arg;
 }
 
 template NormaliseConst(T)
@@ -182,7 +215,7 @@ template NormaliseConst(T)
     else static if (is(T == immutable(U)[], U) || is(T == U[], U))
         alias NormaliseConst = const(U)[];
     else static if (is(T == U[N], U, size_t N))
-        alias NormaliseConst = const(U)[N];
+        alias NormaliseConst = const(U)[];
     else
         alias NormaliseConst = T;
 }
@@ -249,7 +282,10 @@ StringifyFunc get_to_string_func(T)(ref T value)
         else static if (is(method_type : StringifyFuncReduced) || is(method_type : StringifyFuncReduced2))
         {
             StringifyFunc d;
-            d.ptr = &value;
+            static if (is(T == struct))
+                d.ptr = &value;
+            else
+                d.ptr = cast(void*)value;
             static if (is(method_type : StringifyFuncReduced))
                 d.funcptr = &ToStringShim.shim1!T;
             else
@@ -261,6 +297,34 @@ StringifyFunc get_to_string_func(T)(ref T value)
 
         return null;
     }
+    else static if (is_unsigned_int!T && T.sizeof <= size_t.sizeof)
+    {
+        StringifyFunc fn;
+        fn.ptr = cast(void*)size_t(value);
+        fn.funcptr = &DefFormat!size_t.toString;
+        return fn;
+    }
+    else static if (is_signed_int!T && T.sizeof <= size_t.sizeof)
+    {
+        StringifyFunc fn;
+        fn.ptr = cast(void*)cast(size_t)ptrdiff_t(value);
+        fn.funcptr = &DefFormat!ptrdiff_t.toString;
+        return fn;
+    }
+    else static if (is_some_char!T)
+    {
+        StringifyFunc fn;
+        fn.ptr = cast(void*)cast(size_t)dchar(value);
+        fn.funcptr = &DefFormat!dchar.toString;
+        return fn;
+    }
+    else static if (T.sizeof <= size_t.sizeof)
+    {
+        StringifyFunc fn;
+        *cast(Unqual!T*)&fn.ptr = value;
+        fn.funcptr = &DefFormat!T.toString;
+        return fn;
+    }
     else
         return &(cast(DefFormat!T*)&value).toString;
 }
@@ -269,22 +333,35 @@ struct ToStringShim
 {
     ptrdiff_t shim1(T)(char[] buffer, const(char)[] format, const(FormatArg)[])
     {
-        ref T _this = *cast(T*)&this;
+        static if (is(T == struct))
+            ref T _this = *cast(T*)&this;
+        else
+            T _this = cast(T)cast(void*)&this;
         return _this.toString(buffer, format);
     }
     ptrdiff_t shim2(T)(char[] buffer, const(char)[], const(FormatArg)[])
     {
-        ref T _this = *cast(T*)&this;
+        static if (is(T == struct))
+            ref T _this = *cast(T*)&this;
+        else
+            T _this = cast(T)cast(void*)&this;
         return _this.toString(buffer);
     }
 }
 
 struct DefInt(T)
 {
-    T value;
+    static if (T.sizeof > size_t.sizeof)
+        T value;
 
     ptrdiff_t to_int() const pure nothrow @nogc
     {
+        static if (T.sizeof <= size_t.sizeof)
+        {
+            T value = void;
+            *cast(size_t*)&value = cast(size_t)cast(void*)&this;
+        }
+
         static if (T.max > ptrdiff_t.max)
             debug assert(value <= ptrdiff_t.max);
         return cast(ptrdiff_t)value;
@@ -292,7 +369,7 @@ struct DefInt(T)
 }
 
 ptrdiff_t defToString(T)(ref const(T) value, char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc
-    => (cast(DefFormat!T*)&value).toString(buffer, format, formatArgs);
+    => get_to_string_func(value)(buffer, format, formatArgs);
 
 template DefFormat(T)
 {
@@ -304,10 +381,17 @@ template DefFormat(T)
     {
         static assert(!is(T == const), "How did this slip through?");
 
-        const T value;
+        static if (T.sizeof > size_t.sizeof)
+            const T value;
 
         ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const nothrow @nogc
         {
+            static if (T.sizeof <= size_t.sizeof)
+            {
+                T value = void;
+                *cast(size_t*)&value = cast(size_t)cast(void*)&this;
+            }
+
             static if (is(T == U[N], U, size_t N))
                 return defToString!(U[])(value[], buffer, format, formatArgs);
             else static if (is(T : String) || is(T : MutableString!N, size_t N) || is(T : Array!(char, N), size_t N))
@@ -404,76 +488,7 @@ template DefFormat(T)
             }
             else static if (is(T == ulong) || is(T == long))
             {
-                import urt.conv : format_int, format_uint;
-
-                // TODO: what formats are interesting for ints?
-
-                bool leadingZeroes = false;
-                bool to_lower = false;
-                bool varLen = false;
-                ptrdiff_t padding = 0;
-                uint base = 10;
-
-                static if (is(T == long))
-                {
-                    bool show_sign = false;
-                    if (format.length && format[0] == '+')
-                    {
-                        show_sign = true;
-                        format.popFront;
-                    }
-                }
-                if (format.length && format[0] == '0')
-                {
-                    leadingZeroes = true;
-                    format.popFront;
-                }
-                if (format.length && format[0] == '*')
-                {
-                    varLen = true;
-                    format.popFront;
-                }
-                if (format.length && format[0].is_numeric)
-                {
-                    bool success;
-                    padding = format.parse_int_fast(success);
-                    if (varLen)
-                    {
-                        if (padding < 0 || !formatArgs[padding].canInt)
-                            return -2;
-                        padding = formatArgs[padding].getInt;
-                    }
-                }
-                if (format.length)
-                {
-                    char b = format[0] | 0x20;
-                    if (b == 'x')
-                    {
-                        base = 16;
-                        to_lower = format[0] == 'x' && buffer.ptr;
-                    }
-                    else if (b == 'b')
-                        base = 2;
-                    else if (b == 'o')
-                        base = 8;
-                    else if (b == 'd')
-                        base = 10;
-                    format.popFront;
-                }
-
-                static if (is(T == long))
-                    ptrdiff_t len = format_int(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ', show_sign);
-                else
-                    ptrdiff_t len = format_uint(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ');
-
-                if (to_lower && len > 0)
-                {
-                    for (size_t i = 0; i < len; ++i)
-                        if (cast(uint)(buffer.ptr[i] - 'A') < 26)
-                            buffer.ptr[i] |= 0x20;
-                }
-
-                return len;
+                return format_int(value, is(T == long), buffer, format, formatArgs);
             }
             else static if (is(T == ubyte) || is(T == ushort) || is(T == uint))
             {
@@ -637,68 +652,44 @@ template DefFormat(T)
             }
             else static if (is(T B == enum))
             {
-                // TODO: optimise short enums with a TABLE!
+                import urt.conv : format_int;
+                import urt.meta.enuminfo : enum_key_from_value;
+
+                const(char)[] key = enum_key_from_value!T(value);
 
                 // TODO: should probably return FQN ???
-                string key = null;
-                val: switch (value)
+                if (key)
                 {
-                    static foreach (i, KeyName; __traits(allMembers, T))
+                    size_t len = T.stringof.length + 1 + key.length;
+                    if (buffer.ptr)
                     {
-                        static if (!EnumKeyIsDuplicate!(T, i))
-                        {
-                            case __traits(getMember, T, KeyName):
-                                key = KeyName;
-                                break val;
-                        }
-                    }
-                    default:
-                        if (!buffer.ptr)
-                            return T.stringof.length + 2 + defToString!B(cast(B)value, null, null, null);
-
-                        if (buffer.length < T.stringof.length + 2)
-                            return -1;
-                        buffer[0 .. T.stringof.length] = T.stringof;
-                        buffer[T.stringof.length] = '(';
-                        ptrdiff_t len = defToString!B(*cast(B*)&value, buffer[T.stringof.length + 1 .. $], null, null);
-                        if (len < 0)
-                            return len;
-                        len = T.stringof.length + 2 + len;
                         if (buffer.length < len)
                             return -1;
-                        buffer[len - 1] = ')';
-                        return len;
+                        buffer[0 .. T.stringof.length] = T.stringof;
+                        buffer[T.stringof.length] = '.';
+                        buffer[T.stringof.length + 1 .. len] = key[];
+                    }
+                    return len;
                 }
 
-                size_t len = T.stringof.length + 1 + key.length;
-                if (!buffer.ptr)
+                char[24] val = void;
+                ptrdiff_t len = format_int(long(value), val[]);
+                if (len <= 0)
                     return len;
-
-                if (buffer.length < len)
+                size_t total_len = T.stringof.length + 2 + len;
+                if (!buffer.ptr)
+                    return total_len;
+                if (buffer.length < total_len)
                     return -1;
                 buffer[0 .. T.stringof.length] = T.stringof;
-                buffer[T.stringof.length] = '.';
-                buffer[T.stringof.length + 1 .. len] = key[];
-                return len;
+                buffer[T.stringof.length] = '(';
+                buffer[T.stringof.length + 1 .. total_len - 1] = val[0 .. len];
+                buffer[total_len - 1] = ')';
+                return total_len;
             }
             else static if (is(T == class))
             {
-                // HACK: class toString is not @nogc, so we'll just stringify the pointer for right now...
-                return defToString(cast(void*)value, buffer, format, formatArgs);
-/+
-                try
-                {
-                    const(char)[] t = (cast()value).toString();
-                    if (!buffer.ptr)
-                        return t.length;
-                    if (buffer.length < t.length)
-                        return -1;
-                    buffer[0 .. t.length] = t[];
-                    return t.length;
-                }
-                catch (Exception)
-                    return -1;
-+/
+                return value.toString(buffer, format, formatArgs);
             }
             else static if (is(T == struct))
             {
@@ -762,6 +753,78 @@ template DefFormat(T)
                 static assert(false, "Not implemented for type: ", T.stringof);
         }
     }
+}
+
+ptrdiff_t format_int(ulong value, bool signed, char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs)
+{
+    import urt.conv : format_int, format_uint;
+
+    // TODO: what formats are interesting for ints?
+
+    bool show_sign = false;
+    bool leadingZeroes = false;
+    bool to_lower = false;
+    bool varLen = false;
+    ptrdiff_t padding = 0;
+    uint base = 10;
+
+    if (signed && format.length && format[0] == '+')
+    {
+        show_sign = true;
+        format.popFront;
+    }
+    if (format.length && format[0] == '0')
+    {
+        leadingZeroes = true;
+        format.popFront;
+    }
+    if (format.length && format[0] == '*')
+    {
+        varLen = true;
+        format.popFront;
+    }
+    if (format.length && format[0].is_numeric)
+    {
+        bool success;
+        padding = format.parse_int_fast(success);
+        if (varLen)
+        {
+            if (padding < 0 || !formatArgs[padding].canInt)
+                return -2;
+            padding = formatArgs[padding].getInt;
+        }
+    }
+    if (format.length)
+    {
+        char b = format[0] | 0x20;
+        if (b == 'x')
+        {
+            base = 16;
+            to_lower = format[0] == 'x' && buffer.ptr;
+        }
+        else if (b == 'b')
+            base = 2;
+        else if (b == 'o')
+            base = 8;
+        else if (b == 'd')
+            base = 10;
+        format.popFront;
+    }
+
+    ptrdiff_t len;
+    if (signed)
+        len = format_int(cast(ptrdiff_t)value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ', show_sign);
+    else
+        len = format_uint(value, buffer, base, cast(uint)padding, leadingZeroes ? '0' : ' ');
+
+    if (to_lower && len > 0)
+    {
+        for (size_t i = 0; i < len; ++i)
+            if (cast(uint)(buffer.ptr[i] - 'A') < 26)
+                buffer.ptr[i] |= 0x20;
+    }
+
+    return len;
 }
 
 char[] concat_impl(char[] buffer, const(StringifyFunc)[] args) nothrow @nogc

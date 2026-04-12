@@ -709,11 +709,10 @@ T _d_newclassT(T)() @trusted
     if (__ctfe)
         assert(false, "new class not supported at CTFE without druntime");
 
-    import urt.mem : malloc;
-    import urt.mem : memcpy;
+    import urt.mem : alloc, memcpy;
 
     enum sz = __traits(classInstanceSize, T);
-    auto p = malloc(sz);
+    auto p = alloc(sz).ptr;
     if (p is null)
         assert(false, "out of memory in _d_newclassT");
 
@@ -740,9 +739,9 @@ ref Tarr _d_arrayappendT(Tarr : T[], T)(return ref scope Tarr x, scope Tarr y) @
 
 T[] _d_newarrayT(T)(size_t length, bool isShared = false) @trusted
 {
-    import urt.mem : malloc;
+    import urt.mem.alloc : alloc;
 //    assert(false, "new array requires druntime");
-    return (cast(T*)malloc(T.sizeof * length))[0 .. length];
+    return cast(T[])alloc(T.sizeof * length);
 }
 
 Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared = false) @trusted
@@ -752,9 +751,9 @@ Tarr _d_newarraymTX(Tarr : U[], T, U)(size_t[] dims, bool isShared = false) @tru
 
 T* _d_newitemT(T)() @trusted
 {
-    import urt.mem : malloc;
+    import urt.mem.alloc : alloc;
 //    assert(false, "new item requires druntime");
-    return cast(T*)malloc(T.sizeof);
+    return cast(T*)alloc(T.sizeof).ptr;
 }
 
 T _d_newThrowable(T)() @trusted
@@ -944,8 +943,8 @@ extern(C) void _d_unittest(string file, uint line) nothrow @nogc
 // blocks that accidentally use `new` can at least link.
 extern(C) void* _d_allocmemory(size_t sz) nothrow @nogc @trusted
 {
-    import urt.mem : malloc;
-    return malloc(sz);
+    import urt.mem.alloc : alloc;
+    return alloc(sz).ptr;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -993,9 +992,9 @@ extern(C) void _d_array_slice_copy(void* dst, size_t dstlen, void* src, size_t s
 
 extern(C) void* _d_allocclass(TypeInfo_Class ci) nothrow @nogc @trusted
 {
-    import urt.mem : malloc, memcpy;
+    import urt.mem : alloc, memcpy;
     auto init = ci.initializer;
-    auto p = malloc(init.length);
+    auto p = alloc(init.length).ptr;
     if (p !is null)
         memcpy(p, init.ptr, init.length);
     return p;
@@ -1038,28 +1037,23 @@ extern(C) int _adEq2(void[] a1, void[] a2, TypeInfo ti) nothrow @nogc @trusted
 
 extern(C) void[] _d_newarrayT(const TypeInfo ti, size_t length) nothrow @nogc @trusted
 {
-    import urt.mem : calloc;
+    import urt.mem.alloc : alloc;
     auto elemsize = ti.next ? ti.next.tsize : 1;
-    auto p = calloc(length, elemsize);
-    return p[0 .. length * elemsize];
+    return alloc(length * elemsize);
 }
 
 extern(C) void[] _d_newarrayiT(const TypeInfo ti, size_t length) nothrow @nogc @trusted
 {
-    import urt.mem : calloc;
+    import urt.mem.alloc : alloc;
     auto elemsize = ti.next ? ti.next.tsize : 1;
-    auto p = calloc(length, elemsize);
-    return p[0 .. length * elemsize];
+    return alloc(length * elemsize);
 }
 
 extern(C) void[] _d_newarrayU(const TypeInfo ti, size_t length) nothrow @nogc @trusted
 {
-    import urt.mem : malloc;
+    import urt.mem.alloc : alloc;
     auto elemsize = ti.next ? ti.next.tsize : 1;
-    auto sz = length * elemsize;
-    auto p = malloc(sz);
-    if (p is null) return null;
-    return p[0 .. sz];
+    return alloc(length * elemsize);
 }
 
 // Unconditional halt — avoids circular dependency with assert.

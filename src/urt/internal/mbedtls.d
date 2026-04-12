@@ -115,11 +115,11 @@ size_t urt_sizeof_x509_crt();
 size_t urt_sizeof_ssl_context();
 size_t urt_sizeof_ssl_config();
 
-import urt.mem;
+import urt.mem.alloc;
 
 mbedtls_entropy_context* urt_entropy_new()
 {
-    auto ctx = cast(mbedtls_entropy_context*)calloc(1, urt_sizeof_entropy());
+    auto ctx = cast(mbedtls_entropy_context*)alloc(urt_sizeof_entropy()).ptr;
     if (ctx)
         mbedtls_entropy_init(ctx);
     return ctx;
@@ -130,13 +130,13 @@ void urt_entropy_delete(mbedtls_entropy_context* ctx)
     if (ctx)
     {
         mbedtls_entropy_free(ctx);
-        free(ctx);
+        free((cast(void*)ctx)[0..urt_sizeof_entropy()]);
     }
 }
 
 mbedtls_ctr_drbg_context* urt_ctr_drbg_new()
 {
-    auto ctx = cast(mbedtls_ctr_drbg_context*)calloc(1, urt_sizeof_ctr_drbg());
+    auto ctx = cast(mbedtls_ctr_drbg_context*)alloc(urt_sizeof_ctr_drbg()).ptr;
     if (ctx)
         mbedtls_ctr_drbg_init(ctx);
     return ctx;
@@ -147,13 +147,13 @@ void urt_ctr_drbg_delete(mbedtls_ctr_drbg_context* ctx)
     if (ctx)
     {
         mbedtls_ctr_drbg_free(ctx);
-        free(ctx);
+        free((cast(void*)ctx)[0..urt_sizeof_ctr_drbg()]);
     }
 }
 
 mbedtls_x509_crt* urt_x509_crt_new()
 {
-    auto ctx = cast(mbedtls_x509_crt*)calloc(1, urt_sizeof_x509_crt());
+    auto ctx = cast(mbedtls_x509_crt*)alloc(urt_sizeof_x509_crt()).ptr;
     if (ctx)
         mbedtls_x509_crt_init(ctx);
     return ctx;
@@ -164,13 +164,13 @@ void urt_x509_crt_delete(mbedtls_x509_crt* crt)
     if (crt)
     {
         mbedtls_x509_crt_free(crt);
-        free(crt);
+        free((cast(void*)crt)[0..urt_sizeof_x509_crt()]);
     }
 }
 
 mbedtls_ssl_context* urt_ssl_new()
 {
-    auto ctx = cast(mbedtls_ssl_context*)calloc(1, urt_sizeof_ssl_context());
+    auto ctx = cast(mbedtls_ssl_context*)alloc(urt_sizeof_ssl_context()).ptr;
     if (ctx)
         mbedtls_ssl_init(ctx);
     return ctx;
@@ -181,13 +181,13 @@ void urt_ssl_delete(mbedtls_ssl_context* ssl)
     if (ssl)
     {
         mbedtls_ssl_free(ssl);
-        free(ssl);
+        free((cast(void*)ssl)[0..urt_sizeof_ssl_context()]);
     }
 }
 
 mbedtls_ssl_config* urt_ssl_config_new()
 {
-    auto ctx = cast(mbedtls_ssl_config*)calloc(1, urt_sizeof_ssl_config());
+    auto ctx = cast(mbedtls_ssl_config*)alloc(urt_sizeof_ssl_config()).ptr;
     if (ctx)
         mbedtls_ssl_config_init(ctx);
     return ctx;
@@ -198,6 +198,6 @@ void urt_ssl_config_delete(mbedtls_ssl_config* conf)
     if (conf)
     {
         mbedtls_ssl_config_free(conf);
-        free(conf);
+        free((cast(void*)conf)[0..urt_sizeof_ssl_config()]);
     }
 }

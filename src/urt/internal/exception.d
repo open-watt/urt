@@ -1692,15 +1692,15 @@ version (Win64)
 
         void initialize(size_t initial_capacity) nothrow @nogc
         {
-            import urt.mem : malloc;
-            base = malloc(initial_capacity);
+            import urt.mem : alloc;
+            base = alloc(initial_capacity).ptr;
             capacity = initial_capacity;
             length = size_t.sizeof; // offset 0 reserved (null sentinel)
         }
 
         size_t alloc(size_t size) nothrow @nogc
         {
-            import urt.mem : malloc, memcpy;
+            import urt.mem : alloc, memcpy;
             auto offset = length;
             enum align_mask = size_t.sizeof - 1;
             auto new_length = (length + size + align_mask) & ~align_mask;
@@ -1709,7 +1709,7 @@ version (Win64)
                 new_capacity *= 2;
             if (new_capacity != capacity)
             {
-                auto new_base = malloc(new_capacity);
+                auto new_base = alloc(new_capacity).ptr;
                 memcpy(new_base, base, length);
                 // Old base leaks — may be referenced by in-flight exceptions.
                 base = new_base;
@@ -1736,8 +1736,8 @@ else // Win32
 {
     private ImgPtr!T eh_malloc(T)(size_t size = T.sizeof) nothrow @nogc
     {
-        import urt.mem : malloc;
-        return cast(T*) malloc(size);
+        import urt.mem : alloc;
+        return cast(T*)alloc(size).ptr;
     }
 
     private T* to_pointer(T)(T* img_ptr) nothrow @nogc
@@ -1880,13 +1880,13 @@ private:
 
     void grow()
     {
-        import urt.mem : malloc, free, memcpy;
+        import urt.mem : alloc, free, memcpy;
         immutable ncap = _cap ? 2 * _cap : 16;
-        auto p = cast(Throwable*) malloc(ncap * size_t.sizeof);
+        auto p = cast(Throwable*)alloc(ncap * size_t.sizeof).ptr;
         if (_length > 0)
             memcpy(p, _p, _length * size_t.sizeof);
         if (_p !is null)
-            free(_p);
+            free((cast(void*)_p)[0 .. _cap * size_t.sizeof]);
         _p = p;
         _cap = ncap;
     }
@@ -3069,11 +3069,11 @@ struct ExceptionHeader
 
     static ExceptionHeader* create(Throwable o) nothrow @nogc
     {
-        import urt.mem : calloc;
+        import urt.mem.alloc : alloc;
         auto eh = &ehstorage;
         if (eh.object)
         {
-            eh = cast(ExceptionHeader*) calloc(1, ExceptionHeader.sizeof);
+            eh = cast(ExceptionHeader*)alloc(ExceptionHeader.sizeof).ptr;
             if (!eh)
                 dwarf_terminate(__LINE__);
         }
@@ -3084,10 +3084,10 @@ struct ExceptionHeader
 
     static void release(ExceptionHeader* eh) nothrow @nogc
     {
-        import urt.mem : free;
+        import urt.mem.alloc : free;
         *eh = ExceptionHeader.init;
         if (eh != &ehstorage)
-            free(eh);
+            free(eh[0..1]);
     }
 
     void push() nothrow @nogc

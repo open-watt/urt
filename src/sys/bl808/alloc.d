@@ -1,6 +1,5 @@
 module sys.bl808.alloc;
 
-import urt.mem : malloc, free;
 import urt.mem.alloc : MemFlags;
 
 nothrow @nogc:
@@ -30,3 +29,9 @@ void _free(void* ptr) pure
 {
     free((cast(void**)ptr)[-1]);
 }
+
+
+private:
+
+extern(C) void* malloc(size_t size) pure;
+extern(C) void free(void* ptr) pure;

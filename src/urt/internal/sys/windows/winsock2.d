@@ -36,7 +36,9 @@ alias LPWSADATA = WSADATA*;
 
 enum int IOCPARM_MASK =  0x7F;
 enum int IOC_IN =        cast(int)0x80000000;
+enum int IOC_OUT =       cast(int)0x40000000;
 enum int FIONBIO =       cast(int)(IOC_IN | ((uint.sizeof & IOCPARM_MASK) << 16) | (102 << 8) | 126);
+enum int FIONREAD =      cast(int)(IOC_OUT | ((uint.sizeof & IOCPARM_MASK) << 16) | (102 << 8) | 127);
 
 enum NI_MAXHOST = 1025;
 enum NI_MAXSERV = 32;

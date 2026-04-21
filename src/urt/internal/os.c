@@ -13,6 +13,7 @@
 # include <unistd.h>
 # include <poll.h>
 # include <fcntl.h>
+# include <sys/ioctl.h>
 
 // EWOULDBLOCK is #define EWOULDBLOCK EAGAIN on Linux — ImportC cannot resolve
 // chained macros, so re-define as a plain integer.

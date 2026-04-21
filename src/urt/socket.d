@@ -198,6 +198,7 @@ else version (lwIP)
     }
 
     enum FIONBIO = 0x8004667e; // _IOW('f', 126, unsigned long)
+    enum FIONREAD = 0x4004667f; // _IOR('f', 127, unsigned long)
 
     // Aliases so the rest of the codebase uses POSIX names
     alias _poll = lwip_poll;
@@ -682,6 +683,41 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
         }
         if (bytes_sent)
             *bytes_sent = sent;
+        return Result.success;
+    }
+}
+
+Result pending(Socket socket, out size_t bytes_available)
+{
+    version (SocketCallbacks)
+        static assert(false, "TODO: pending() not implemented for SocketCallbacks");
+    else
+    {
+        version (Windows)
+        {
+            import urt.internal.sys.windows.winsock2 : ioctlsocket, FIONREAD;
+            uint avail;
+            if (ioctlsocket(socket.handle, FIONREAD, &avail) != 0)
+                return socket_getlasterror();
+            bytes_available = avail;
+        }
+        else version (Posix)
+        {
+            import urt.internal.os : ioctl;
+            int avail;
+            if (ioctl(socket.handle, 0x541B, &avail) < 0) // FIONREAD
+                return socket_getlasterror();
+            bytes_available = avail;
+        }
+        else version (lwIP)
+        {
+            uint avail;
+            if (ioctlsocket(socket.handle, FIONREAD, &avail) != 0)
+                return socket_getlasterror();
+            bytes_available = avail;
+        }
+        else
+            static assert(false, "Platform not supported");
         return Result.success;
     }
 }

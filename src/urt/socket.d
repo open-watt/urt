@@ -27,6 +27,7 @@ version (SocketCallbacks)
         SocketResult function(Socket, const(InetAddress)*, MsgFlags, const(void[])[], size_t*) sendmsg;
         SocketResult function(Socket, void[], MsgFlags, size_t*) recv;
         SocketResult function(Socket, void[], MsgFlags, InetAddress*, size_t*) recvfrom;
+        SocketResult function(Socket, out size_t) pending;
         SocketResult function(PollFd[], Duration, out uint) poll;
         SocketResult function(Socket, SocketOption, const(void)*, size_t) set_option;
         SocketResult function(Socket, SocketOption, void*, size_t) get_option;
@@ -690,7 +691,7 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
 Result pending(Socket socket, out size_t bytes_available)
 {
     version (SocketCallbacks)
-        static assert(false, "TODO: pending() not implemented for SocketCallbacks");
+        return Result(_socket_backend.pending(socket, bytes_available));
     else
     {
         version (Windows)

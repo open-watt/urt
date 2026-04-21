@@ -34,6 +34,8 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             {
                 ptrdiff_t len;
                 size_t itemCount = val.type == Variant.Type.Map ? val.count /2 : val.count;
+                if (itemCount == 0)
+                    return 2;   // "[]" / "{}"
                 if (dense)
                 {
                     // open/close brackets + comma-space separators
@@ -68,6 +70,12 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             ptrdiff_t written = 0;
             if (!buffer.append(written, val.type == Variant.Type.Map ? '{' : '['))
                 return -1;
+            if (val.count == 0)
+            {
+                if (!buffer.append(written, val.type == Variant.Type.Map ? '}' : ']'))
+                    return -1;
+                return written;
+            }
             int inc = val.type == Variant.Type.Map ? 2 : 1;
             for (uint i = 0; i < val.count; i += inc)
             {

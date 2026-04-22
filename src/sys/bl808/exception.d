@@ -1,19 +1,14 @@
-/// BL808 crash handler
+/// BL808 crash handler.
 ///
 /// Called from _trap_exception in start.S. Prints exception info,
 /// register dump, and stack backtrace to UART0.
 /// Requires -frame-pointer=all for reliable backtrace.
-module sys.bl808.crash;
+module sys.bl808.exception;
 
+import sys.baremetal.exception : walk_fp_chain;
 import sys.bl808.uart;
 
 private:
-
-// Linker symbols from the linker script
-extern(C) extern __gshared {
-    pragma(mangle, "_stack_top") void* _stack_top_ptr;
-    pragma(mangle, "_bss_end")   void* _bss_end_ptr;
-}
 
 immutable const(char)*[16] exception_names = [
     "Instruction address misaligned",
@@ -79,42 +74,28 @@ extern(C) void _crash_handler(ulong* regs, ulong mcause, ulong mepc, ulong mtval
             uart0_putc('\n');
     }
 
-    // Stack backtrace via frame pointer chain
-    // RV64 convention: fp-8 = saved ra, fp-16 = saved previous fp
+    // Stack backtrace via the shared fp-chain walker.
     uart0_print("\nBacktrace:\n  [0] ");
     uart0_hex(mepc);
     uart0_print("  (faulting PC)\n");
 
-    ulong fp = regs[7]; // s0 = frame pointer
-    ulong stack_hi = cast(ulong) _stack_top_ptr;
-    ulong stack_lo = cast(ulong) _bss_end_ptr;
+    void*[32] addrs = void;
+    const n = walk_fp_chain(cast(size_t) regs[7], addrs[]); // s0 = frame pointer
 
-    foreach (depth; 1 .. 32)
+    foreach (depth, addr; addrs[0 .. n])
     {
-        if (fp < stack_lo || fp >= stack_hi || (fp & 0x7) != 0)
-            break;
-
-        ulong ret_addr = *cast(ulong*)(fp - 8);
-        ulong prev_fp  = *cast(ulong*)(fp - 16);
-
-        if (ret_addr == 0)
-            break;
-
         uart0_print("  [");
-        if (depth < 10)
-            uart0_putc(cast(char)('0' + depth));
+        const d = depth + 1;
+        if (d < 10)
+            uart0_putc(cast(char)('0' + d));
         else
         {
-            uart0_putc(cast(char)('0' + depth / 10));
-            uart0_putc(cast(char)('0' + depth % 10));
+            uart0_putc(cast(char)('0' + d / 10));
+            uart0_putc(cast(char)('0' + d % 10));
         }
         uart0_print("] ");
-        uart0_hex(ret_addr);
+        uart0_hex(cast(ulong) addr);
         uart0_putc('\n');
-
-        if (prev_fp == 0 || prev_fp <= fp)
-            break;
-        fp = prev_fp;
     }
 
     uart0_print("\n*** HALTED ***\n");

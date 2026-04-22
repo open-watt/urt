@@ -52,7 +52,7 @@ void ble_hw_close(uint port)
         return;
 
     ble_hw_scan_stop(port);
-    ble_hw_adv_stop(port);
+    ble_hw_adv_stop(port, BLEAdv.init);
 
     // disconnect all active connections
     foreach (ref s; _sessions)
@@ -96,18 +96,18 @@ void ble_hw_scan_stop(uint port)
 
 // --- Advertising ---
 
-bool ble_hw_adv_start(uint port, ref const BLEAdvConfig cfg)
+BLEAdv ble_hw_adv_start(uint port, ref const BLEAdvConfig cfg)
 {
     if (cfg.adv_data.length > 0 && cfg.adv_data.length <= 31)
     {
         if (ble_gap_adv_set_data(cfg.adv_data.ptr, cast(int)cfg.adv_data.length) != 0)
-            return false;
+            return BLEAdv.init;
     }
 
     if (cfg.scan_rsp.length > 0 && cfg.scan_rsp.length <= 31)
     {
         if (ble_gap_adv_rsp_set_data(cfg.scan_rsp.ptr, cast(int)cfg.scan_rsp.length) != 0)
-            return false;
+            return BLEAdv.init;
     }
 
     ble_gap_adv_params params;
@@ -117,11 +117,11 @@ bool ble_hw_adv_start(uint port, ref const BLEAdvConfig cfg)
     params.itvl_max = params.itvl_min;
 
     if (ble_gap_adv_start(0, null, 0, &params, &gap_event_trampoline, null) != 0)
-        return false;
-    return true;
+        return BLEAdv.init;
+    return BLEAdv(0);
 }
 
-void ble_hw_adv_stop(uint port)
+void ble_hw_adv_stop(uint port, BLEAdv)
 {
     ble_gap_adv_stop();
 }

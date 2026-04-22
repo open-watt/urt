@@ -417,6 +417,61 @@ void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb) { (void)cb; }
 
 #endif // CONFIG_ESP_WIFI_ENABLED
 
+// -- BLE (NimBLE) wrappers --
+
+#if CONFIG_BT_ENABLED && CONFIG_BT_NIMBLE_ENABLED
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/ble_gap.h"
+
+typedef int (*ow_gap_event_cb_t)(struct ble_gap_event *, void *);
+static ow_gap_event_cb_t ow_gap_callback;
+
+static int ow_gap_event_dispatch(struct ble_gap_event *event, void *arg)
+{
+    if (ow_gap_callback)
+        return ow_gap_callback(event, arg);
+    return 0;
+}
+
+static void ow_nimble_host_task(void *param)
+{
+    (void)param;
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
+int ow_ble_init(void)
+{
+    int rc = nimble_port_init();
+    if (rc != 0)
+        return rc;
+    nimble_port_freertos_init(ow_nimble_host_task);
+    return 0;
+}
+
+void ow_ble_deinit(void)
+{
+    nimble_port_stop();
+    nimble_port_deinit();
+}
+
+void ow_ble_set_gap_callback(ow_gap_event_cb_t cb)
+{
+    ow_gap_callback = cb;
+}
+
+#else // !BT_NIMBLE
+
+typedef int (*ow_gap_event_cb_t)(void *, void *);
+
+int ow_ble_init(void) { return -1; }
+void ow_ble_deinit(void) {}
+void ow_ble_set_gap_callback(ow_gap_event_cb_t cb) { (void)cb; }
+
+#endif // CONFIG_BT_NIMBLE_ENABLED
+
 // -- CAN (TWAI) driver --
 //
 // Only ow_can_open lives here -- it builds the timing/general/filter config

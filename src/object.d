@@ -39,7 +39,7 @@ alias noreturn = typeof(*null);
 // needed so druntime's core.stdc.stdio compiles on AArch64
 version (AArch64)
 {
-    extern (C++, std) struct __va_list
+    extern(C++, std) struct __va_list
     {
         void* __stack;
         void* __gr_top;

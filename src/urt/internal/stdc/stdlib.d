@@ -2,7 +2,7 @@
 
 module urt.internal.stdc.stdlib;
 
-extern (C) nothrow @nogc:
+extern(C) nothrow @nogc:
 
 noreturn abort() @safe;
 noreturn exit(int status);

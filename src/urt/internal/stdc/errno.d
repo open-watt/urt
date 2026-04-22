@@ -50,7 +50,7 @@ nothrow:
 
 version (CRuntime_Microsoft)
 {
-    extern (C)
+    extern(C)
     {
         ref int _errno();
         alias errno = _errno;
@@ -58,7 +58,7 @@ version (CRuntime_Microsoft)
 }
 else version (CRuntime_Glibc)
 {
-    extern (C)
+    extern(C)
     {
         ref int __errno_location();
         alias errno = __errno_location;
@@ -66,7 +66,7 @@ else version (CRuntime_Glibc)
 }
 else version (CRuntime_Musl)
 {
-    extern (C)
+    extern(C)
     {
         ref int __errno_location();
         alias errno = __errno_location;
@@ -78,18 +78,18 @@ else version (CRuntime_Picolibc)
     {
         // On FreeRTOS, picolibc defines errno as _Thread_local which conflicts
         // with emulated-TLS. Use a C shim to access it indirectly.
-        extern (C) int* ow_errno_location() nothrow @nogc;
+        extern(C) int* ow_errno_location() nothrow @nogc;
         @property ref int errno() nothrow @nogc { return *ow_errno_location(); }
     }
     else
     {
         // Bare-metal single-threaded: errno is a plain global.
-        extern (C) extern int errno;
+        extern(C) extern int errno;
     }
 }
 else version (CRuntime_Newlib)
 {
-    extern (C)
+    extern(C)
     {
         ref int __errno();
         alias errno = __errno;
@@ -98,7 +98,7 @@ else version (CRuntime_Newlib)
 else version (OpenBSD)
 {
     // https://github.com/openbsd/src/blob/master/include/errno.h
-    extern (C)
+    extern(C)
     {
         ref int __errno();
         alias errno = __errno;
@@ -107,7 +107,7 @@ else version (OpenBSD)
 else version (NetBSD)
 {
     // https://github.com/NetBSD/src/blob/trunk/include/errno.h
-    extern (C)
+    extern(C)
     {
         ref int __errno();
         alias errno = __errno;
@@ -115,7 +115,7 @@ else version (NetBSD)
 }
 else version (FreeBSD)
 {
-    extern (C)
+    extern(C)
     {
         ref int __error();
         alias errno = __error;
@@ -123,7 +123,7 @@ else version (FreeBSD)
 }
 else version (DragonFlyBSD)
 {
-    extern (C)
+    extern(C)
     {
         pragma(mangle, "errno") int __errno;
         ref int __error() {
@@ -134,7 +134,7 @@ else version (DragonFlyBSD)
 }
 else version (CRuntime_Bionic)
 {
-    extern (C)
+    extern(C)
     {
         ref int __errno();
         alias errno = __errno;
@@ -142,7 +142,7 @@ else version (CRuntime_Bionic)
 }
 else version (CRuntime_UClibc)
 {
-    extern (C)
+    extern(C)
     {
         ref int __errno_location();
         alias errno = __errno_location;
@@ -150,7 +150,7 @@ else version (CRuntime_UClibc)
 }
 else version (Darwin)
 {
-    extern (C)
+    extern(C)
     {
         ref int __error();
         alias errno = __error;
@@ -158,7 +158,7 @@ else version (Darwin)
 }
 else version (Solaris)
 {
-    extern (C)
+    extern(C)
     {
         ref int ___errno();
         alias errno = ___errno;
@@ -167,7 +167,7 @@ else version (Solaris)
 else version (Haiku)
 {
     // https://github.com/haiku/haiku/blob/master/headers/posix/errno.h
-    extern (C)
+    extern(C)
     {
         ref int _errnop();
         alias errno = _errnop;
@@ -181,7 +181,7 @@ else
     extern(C) pragma(mangle, "setErrno") @property int errno(int n);
 }
 
-extern (C):
+extern(C):
 
 
 version (CRuntime_Microsoft)

@@ -6,7 +6,7 @@ version (Windows)
 {
     import urt.internal.sys.windows;
 
-    extern (Windows) void GetSystemTimePreciseAsFileTime(FILETIME* lpSystemTimeAsFileTime) nothrow @nogc;
+    extern(Windows) void GetSystemTimePreciseAsFileTime(FILETIME* lpSystemTimeAsFileTime) nothrow @nogc;
 }
 else version (Posix)
 {

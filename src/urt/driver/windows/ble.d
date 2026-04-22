@@ -1233,12 +1233,12 @@ nothrow @nogc:
     import urt.internal.sys.windows.windef : HMODULE;
     private HMODULE _lib;
 
-    extern (Windows) HRESULT function(uint initType) RoInitialize;
-    extern (Windows) HRESULT function(HSTRING classId, IInspectable* instance) RoActivateInstance;
-    extern (Windows) HRESULT function(HSTRING classId, const(GUID)* iid, void** factory) RoGetActivationFactory;
-    extern (Windows) HRESULT function(const(wchar)* str, uint len, HSTRING* out_) WindowsCreateString;
-    extern (Windows) HRESULT function(HSTRING str) WindowsDeleteString;
-    extern (Windows) const(wchar)* function(HSTRING str, uint* len) WindowsGetStringRawBuffer;
+    extern(Windows) HRESULT function(uint initType) RoInitialize;
+    extern(Windows) HRESULT function(HSTRING classId, IInspectable* instance) RoActivateInstance;
+    extern(Windows) HRESULT function(HSTRING classId, const(GUID)* iid, void** factory) RoGetActivationFactory;
+    extern(Windows) HRESULT function(const(wchar)* str, uint len, HSTRING* out_) WindowsCreateString;
+    extern(Windows) HRESULT function(HSTRING str) WindowsDeleteString;
+    extern(Windows) const(wchar)* function(HSTRING str, uint* len) WindowsGetStringRawBuffer;
 
     bool init()
     {
@@ -1375,7 +1375,7 @@ static immutable IID_TypedEventHandler_Watcher_Stopped           = GUID(0x9936A4
 
 // --- COM interfaces ---
 
-extern (Windows):
+extern(Windows):
 
 interface IUnknown
 {

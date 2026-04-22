@@ -1,4 +1,4 @@
-// Minimal C stdio bindings — only what URT actually uses.
+// Minimal C stdio bindings - only what URT actually uses.
 // FILE is opaque; we never dereference its fields.
 
 module urt.internal.stdc.stdio;
@@ -103,7 +103,7 @@ else version (WASI)
 }
 else version (FreeStanding)
 {
-    // no stdio streams — io.d uses UART directly
+    // no stdio streams - io.d uses UART directly
 }
 else
 {

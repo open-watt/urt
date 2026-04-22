@@ -1,4 +1,4 @@
-// Minimal C stdlib bindings — only what URT actually uses.
+// Minimal C stdlib bindings - only what URT actually uses.
 
 module urt.internal.stdc.stdlib;
 

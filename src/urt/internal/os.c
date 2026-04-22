@@ -15,7 +15,7 @@
 # include <fcntl.h>
 # include <sys/ioctl.h>
 
-// EWOULDBLOCK is #define EWOULDBLOCK EAGAIN on Linux — ImportC cannot resolve
+// EWOULDBLOCK is #define EWOULDBLOCK EAGAIN on Linux - ImportC cannot resolve
 // chained macros, so re-define as a plain integer.
 # undef EWOULDBLOCK
 # define EWOULDBLOCK 11   /* same as EAGAIN on Linux */

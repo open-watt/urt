@@ -17,7 +17,7 @@ void ipc_init()
 {
     // TODO: read ring layout from XRAM_BASE
     // The M0 firmware sets up ring_pos structures at fixed offsets.
-    // For now this is a placeholder — actual offsets need to be
+    // For now this is a placeholder - actual offsets need to be
     // determined by examining the running M0 firmware's XRAM layout.
 }
 

@@ -1017,7 +1017,7 @@ version (none) unittest
 AA!(K, V) makeAA(K, V)(V[K] src) @trusted
 {
     assert(__ctfe, "makeAA Must only be called at compile time");
-    // Iterate the built-in AA directly — .keys/.values are UFCS properties
+    // Iterate the built-in AA directly - .keys/.values are UFCS properties
     // that require druntime hooks we don't provide.
     K[] keys;
     V[] values;

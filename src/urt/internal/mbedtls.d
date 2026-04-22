@@ -1,4 +1,4 @@
-// minimal D bindings for mbedtls — only what pki.d and tls.d need
+// minimal D bindings for mbedtls - only what pki.d and tls.d need
 module urt.internal.mbedtls;
 
 version (Posix):

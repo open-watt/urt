@@ -1,4 +1,4 @@
-// C wrappers for mbedtls — sizeof() for opaque types, and wrappers for
+// C wrappers for mbedtls - sizeof() for opaque types, and wrappers for
 // functions that access internal struct layouts D cannot safely replicate.
 
 #if !defined(_WIN32)
@@ -34,7 +34,7 @@ int urt_pk_gen_ec_p256_key(mbedtls_pk_context *pk, int (*f_rng)(void *, unsigned
 
 // Export the public key as an uncompressed EC point (0x04 || X || Y).
 // Returns 0 on success with *olen set to the number of bytes written.
-// Uses mbedtls_pk_write_pubkey_der to avoid any direct ECP struct member access —
+// Uses mbedtls_pk_write_pubkey_der to avoid any direct ECP struct member access -
 // the SubjectPublicKeyInfo for P-256 always ends with the 65-byte uncompressed point.
 int urt_pk_export_pubkey_xy(mbedtls_pk_context *pk, unsigned char *buf, size_t buflen, size_t *olen)
 {

@@ -1,4 +1,4 @@
-/// Minimal winuser bindings — only virtual key codes.
+/// Minimal winuser bindings - only virtual key codes.
 /// Full winuser.d was trimmed; GUI/display/font APIs removed.
 module urt.internal.sys.windows.winuser;
 version (Windows):

@@ -1,4 +1,4 @@
-// Minimal object.d — replaces druntime's implicit root module.
+// Minimal object.d - replaces druntime's implicit root module.
 //
 // This file is the auditing frontier: every symbol added here is a
 // symbol the compiler or linker demanded.  Keep it as small as possible.
@@ -129,7 +129,7 @@ static if (__VERSION__ >= 2113)
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Object — root of the class hierarchy
+// Object - root of the class hierarchy
 // ──────────────────────────────────────────────────────────────────────
 
 class Object
@@ -154,7 +154,7 @@ class Object
         => try_copy_string(buffer, "Object");
 }
 
-// Free-function opEquals for class types — the compiler lowers `a == b`
+// Free-function opEquals for class types - the compiler lowers `a == b`
 // on class objects to a call to this function.
 bool opEquals(LHS, RHS)(LHS lhs, RHS rhs)
     if ((is(LHS : const Object) || is(LHS : const shared Object)) &&
@@ -177,7 +177,7 @@ bool opEquals(LHS, RHS)(LHS lhs, RHS rhs)
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// TypeInfo — compiler generates references for typeid, AAs, etc.
+// TypeInfo - compiler generates references for typeid, AAs, etc.
 // ──────────────────────────────────────────────────────────────────────
 
 class TypeInfo
@@ -290,7 +290,7 @@ class TypeInfo_Class : TypeInfo
     }
 }
 
-// TypeInfo_Struct — compiler generates static instances for every struct type.
+// TypeInfo_Struct - compiler generates static instances for every struct type.
 // Field layout must exactly match what the compiler emits.
 class TypeInfo_Struct : TypeInfo
 {
@@ -354,7 +354,7 @@ class TypeInfo_Struct : TypeInfo
     string mangledName;
 
     @property string name() nothrow const @trusted
-        => mangledName; // no demangling — avoids pulling in core.demangle
+        => mangledName; // no demangling - avoids pulling in core.demangle
 
     void[] m_init;
 
@@ -450,7 +450,7 @@ class TypeInfo_Array : TypeInfo
     TypeInfo value;
 }
 
-// Built-in array TypeInfo subclasses — the compiler generates references to
+// Built-in array TypeInfo subclasses - the compiler generates references to
 // these for common array types.  Empty subclasses are sufficient; the
 // compiler fills in the `value` field.
 class TypeInfo_Ah : TypeInfo_Array {}   // ubyte[]
@@ -618,7 +618,7 @@ class TypeInfo_Inout : TypeInfo_Const
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// TypeInfo for built-in types — compiler references these by mangled name
+// TypeInfo for built-in types - compiler references these by mangled name
 // (e.g. TypeInfo_k for uint).  Single-character suffixes follow D's type
 // encoding: a=char, b=bool, d=double, f=float, g=byte, h=ubyte,
 // i=int, k=uint, l=long, m=ulong, o=dchar, s=short, t=wchar,
@@ -662,7 +662,7 @@ private struct _member_func
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// __ArrayDtor — compiler lowers dynamic array destruction to this
+// __ArrayDtor - compiler lowers dynamic array destruction to this
 // ──────────────────────────────────────────────────────────────────────
 
 void __ArrayDtor(T)(scope T[] a)
@@ -672,7 +672,7 @@ void __ArrayDtor(T)(scope T[] a)
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Compiler hook templates — array & AA literal lowering
+// Compiler hook templates - array & AA literal lowering
 // These are only called at runtime; CTFE evaluates literals directly.
 // ──────────────────────────────────────────────────────────────────────
 
@@ -733,7 +733,7 @@ ref Tarr _d_arrayappendT(Tarr : T[], T)(return ref scope Tarr x, scope Tarr y) @
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Compiler hook templates — array operations, construction, etc.
+// Compiler hook templates - array operations, construction, etc.
 // These are lowered by the compiler for various language constructs.
 // ──────────────────────────────────────────────────────────────────────
 
@@ -916,7 +916,7 @@ extern(C) void _d_arraybounds(string file, uint line) nothrow @nogc
     assert_handler()(file, line, "array index out of bounds");
 }
 
-// Unittest assert hooks — the compiler generates these for assert() inside
+// Unittest assert hooks - the compiler generates these for assert() inside
 // unittest blocks instead of the regular _d_assertp/_d_assert_msg.
 extern(C) void _d_unittestp(immutable(char)* file, uint line) nothrow @nogc @trusted
 {
@@ -938,7 +938,7 @@ extern(C) void _d_unittest(string file, uint line) nothrow @nogc
     assert_handler()(file, line, "unittest assertion failure");
 }
 
-// GC allocation hook — compiler lowers `new` to this.  In our @nogc world
+// GC allocation hook - compiler lowers `new` to this.  In our @nogc world
 // it should never be called from production code; provided so unittest
 // blocks that accidentally use `new` can at least link.
 extern(C) void* _d_allocmemory(size_t sz) nothrow @nogc @trusted
@@ -1056,7 +1056,7 @@ extern(C) void[] _d_newarrayU(const TypeInfo ti, size_t length) nothrow @nogc @t
     return alloc(length * elemsize);
 }
 
-// Unconditional halt — avoids circular dependency with assert.
+// Unconditional halt - avoids circular dependency with assert.
 private void _halt() nothrow @nogc @trusted
 {
     version (D_InlineAsm_X86_64)
@@ -1110,7 +1110,7 @@ template _d_delstructImpl(T)
 nothrow @nogc @trusted pure extern(C) void _d_delThrowable(scope Throwable) {}
 
 // ──────────────────────────────────────────────────────────────────────
-// _arrayOp — compiler hook for vectorized array slice operations.
+// _arrayOp - compiler hook for vectorized array slice operations.
 // DMD lowers `dest[] = a[] ^ b[]` to `_arrayOp!(T[], T[], T[], "^", "=")(dest, a, b)`.
 // Args are in Reverse Polish Notation (RPN).
 // ──────────────────────────────────────────────────────────────────────
@@ -1223,7 +1223,7 @@ private enum _scalar_exp(Args...) = () {
 }();
 
 // ──────────────────────────────────────────────────────────────────────
-// _d_cast — dynamic class cast, walks TypeInfo_Class.base chain
+// _d_cast - dynamic class cast, walks TypeInfo_Class.base chain
 // ──────────────────────────────────────────────────────────────────────
 
 void* _d_cast(To, From)(From o) @trusted
@@ -1245,12 +1245,12 @@ void* _d_cast(To, From)(From o) @trusted
     if (is(From == class) && is(To == interface))
 {
     if (o is null) return null;
-    // Walk interface list — not implemented yet, fall back to null
+    // Walk interface list - not implemented yet, fall back to null
     assert(false, "Interface cast not yet implemented");
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Throwable / Exception / Error — exception hierarchy
+// Throwable / Exception / Error - exception hierarchy
 // ──────────────────────────────────────────────────────────────────────
 
 class Throwable : Object
@@ -1324,7 +1324,7 @@ class Error : Throwable
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// destroy — compiler generates calls for scope guards, etc.
+// destroy - compiler generates calls for scope guards, etc.
 // ──────────────────────────────────────────────────────────────────────
 
 void destroy(bool initialize = true, T)(ref T obj) if (is(T == struct))
@@ -1369,7 +1369,7 @@ void destroy(bool initialize = true, T)(ref T obj) if (!is(T == struct) && !is(T
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// .dup / .idup — array duplication properties
+// .dup / .idup - array duplication properties
 // ──────────────────────────────────────────────────────────────────────
 
 @property immutable(T)[] idup(T)(T[] a) @trusted
@@ -1403,7 +1403,7 @@ bool _xopCmp(in void*, in void*)
     => false;
 
 // ──────────────────────────────────────────────────────────────────────
-// hashOf — used by AAs and anywhere .toHash is needed
+// hashOf - used by AAs and anywhere .toHash is needed
 // ──────────────────────────────────────────────────────────────────────
 
 size_t hashOf(T)(auto ref T val, size_t seed = 0) pure nothrow @nogc @trusted
@@ -1419,7 +1419,7 @@ size_t hashOf(T)(auto ref T val, size_t seed = 0) pure nothrow @nogc @trusted
     }
     else static if (is(T V : V*))
     {
-        // Pointers — CTFE compatible
+        // Pointers - CTFE compatible
         if (__ctfe)
         {
             if (val is null)
@@ -1431,7 +1431,7 @@ size_t hashOf(T)(auto ref T val, size_t seed = 0) pure nothrow @nogc @trusted
     }
     else static if (__traits(isIntegral, T))
     {
-        // Integers — CTFE compatible, no reinterpreting cast
+        // Integers - CTFE compatible, no reinterpreting cast
         static if (T.sizeof <= size_t.sizeof)
             return _fnv(cast(size_t)val, seed);
         else
@@ -1450,7 +1450,7 @@ size_t hashOf(T)(auto ref T val, size_t seed = 0) pure nothrow @nogc @trusted
     }
     else static if (is(T == struct))
     {
-        // Structs — hash each field (CTFE compatible)
+        // Structs - hash each field (CTFE compatible)
         size_t h = seed;
         foreach (ref field; val.tupleof)
             h = hashOf(field, h);
@@ -1493,7 +1493,7 @@ private size_t _fnv(size_t val, size_t seed) pure nothrow @nogc @trusted
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// ModuleInfo — compiler emits one per module with ctor/dtor/unittest info.
+// ModuleInfo - compiler emits one per module with ctor/dtor/unittest info.
 // Variable-sized: fields are packed after the header based on flag bits.
 // ──────────────────────────────────────────────────────────────────────
 
@@ -1629,7 +1629,7 @@ const:
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Module registration — LDC uses _Dmodule_ref linked list
+// Module registration - LDC uses _Dmodule_ref linked list
 //
 // On ELF targets the compiler generates .init_array entries that chain
 // ModuleReference structs into _Dmodule_ref. On Linux, glibc's crt0
@@ -1673,14 +1673,14 @@ version (linux)
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// TypeInfo for const/immutable char[] — compiler references by name
+// TypeInfo for const/immutable char[] - compiler references by name
 // ──────────────────────────────────────────────────────────────────────
 
 class TypeInfo_Axa : TypeInfo_Array {}  // const(char)[]
 class TypeInfo_Aya : TypeInfo_Array {}  // immutable(char)[] = string
 
 // ──────────────────────────────────────────────────────────────────────
-// _d_invariant — contract invariant hook (matches rt.invariant_ mangling)
+// _d_invariant - contract invariant hook (matches rt.invariant_ mangling)
 // ──────────────────────────────────────────────────────────────────────
 
 pragma(mangle, "_D2rt10invariant_12_d_invariantFC6ObjectZv")

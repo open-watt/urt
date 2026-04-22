@@ -1,7 +1,7 @@
 /// BL618 newlib/picolibc syscall stubs
 ///
 /// Minimal stubs to satisfy picolibc's syscall requirements.
-/// Same pattern as BL808 — most are no-ops for baremetal.
+/// Same pattern as BL808 - most are no-ops for baremetal.
 module urt.driver.bl618.syscalls;
 
 @nogc nothrow:

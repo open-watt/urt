@@ -35,7 +35,7 @@ enum WifiVif : ubyte
 enum WifiMode : ubyte
 {
     none,      // radio off, no virtual interfaces active
-    monitor,   // radio on, raw 802.11 only — no stack
+    monitor,   // radio on, raw 802.11 only - no stack
     sta,       // station only
     ap,        // access point only
     apsta,     // concurrent AP + STA
@@ -147,7 +147,7 @@ alias WifiRxCallback = void function(Wifi wifi, WifiVif vif, const(ubyte)[] data
 // Called from ISR/driver when a raw 802.11 frame is received
 // (promiscuous/monitor tap). Data is the full 802.11 frame
 // starting at the MAC header. Delivered independently of the
-// Ethernet RX callback — both can be active simultaneously.
+// Ethernet RX callback - both can be active simultaneously.
 alias WifiRawRxCallback = void function(Wifi wifi, const(ubyte)[] frame, byte rssi, ubyte channel) nothrow @nogc;
 
 // Called when a wifi event occurs. Replaces per-event callbacks

@@ -1,4 +1,4 @@
-/// Slim umbrella — re-exports only the vendored Windows modules.
+/// Slim umbrella - re-exports only the vendored Windows modules.
 module urt.internal.sys.windows;
 
 public import urt.internal.sys.windows.w32api;

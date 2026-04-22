@@ -97,7 +97,7 @@ void flush(WriteTarget target = WriteTarget.stdout)() nothrow @nogc
     }
     else version (FreeStanding)
     {
-        // UART writes are unbuffered — nothing to flush
+        // UART writes are unbuffered - nothing to flush
     }
     else
     {

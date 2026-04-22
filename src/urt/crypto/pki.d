@@ -461,7 +461,7 @@ Result associate_key(ref CertRef cert, ref KeyPair key)
             return Result(cast(uint)ss);
         }
 
-        // export as PKCS8 — only PKCS8 supports named key import for persistence
+        // export as PKCS8 - only PKCS8 supports named key import for persistence
         ULONG pkcs8_size = 0;
         ss = NCryptExportKey(htemp, null, NCRYPT_PKCS8_PRIVATE_KEY_BLOB.ptr, null, null, 0, &pkcs8_size, 0);
         if (ss != 0)
@@ -961,7 +961,7 @@ bool parse_ec_sec1_der(const(ubyte)[] der, ref ubyte[32] d, ref ubyte[32] x, ref
     d[32 - d_len .. 32] = der[pos .. pos + d_len];  // right-align
     pos += d_len;
 
-    // optional [0] parameters — skip
+    // optional [0] parameters - skip
     if (pos < seq_end && der[pos] == 0xa0)
     {
         ++pos;
@@ -996,7 +996,7 @@ bool parse_ec_sec1_der(const(ubyte)[] der, ref ubyte[32] d, ref ubyte[32] x, ref
         return true;
     }
 
-    // No public key in the SEC 1 structure — can't reconstruct without EC math
+    // No public key in the SEC 1 structure - can't reconstruct without EC math
     return false;
 }
 

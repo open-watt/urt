@@ -2,11 +2,11 @@
 ///
 /// Two time sources:
 ///
-/// 1. mtime (RISC-V standard) — 1 MHz monotonic counter.
+/// 1. mtime (RISC-V standard) - 1 MHz monotonic counter.
 ///    Read via rdtime. Survives WFI/clock scaling, resets on system reset.
 ///    Used for monotonic timekeeping (getTime / Duration / Timer).
 ///
-/// 2. HBN RTC — 32,768 Hz counter in the Hibernate block.
+/// 2. HBN RTC - 32,768 Hz counter in the Hibernate block.
 ///    40-bit, survives deep sleep (HBN) if VBAT is maintained.
 ///    Resets on full power cycle. Used with a stored UTC offset
 ///    for wall-clock time across sleep/wake cycles.
@@ -18,11 +18,11 @@
 ///
 /// HBN layout:
 ///   HBN_BASE    = 0x2000_F000
-///   HBN_CTL     @ +0x00   — bit 0: RTC enable
-///   HBN_TIME_L  @ +0x04   — compare value low (alarm)
-///   HBN_TIME_H  @ +0x08   — compare value high (alarm)
-///   HBN_RTC_TIME_L @ +0x0C — latched counter low (read-only)
-///   HBN_RTC_TIME_H @ +0x10 — latched counter high [7:0] + latch trigger [31]
+///   HBN_CTL     @ +0x00   - bit 0: RTC enable
+///   HBN_TIME_L  @ +0x04   - compare value low (alarm)
+///   HBN_TIME_H  @ +0x08   - compare value high (alarm)
+///   HBN_RTC_TIME_L @ +0x0C - latched counter low (read-only)
+///   HBN_RTC_TIME_H @ +0x10 - latched counter high [7:0] + latch trigger [31]
 module urt.driver.bl808.timer;
 
 import core.volatile;
@@ -118,7 +118,7 @@ extern(C) void _timer_irq_handler()
     if (tick_interval > 0)
     {
         // Advance deadline relative to current compare value
-        // (not current time — avoids drift)
+        // (not current time - avoids drift)
         ulong cmp = mtimecmp_read();
         mtimecmp_write(cmp + tick_interval);
     }
@@ -173,7 +173,7 @@ private ulong mtimecmp_read()
 enum uint rtc_freq_hz = 32_768;
 
 /// Enable the HBN RTC counter (bit 0 of HBN_CTL).
-/// Does NOT reset the counter — call rtc_reset() first if needed.
+/// Does NOT reset the counter - call rtc_reset() first if needed.
 /// Note: read-modify-write on HBN_CTL is not interrupt-safe.
 /// If called after interrupts are enabled, wrap with mstatus.MIE guard.
 void rtc_enable()
@@ -183,7 +183,7 @@ void rtc_enable()
 }
 
 /// Disable and reset the HBN RTC counter to zero.
-/// Note: same mstatus.MIE guard applies — see rtc_enable().
+/// Note: same mstatus.MIE guard applies - see rtc_enable().
 void rtc_reset()
 {
     auto ctl = cast(uint*)HBN_CTL;

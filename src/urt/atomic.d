@@ -23,7 +23,7 @@ alias atomicFetchSub = atomic_fetch_sub;
 version (LDC)
 {
     // -----------------------------------------------------------------------
-    // LDC: LLVM intrinsics — architecture-generic
+    // LDC: LLVM intrinsics - architecture-generic
     // -----------------------------------------------------------------------
 
     nothrow @nogc @safe:
@@ -594,7 +594,7 @@ else version (D_InlineAsm_X86)
     {
         static if (ms != MemoryOrder.relaxed)
         {
-            // x86 without guaranteed SSE2 — mfence may not exist.
+            // x86 without guaranteed SSE2 - mfence may not exist.
             // lock; add is a full barrier on all x86.
             asm pure nothrow @nogc @trusted
             {

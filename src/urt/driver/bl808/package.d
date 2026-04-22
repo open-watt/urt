@@ -20,10 +20,10 @@ private ubyte[48] __eh_frame_object;  // pre-allocated storage for libgcc
 /// Call once at the top of main() before any other OpenWatt code.
 ///
 /// Order matters:
-///   1. UART — so we have debug output for everything after
-///   2. IRQ table — already done by start.S (_init_interrupts)
-///   3. Timer — periodic tick for main loop
-///   4. IPC — XRAM ring buffers to M0
+///   1. UART - so we have debug output for everything after
+///   2. IRQ table - already done by start.S (_init_interrupts)
+///   3. Timer - periodic tick for main loop
+///   4. IPC - XRAM ring buffers to M0
 extern(C) void sys_init()
 {
     // Register .eh_frame with libgcc's unwinder so that DWARF exception
@@ -46,5 +46,5 @@ extern(C) void sys_init()
 
 private void tick_stub() @nogc nothrow
 {
-    // placeholder — will drive urt.time / Application frame tick
+    // placeholder - will drive urt.time / Application frame tick
 }

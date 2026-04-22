@@ -708,7 +708,7 @@ else
             else static if (ProcFeatures.thumb)
             {
                 // Thumb mode (Cortex-M): SP cannot appear in stm/ldm register lists.
-                // Layout: [r4..r11](0-28), [sp](32), [lr/pc](36) — matches co_init_stack
+                // Layout: [r4..r11](0-28), [sp](32), [lr/pc](36) - matches co_init_stack
                 asm nothrow @nogc
                 {
                     `

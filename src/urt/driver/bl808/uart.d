@@ -14,8 +14,8 @@
 // UART1/2 require M0 cooperation or future GPIO mux support from D0.
 //
 // Interrupt availability from D0:
-//   UART3 — PLIC IRQ 20 (IRQ_NUM_BASE + 4), interrupt-driven
-//   UART0/1/2 — IRQs are in M0's PLIC domain, must be polled from D0
+//   UART3 - PLIC IRQ 20 (IRQ_NUM_BASE + 4), interrupt-driven
+//   UART0/1/2 - IRQs are in M0's PLIC domain, must be polled from D0
 //
 // All UARTs use software ring buffers (512 bytes RX, 512 bytes TX).
 // UART3 fills/drains them via ISR. UART0/1/2 require explicit uart_poll().
@@ -137,19 +137,19 @@ private enum : uint
 // FIFO depth
 private enum UART_FIFO_MAX = 32;
 
-// RX FIFO threshold — interrupt fires when RX FIFO count >= this value.
+// RX FIFO threshold - interrupt fires when RX FIFO count >= this value.
 // Set to 16 so we drain before the 32-byte FIFO overflows.
 private enum RX_FIFO_THRESHOLD = 16;
 
-// TX FIFO threshold — interrupt fires when TX FIFO count >= this value
+// TX FIFO threshold - interrupt fires when TX FIFO count >= this value
 // (i.e., space is available). Set low so we refill aggressively.
 private enum TX_FIFO_THRESHOLD = 8;
 
-// RX timeout — number of bit periods of silence before RX timeout interrupt.
+// RX timeout - number of bit periods of silence before RX timeout interrupt.
 // Catches partial frames shorter than RX_FIFO_THRESHOLD.
 private enum RX_TIMEOUT_BITS = 80; // ~10 byte times at any baud rate
 
-// UART clock frequency — M0 sets all UARTs to XCLK = 40 MHz.
+// UART clock frequency - M0 sets all UARTs to XCLK = 40 MHz.
 // TODO: read GLB_UART_CFG0 (GLB_BASE + 0x150) to determine actual clock
 // source. Bits: [2:0] = divider, [4] = clock enable, [7] = clk_sel,
 // [22] = clk_sel2. The 2-bit selector chooses between MCU PBCLK (0),
@@ -157,7 +157,7 @@ private enum RX_TIMEOUT_BITS = 80; // ~10 byte times at any baud rate
 private enum uint UART_CLK_HZ = 40_000_000;
 
 
-// Software ring buffer — reuse urt.mem.ring with fixed 512-byte capacity.
+// Software ring buffer - reuse urt.mem.ring with fixed 512-byte capacity.
 import urt.mem.ring : RingBuffer;
 private alias Ring = RingBuffer!512;
 
@@ -435,7 +435,7 @@ void fill_tx_fifo(uint id)
     }
 }
 
-// PLIC IRQ handler — services UART3 interrupts.
+// PLIC IRQ handler - services UART3 interrupts.
 // Chains to previous handler for non-UART IRQs.
 void uart_irq_handler(uint irq)
 {
@@ -446,7 +446,7 @@ void uart_irq_handler(uint irq)
         immutable mask = reg_read(base, INT_MASK);
         immutable active = sts & ~mask;
 
-        // RX FIFO threshold or RX timeout — drain into ring
+        // RX FIFO threshold or RX timeout - drain into ring
         if (active & (INT_URX_FIFO | INT_URX_RTO))
         {
             drain_rx_fifo(3);
@@ -454,7 +454,7 @@ void uart_irq_handler(uint irq)
                 reg_write(base, INT_CLEAR, INT_URX_RTO);
         }
 
-        // TX FIFO has space — refill from ring
+        // TX FIFO has space - refill from ring
         if (active & INT_UTX_FIFO)
         {
             fill_tx_fifo(3);
@@ -526,7 +526,7 @@ void uart0_hex(ulong val)
     }
 }
 
-// ── UART3 (COM8, MM domain — D0's console) ──────────────────────────────────
+// ── UART3 (COM8, MM domain - D0's console) ──────────────────────────────────
 
 void uart3_putc(char c)
 {

@@ -213,7 +213,7 @@ struct XramRing
     }
 }
 
-/// Memory barrier — RISC-V fence instruction
+/// Memory barrier - RISC-V fence instruction
 private void fence() @nogc nothrow
 {
     version (RISCV64)

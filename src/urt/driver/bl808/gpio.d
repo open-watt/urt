@@ -26,7 +26,7 @@ enum uint GPIO_OUTPUT_HIGH = 1u << 17;
 // WS2812 LED pin on M1s Dock
 enum uint WS2812_PIN = 8;
 
-// Timing loop counts — calibrated for ~480MHz D0 core clock.
+// Timing loop counts - calibrated for ~480MHz D0 core clock.
 // WS2812B spec: T0H=400ns, T0L=850ns, T1H=800ns, T1L=450ns (±150ns).
 // At 480MHz: 1 cycle ≈ 2.08ns, so T0H ≈ 192 cycles, T1H ≈ 384 cycles.
 // Loop body (addi + bnez compressed) ≈ 2 cycles → divide by 2.

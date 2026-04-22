@@ -159,7 +159,7 @@ auto pow(B, E)(B base, E exp) @trusted
 
         static if (isFloatE)
         {
-            // F ^^ F — handle integer-valued exponents (covers 99% of
+            // F ^^ F - handle integer-valued exponents (covers 99% of
             // real-world `^^` uses: value^^2, 10.0^^e, etc.)
             if (exp == 0)
                 return B(1);
@@ -171,13 +171,13 @@ auto pow(B, E)(B base, E exp) @trusted
         }
         else
         {
-            // F ^^ I — binary exponentiation
+            // F ^^ I - binary exponentiation
             return _powfi!B(b, long(exp));
         }
     }
     else
     {
-        // I ^^ I — integer power
+        // I ^^ I - integer power
         if (exp == 0)
             return B(1);
         B result = B(1);

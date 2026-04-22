@@ -29,7 +29,17 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
 
     assert(is_power_of_2(alignment), "Alignment must be a power of two!");
 
-    return _alloc(size, alignment, flags);
+    void[] mem = _alloc(size, alignment, flags);
+    version (AllocTracking)
+    {
+        import urt.mem.tracking : track_alloc;
+        if (mem.ptr !is null)
+        {
+            alias TrackFn = void function(void*, size_t) pure nothrow @nogc;
+            (cast(TrackFn) &track_alloc)(mem.ptr, mem.length);
+        }
+    }
+    return mem;
 }
 
 void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags = MemFlags.none) pure
@@ -45,9 +55,23 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
         return alloc(new_size, alignment, flags);
 
     static if (has_realloc)
-        return _realloc(mem, new_size, alignment, flags);
+    {
+        void* old_ptr = mem.ptr;
+        void[] new_mem = _realloc(mem, new_size, alignment, flags);
+        version (AllocTracking)
+        {
+            import urt.mem.tracking : track_realloc;
+            if (new_mem.ptr !is null)
+            {
+                alias TrackFn = void function(void*, void*, size_t) pure nothrow @nogc;
+                (cast(TrackFn) &track_realloc)(old_ptr, new_mem.ptr, new_mem.length);
+            }
+        }
+        return new_mem;
+    }
     else
     {
+        // Fallback path uses nested alloc/free, which are already hooked.
         void[] new_mem = alloc(new_size, alignment, flags);
         if (new_mem.ptr !is null)
         {
@@ -63,6 +87,12 @@ void free(void[] mem) pure
 {
     if (mem.ptr is null)
         return;
+    version (AllocTracking)
+    {
+        import urt.mem.tracking : untrack_alloc;
+        alias UntrackFn = void function(void*) pure nothrow @nogc;
+        (cast(UntrackFn) &untrack_alloc)(mem.ptr);
+    }
     _free(mem.ptr);
 }
 

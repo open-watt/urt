@@ -46,7 +46,7 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     import urt.time : init_clock;
     init_clock();
 
-    import sys.baremetal.uart : uart_init, uart_deinit;
+    import urt.driver.uart : uart_init, uart_deinit;
     uart_init();
 
     import urt.rand;

@@ -42,8 +42,8 @@ void sleep(Duration duration)
     }
     else version (Embedded)
     {
-        import sys.baremetal.timer;
-        import sys.baremetal.irq;
+        import urt.driver.timer;
+        import urt.driver.irq;
 
         static if (has_mtime)
         {
@@ -198,7 +198,7 @@ unittest
 
     version (Embedded)
     {
-        import sys.baremetal.irq;
+        import urt.driver.irq;
         static if (has_irq_diagnostics)
         {
             writelnf("  IRQ total: {0}", irq_count);

@@ -29,7 +29,7 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
 
     version (BareMetal)
     {
-        import sys.baremetal.uart : uart0_puts;
+        import urt.driver.uart : uart0_puts;
         import urt.mem.temp : tconcat;
         uart0_puts(tconcat("\n*** ASSERT: ", msg, " at ", file, ':', line, '\n'));
         while (true) {}

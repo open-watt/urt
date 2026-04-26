@@ -1,13 +1,13 @@
 module urt.internal.exception;
 
 version (Windows)
-    import sys.windows.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
+    import urt.driver.windows.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
 else version (Espressif)
-    import sys.esp32.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
+    import urt.driver.esp32.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
 else version (BareMetal)
-    import sys.baremetal.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
+    import urt.driver.baremetal.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
 else
-    import sys.posix.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
+    import urt.driver.posix.exception : _capture_trace, _caller_address, _resolve_address, _resolve_batch;
 
 nothrow @nogc:
 

@@ -14,7 +14,7 @@ else version (Posix)
 }
 else version (Embedded)
 {
-    import sys.baremetal.timer;
+    import urt.driver.timer;
 }
 
 nothrow @nogc:

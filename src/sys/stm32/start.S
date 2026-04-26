@@ -193,3 +193,15 @@ SysTick_Handler:
     .type   Default_Handler, %function
 Default_Handler:
     b       .
+
+/* ================================================================
+ * __aeabi_read_tp -- ARM EABI thread pointer for TLS access
+ * Single-threaded bare-metal: return fixed pointer to .tdata
+ * ================================================================ */
+    .global __aeabi_read_tp
+    .type   __aeabi_read_tp, %function
+    .thumb_func
+__aeabi_read_tp:
+    ldr     r0, =_tdata_start
+    bx      lr
+    .size   __aeabi_read_tp, . - __aeabi_read_tp

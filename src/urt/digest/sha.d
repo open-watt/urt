@@ -82,7 +82,8 @@ struct SHA256Context
 
         enum uint[StateElements] initState = [ 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                                 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 ];
-
+    }
+    version (Espressif_Modern) {} else {
         __gshared immutable uint[64] K = [
             0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
             0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -98,7 +99,7 @@ struct SHA256Context
 
 void sha_init(Context)(ref Context ctx)
 {
-    static if (esp_hardware)
+    static if (esp_hardware!Context)
     {
         version (ESP32)
         {
@@ -127,7 +128,7 @@ void sha_init(Context)(ref Context ctx)
 
 void sha_update(Context)(ref Context ctx, const void[] input)
 {
-    static if (esp_hardware)
+    static if (esp_hardware!Context)
     {
         version (ESP32)
         {
@@ -164,7 +165,7 @@ void sha_update(Context)(ref Context ctx, const void[] input)
 
 ubyte[Context.DigestLen] sha_finalise(Context)(ref Context ctx)
 {
-    static if (esp_hardware)
+    static if (esp_hardware!Context)
     {
         version (ESP32)
         {
@@ -314,12 +315,17 @@ unittest
 
 private:
 
-version (Espressif_Modern)
-    enum esp_hardware = true;
-else version (Espressif)
-    enum esp_hardware = !is(Context == SHA224Context);
-else
-    enum esp_hardware = false;
+template esp_hardware(Context)
+{
+    version (Espressif_Modern)
+        enum esp_hardware = true;
+    else version (Espressif)
+        // SHA-224 hardware on ESP32 Classic would need SHA-256 with custom IV
+        // (see TODO on SHA224Context); fall through to software for now.
+        enum esp_hardware = !is(Context == SHA224Context);
+    else
+        enum esp_hardware = false;
+}
 
 version (Espressif) {} else
 void sha1_transform(Context)(ref Context ctx, const ubyte[] data)

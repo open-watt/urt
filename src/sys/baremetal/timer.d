@@ -1,6 +1,6 @@
 module sys.baremetal.timer;
 
-import urt.time : Duration;
+import urt.time : Duration, dur;
 
 version (BL808_M0)
     public import sys.bl618.timer;
@@ -203,7 +203,7 @@ unittest
     static if (has_mtime && has_timer_stop)
     {
         __gshared bool tick_fired = false;
-        periodic_set(Duration.from!"msecs"(50), () { tick_fired = true; });
+        periodic_set(dur!"msecs"(50), () { tick_fired = true; });
         periodic_stop();
         // We can't easily test that the callback fires without
         // waiting + running the interrupt, but at least verify

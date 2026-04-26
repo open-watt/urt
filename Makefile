@@ -1,123 +1,165 @@
-OS ?= ubuntu
-PLATFORM ?= x86_64
-CONFIG ?= debug
-D_COMPILER ?= dmd
-DC ?= dmd
+URT_SRCDIR := src
 
-SRCDIR := src
-TARGET_SUBDIR := $(PLATFORM)_$(CONFIG)
-OBJDIR := obj/$(TARGET_SUBDIR)
-TARGETDIR := bin/$(TARGET_SUBDIR)
-TARGETNAME := urt
+include platforms.mk
 
-# unittest config adjustments
+# =======================================================================
+# Build mode
+#
+# Host (windows/linux/freebsd):
+#   default        -> static lib (liburt.a / urt.lib)
+#   CONFIG=unittest -> standalone test exe
+#
+# Cross (freertos/baremetal):
+#   CONFIG=unittest -> flashable test image (.bin via objcopy), using URT's
+#                     in-tree linker script (platforms/<chip>/<chip>.ld)
+#   default         -> compile-only (.o for non-ESP, .bc for ESP)
+#   ESP             -> always .bc, no link possible without ESP-IDF
+# =======================================================================
+
+OBJDIR    := obj/$(BUILDNAME)_$(CONFIG)
+TARGETDIR := bin/$(BUILDNAME)_$(CONFIG)
+
+# Linker script selection for cross-target unittest builds (ESP excluded --
+# no ESP-IDF on build slave). platforms.mk falls back to compile-only when
+# BAREMETAL_LD isn't set.
 ifeq ($(CONFIG),unittest)
-    TARGETNAME := $(TARGETNAME)_test
-    BUILD_TYPE := exe
+  ifeq ($(PLATFORM),bl808)
+    ifeq ($(PROCESSOR),c906)
+      BAREMETAL_LD := platforms/bl808/bl808_d0.ld
+    else ifeq ($(PROCESSOR),e907)
+      BAREMETAL_LD := platforms/bl808/bl808_m0.ld
+    endif
+  else ifeq ($(PLATFORM),bl618)
+    BAREMETAL_LD := platforms/bl618/bl618.ld
+  else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
+    BAREMETAL_LD := platforms/bk7231/$(PLATFORM).ld
+  else ifeq ($(PLATFORM),rp2350)
+    BAREMETAL_LD := platforms/rp2350/rp2350.ld
+  else ifdef STM32_VARIANT
+    BAREMETAL_LD := platforms/stm32/stm32_$(STM32_VARIANT).ld
+  endif
+  ifdef BAREMETAL_LD
+    DFLAGS := $(DFLAGS) -L-T$(BAREMETAL_LD) -main
+  endif
+endif
+
+# Resolve build mode + target file
+ifneq ($(filter freertos baremetal,$(OS)),)
+  ifdef BAREMETAL_LD
+    BUILD_MODE := embedded-exe
+    TARGETNAME := urt_test
+    TARGET     := $(TARGETDIR)/$(TARGETNAME)
+    BUILD_CMD_FLAGS :=
+  else ifeq ($(ARCH),xtensa)
+    # Xtensa: bitcode for downstream Espressif llc / ESP-IDF
+    BUILD_MODE := bitcode
+    TARGETNAME := urt$(if $(filter unittest,$(CONFIG)),_test)
+    TARGET     := $(OBJDIR)/$(TARGETNAME).bc
+    BUILD_CMD_FLAGS :=
+  else
+    # No linker script + non-Xtensa cross: compile-only object
+    BUILD_MODE := compile-only
+    TARGETNAME := urt$(if $(filter unittest,$(CONFIG)),_test)
+    TARGET     := $(OBJDIR)/$(TARGETNAME).o
+    BUILD_CMD_FLAGS :=
+  endif
+else ifeq ($(CONFIG),unittest)
+  BUILD_MODE := exe
+  TARGETNAME := urt_test
+  BUILD_CMD_FLAGS := -main
+  ifeq ($(OS),windows)
+    TARGET := $(TARGETDIR)/$(TARGETNAME).exe
+  else
+    TARGET := $(TARGETDIR)/$(TARGETNAME)
+  endif
 else
-    BUILD_TYPE := lib
+  BUILD_MODE := lib
+  TARGETNAME := urt
+  BUILD_CMD_FLAGS := -lib
+  ifeq ($(OS),windows)
+    TARGET := $(TARGETDIR)/$(TARGETNAME).lib
+  else
+    TARGET := $(TARGETDIR)/lib$(TARGETNAME).a
+  endif
 endif
 
 DEPFILE := $(OBJDIR)/$(TARGETNAME).d
 
-DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=nosharedaccess -preview=in
+# objcopy for embedded-exe -> .bin (derive from cross-gcc path)
+ifeq ($(BUILD_MODE),embedded-exe)
+  ifneq ($(filter arm thumb,$(ARCH)),)
+    BAREMETAL_OBJCOPY := arm-none-eabi-objcopy
+    OBJCOPY_FLAGS     := -R .bss -R .tbss -R '.tbss.*' -R .ARM.attributes -R '.debug*'
+  else
+    BAREMETAL_OBJCOPY := riscv64-unknown-elf-objcopy
+    OBJCOPY_FLAGS     :=
+  endif
 
-SOURCES := $(shell find "$(SRCDIR)" -type f -name '*.d' -not -path '$(SRCDIR)/sys/*')
-SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/baremetal" -type f -name '*.d')
-ifeq ($(OS),windows)
-    SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/windows" -type f -name '*.d')
-endif
-ifneq ($(filter linux ubuntu freebsd,$(OS)),)
-    SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys/posix" -type f -name '*.d')
-endif
-SOURCES := $(SOURCES) $(SRCDIR)/urt/internal/mbedtls.c
+  BAREMETAL_OBJS   := $(patsubst %.S,$(OBJDIR)/%.o,$(patsubst %.c,$(OBJDIR)/%.o,$(BAREMETAL_SRCS)))
+  BAREMETAL_CFLAGS := $(BAREMETAL_CFLAGS) -ffreestanding -O2
 
-ifeq ($(PLATFORM),riscv64)
-    SOURCES := $(SOURCES) $(shell find "$(SRCDIR)/sys" -type f -name '*.d' 2>/dev/null)
-endif
+$(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.S
+	@mkdir -p $(OBJDIR)
+	$(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) -c -o $@ $<
 
-# Set target file based on build type and OS
-ifeq ($(BUILD_TYPE),exe)
-    BUILD_CMD_FLAGS :=
-    ifeq ($(OS),windows)
-        TARGET = $(TARGETDIR)/$(TARGETNAME).exe
-    else
-        TARGET = $(TARGETDIR)/$(TARGETNAME)
-    endif
-else # lib
-    BUILD_CMD_FLAGS := -lib
-    ifeq ($(OS),windows)
-        TARGET = $(TARGETDIR)/$(TARGETNAME).lib
-    else
-        TARGET = $(TARGETDIR)/lib$(TARGETNAME).a
-    endif
+$(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.c
+	@mkdir -p $(OBJDIR)
+	$(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) -c -o $@ $<
 endif
 
-ifeq ($(D_COMPILER),ldc)
-    DFLAGS := $(DFLAGS) -I $(SRCDIR)
+# =======================================================================
+# Build rule
+# =======================================================================
 
-    ifeq ($(PLATFORM),x86_64)
-#        DFLAGS := $(DFLAGS) -mtriple=x86_64-linux-gnu
-    else ifeq ($(PLATFORM),x86)
-        ifeq ($(OS),windows)
-            DFLAGS := $(DFLAGS) -mtriple=i686-windows-msvc
-        else
-            DFLAGS := $(DFLAGS) -mtriple=i686-linux-gnu
-        endif
-    else ifeq ($(PLATFORM),arm64)
-        DFLAGS := $(DFLAGS) -mtriple=aarch64-linux-gnu
-    else ifeq ($(PLATFORM),arm)
-        DFLAGS := $(DFLAGS) -mtriple=arm-linux-eabihf -mcpu=cortex-a7
-    else ifeq ($(PLATFORM),riscv64)
-        # we are building the Sipeed M1s device... which is BL808 as I understand
-        DFLAGS := $(DFLAGS) -mtriple=riscv64-unknown-elf -mcpu=c906 -mattr=+m,+a,+f,+c,+v
-    else
-        $(error "Unsupported platform: $(PLATFORM)")
-    endif
-
-    ifeq ($(CONFIG),release)
-        DFLAGS := $(DFLAGS) -release -O3 -enable-inlining
-    else
-        DFLAGS := $(DFLAGS) -g -d-debug
-    endif
-else ifeq ($(D_COMPILER),dmd)
-    DFLAGS := $(DFLAGS) -I=$(SRCDIR)
-
-    ifeq ($(PLATFORM),x86_64)
-#        DFLAGS := $(DFLAGS) -m64
-    else ifeq ($(PLATFORM),x86)
-        DFLAGS := $(DFLAGS) -m32
-    else
-        $(error "Unsupported platform: $(PLATFORM)")
-    endif
-
-    ifeq ($(CONFIG),release)
-        DFLAGS := $(DFLAGS) -release -O -inline
-    else
-        DFLAGS := $(DFLAGS) -g -debug
-    endif
-else
-    $(error "Unknown D compiler: $(D_COMPILER)")
-endif
-
-ifeq ($(CONFIG),unittest)
-    DFLAGS := $(DFLAGS) -unittest -main
-endif
-
--include $(DEPFILE)
-
-$(TARGET):
+$(TARGET): $(BAREMETAL_OBJS)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
-ifeq ($(D_COMPILER),ldc)
-	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(SOURCES)
-else ifeq ($(D_COMPILER),dmd)
-ifeq ($(BUILD_TYPE),lib)
-	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(OBJDIR)/$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
+ifeq ($(COMPILER),ldc)
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)
+else ifeq ($(COMPILER),dmd)
+ifeq ($(BUILD_MODE),lib)
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(OBJDIR)/$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(URT_SOURCES) > $(DEPFILE)
 	mv "$(OBJDIR)/$(notdir $(TARGET))" "$(TARGETDIR)"
-else # exe
-	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -makedeps $(SOURCES) > $(DEPFILE)
+else
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -makedeps $(URT_SOURCES) > $(DEPFILE)
 endif
 endif
+ifeq ($(BUILD_MODE),embedded-exe)
+	$(BAREMETAL_OBJCOPY) -O binary $(OBJCOPY_FLAGS) $(TARGET) $(TARGETDIR)/$(TARGETNAME).bin
+endif
+
+# =======================================================================
+# CI: build the full cross-target matrix
+#
+# Embedded targets produce flashable urt_test images (.bin); ESP variants
+# produce LLVM bitcode (no ESP-IDF on build slave). Catches submodule-bump
+# breakage before downstream projects update.
+# =======================================================================
+
+CI_PLATFORMS := \
+    esp32 esp32-s2 esp32-s3 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2 esp32-p4 \
+    bl618 bk7231n bk7231t rp2350 stm4xx stm7xx bl808-d0 bl808-m0
+
+.PHONY: ci-build
+ci-build:
+	@set -e; for p in $(CI_PLATFORMS); do \
+	    case $$p in \
+	        bl808-d0) args="PLATFORM=bl808 PROCESSOR=c906" ;; \
+	        bl808-m0) args="PLATFORM=bl808 PROCESSOR=e907" ;; \
+	        *)        args="PLATFORM=$$p" ;; \
+	    esac; \
+	    echo "=== ci-build: $$p ($$args) ==="; \
+	    $(MAKE) --no-print-directory $$args CONFIG=unittest || exit 1; \
+	done
+	@echo ""
+	@echo "=== ci-build complete ==="
+	@find bin obj -type f \( -name 'urt_test*.bin' -o -name 'urt_test*.bc' -o -name 'urt_test*.o' \) 2>/dev/null | sort
+
+# =======================================================================
+# Clean
+# =======================================================================
 
 clean:
 	rm -rf $(OBJDIR) $(TARGETDIR)
+
+clean-all:
+	rm -rf obj bin

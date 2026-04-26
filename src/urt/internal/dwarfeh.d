@@ -6,8 +6,8 @@
 ///   DMD:  _d_throwdwarf, __dmd_begin_catch, __dmd_personality_v0
 ///   LDC:  _d_throw_exception, _d_eh_enter_catch, _d_eh_personality
 ///
-/// Lives in urt.internal (not sys.posix) so it compiles on bare-metal
-/// builds whose Makefile source list excludes sys/posix/**.
+/// Lives in urt.internal (not urt.driver.posix) so it compiles on bare-metal
+/// builds whose Makefile source list excludes urt/driver/posix/**.
 ///
 /// Ported from druntime rt/dwarfeh.d.
 module urt.internal.dwarfeh;

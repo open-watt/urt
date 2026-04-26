@@ -19,7 +19,7 @@
 # Outputs (resolved variables for caller to consume):
 #   ARCH, OS, MARCH, MATTR, MABI, PROCESSOR, BUILDNAME, COMPILER, DC
 #   DFLAGS               - augmented with triple, mattr, platform version flags
-#   URT_SOURCES          - urt/**.d + sys/<platform>/**.d (+ mbedtls.c on host)
+#   URT_SOURCES          - urt/**.d + urt/driver/<platform>/**.d (+ mbedtls.c on host)
 #   BAREMETAL_DIR        - dir containing start.S etc. (empty on host targets)
 #   BAREMETAL_SRCS       - basenames of asm/c sources for cross-gcc
 #   BAREMETAL_GCC        - cross-gcc path
@@ -42,7 +42,7 @@ CONFIG     ?= debug
 COMPILER   ?= dmd
 
 # Windows always sets env OS=Windows_NT -- normalize so OS-conditional blocks
-# (sys/windows source selection, host triple) recognize it. Plain `:=` (not
+# (driver/windows source selection, host triple) recognize it. Plain `:=` (not
 # `override`) so platform blocks can still set OS=baremetal/freertos for cross.
 ifeq ($(OS),Windows_NT)
     OS := windows
@@ -327,13 +327,14 @@ ifdef ESPRESSIF_PATH
 endif
 
 # =======================================================================
-# URT_SOURCES -- urt/**.d + sys/<platform>/**.d
+# URT_SOURCES -- urt/**.d + urt/driver/<platform>/**.d
 #
 # Caller appends app sources separately. C glue (mbedtls) is host-only.
 # =======================================================================
 
-URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(URT_SRCDIR)/sys/*')
-URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/baremetal" -type f -name '*.d')
+URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(URT_SRCDIR)/urt/driver/*')
+URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
+URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
 
 # mbedtls C glue needs host mbedtls headers -- exclude for embedded targets
 ifeq ($(filter freertos baremetal,$(OS)),)
@@ -342,38 +343,41 @@ endif
 
 ifeq ($(PLATFORM),bl808)
   ifeq ($(PROCESSOR),c906)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/bl808" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808" -type f -name '*.d')
   else ifeq ($(PROCESSOR),e907)
     # BL808 M0 core -- E907 uses same peripheral drivers as BL618
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/bl618" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
   endif
 endif
 ifeq ($(PLATFORM),bl618)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/bl618" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
 endif
 ifeq ($(PLATFORM),rp2350)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/rp2350" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/rp2350" -type f -name '*.d')
 endif
 ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/bk7231" -type f -name '*.d' 2>/dev/null)
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bk7231" -type f -name '*.d' 2>/dev/null)
 endif
 ifneq ($(filter esp%,$(PLATFORM)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/esp32" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/esp32" -type f -name '*.d')
 endif
 ifdef STM32_VARIANT
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/stm32" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/stm32" -type f -name '*.d')
 endif
 ifeq ($(OS),windows)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/windows" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/windows" -type f -name '*.d')
 endif
 ifneq ($(filter linux ubuntu freebsd,$(OS)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/sys/posix" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/posix" -type f -name '*.d')
+endif
+ifeq ($(OS),freertos)
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/freertos" -type f -name '*.d')
 endif
 
 # =======================================================================
 # DFLAGS -- version flags + previews
 #
-# Only platform/processor *version* flags live here (so URT's sys/<x> code
+# Only platform/processor *version* flags live here (so URT's urt/driver/<x> code
 # can `version (BL808)` etc.). Consumer-side `-J platforms/<x>` string
 # imports stay in the consumer Makefile.
 # =======================================================================
@@ -406,7 +410,7 @@ ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) -d-version=Tiny
 endif
 
-# Vendor/family versions consumed by URT's sys/<x> code
+# Vendor/family versions consumed by URT's urt/driver/<x> code
 ifneq ($(filter esp%,$(PLATFORM)),)
     DFLAGS := $(DFLAGS) -d-version=Espressif -d-version=lwIP -d-version=CRuntime_Picolibc
 endif
@@ -579,23 +583,23 @@ ifeq ($(COMPILER),ldc)
     ifneq ($(filter freertos baremetal,$(OS)),)
       ifeq ($(PLATFORM),bl808)
         ifeq ($(PROCESSOR),c906)
-          BAREMETAL_DIR  := $(URT_SRCDIR)/sys/bl808
+          BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808
           BAREMETAL_SRCS := start.S hbn_ram.c
         else ifeq ($(PROCESSOR),e907)
-          BAREMETAL_DIR  := $(URT_SRCDIR)/sys/bl618
+          BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl618
           BAREMETAL_SRCS := start.S
         endif
       else ifeq ($(PLATFORM),bl618)
-        BAREMETAL_DIR  := $(URT_SRCDIR)/sys/bl618
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl618
         BAREMETAL_SRCS := start.S
       else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
-        BAREMETAL_DIR  := $(URT_SRCDIR)/sys/bk7231
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bk7231
         BAREMETAL_SRCS := start.S
       else ifeq ($(PLATFORM),rp2350)
-        BAREMETAL_DIR  := $(URT_SRCDIR)/sys/rp2350
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/rp2350
         BAREMETAL_SRCS := start.S boot2.S
       else ifdef STM32_VARIANT
-        BAREMETAL_DIR  := $(URT_SRCDIR)/sys/stm32
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/stm32
         BAREMETAL_SRCS := start.S
       endif
 

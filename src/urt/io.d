@@ -25,7 +25,7 @@ template write_to(WriteTarget target, bool newline = false)
             }
             else version (FreeStanding)
             {
-                import sys.baremetal.uart : uart0_puts;
+                import urt.driver.uart : uart0_puts;
                 uart0_puts(str);
                 static if (newline)
                     uart0_puts("\n");

@@ -1,7 +1,7 @@
-/// BL618 platform package (T-Head E907 RV32IMAFC)
-///
-/// Provides sys_init() as the single entry point for all
-/// hardware initialization. Call from main() before anything else.
+// BL618 platform package (T-Head E907 RV32IMAFC)
+//
+// Provides sys_init() as the single entry point for all
+// hardware initialization. Call from main() before anything else.
 module urt.driver.bl618;
 
 public import urt.driver.bl618.uart;
@@ -14,13 +14,13 @@ private extern(C) void __register_frame_info(const void*, void*);
 private extern(C) extern const ubyte __eh_frame_start;
 private ubyte[48] __eh_frame_object;  // pre-allocated storage for libgcc
 
-/// Initialize BL618 hardware.
-/// Call once at the top of main() before any other OpenWatt code.
-///
-/// Order matters:
-///   1. UART - so we have debug output for everything after
-///   2. IRQ table - already done by start.S (_init_interrupts)
-///   3. Timer - periodic tick for main loop
+// Initialize BL618 hardware.
+// Call once at the top of main() before any other OpenWatt code.
+//
+// Order matters:
+//   1. UART - so we have debug output for everything after
+//   2. IRQ table - already done by start.S (_init_interrupts)
+//   3. Timer - periodic tick for main loop
 extern(C) void sys_init()
 {
     // Register .eh_frame with libgcc's unwinder so that DWARF exception

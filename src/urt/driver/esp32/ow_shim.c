@@ -87,6 +87,60 @@ uint32_t ow_task_priority_get(void *handle)
     return uxTaskPriorityGet((TaskHandle_t)handle);
 }
 
+// -- GPIO wrappers (software GPIO; peripheral function routing goes
+//    through ESP-IDF's signal matrix on a per-peripheral basis, not
+//    through this module).
+
+#include "driver/gpio.h"
+#include "soc/gpio_num.h"
+
+// pull: 0=none, 1=up, 2=down (matches D Pull enum encoding)
+static gpio_pull_mode_t ow_pull_to_idf(int pull)
+{
+    return (pull == 1) ? GPIO_PULLUP_ONLY :
+           (pull == 2) ? GPIO_PULLDOWN_ONLY : GPIO_FLOATING;
+}
+
+void ow_gpio_output_init(int pin, int initial)
+{
+    gpio_reset_pin((gpio_num_t)pin);
+    gpio_set_direction((gpio_num_t)pin, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)pin, initial);
+}
+
+void ow_gpio_input_init(int pin, int pull)
+{
+    gpio_reset_pin((gpio_num_t)pin);
+    gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
+    gpio_set_pull_mode((gpio_num_t)pin, ow_pull_to_idf(pull));
+}
+
+void ow_gpio_output_set(int pin, int value)
+{
+    gpio_set_level((gpio_num_t)pin, value);
+}
+
+int ow_gpio_input_read(int pin)
+{
+    return gpio_get_level((gpio_num_t)pin);
+}
+
+void ow_gpio_set_pull(int pin, int pull)
+{
+    gpio_set_pull_mode((gpio_num_t)pin, ow_pull_to_idf(pull));
+}
+
+void ow_gpio_release(int pin)
+{
+    gpio_reset_pin((gpio_num_t)pin);
+}
+
+uint32_t ow_gpio_count(void)
+{
+    return SOC_GPIO_PIN_COUNT;
+}
+
+
 // -- UART HAL wrappers --
 
 #include "soc/soc_caps.h"

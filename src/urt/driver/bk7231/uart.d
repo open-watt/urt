@@ -14,6 +14,7 @@ module urt.driver.bk7231.uart;
 import core.volatile;
 
 import urt.driver.uart : FlowControl, Parity, StopBits, UartConfig;
+import urt.driver.gpio : Pull, gpio_set_function;
 
 nothrow @nogc:
 
@@ -139,18 +140,10 @@ private enum uint PWD_UART1_CLK = 1 << 0;
 private enum uint PWD_UART2_CLK = 1 << 1;
 
 
-// ─── GPIO registers for pin mux ──────────────────────────────────────
-// From SDK gpio.h / gpio.c: gpio_enable_second_function()
-
-private enum uint GPIO_BASE     = 0x0080_2800;
-private enum uint GPIO_FUNC_CFG = GPIO_BASE + 32 * 4;  // 0x0080_2880
-
-// Per-pin config register values (from SDK gpio.c gpio_config())
-private enum uint GMODE_SECOND_FUNC_PULL_UP = 0x78;  // FUNC_EN | OUTPUT_EN | PULL_EN | PULL_UP
-
-// Default pin assignments
-private enum ubyte[2] default_tx_pins = [11, 0];  // UART1=GPIO11, UART2=GPIO0
-private enum ubyte[2] default_rx_pins = [10, 1];  // UART1=GPIO10, UART2=GPIO1
+// UART pins are fixed by hardware; perial mode 0 is the only valid value.
+private enum ubyte[2] default_tx_pins = [11, 0];   // UART1=GPIO11, UART2=GPIO0
+private enum ubyte[2] default_rx_pins = [10, 1];   // UART1=GPIO10, UART2=GPIO1
+private enum uint UART_PERIAL_MODE = 0;
 
 
 // ─── Register access helpers ─────────────────────────────────────────
@@ -166,26 +159,17 @@ private void reg_write(uint addr, uint val)
 }
 
 
-// ─── GPIO pin mux ────────────────────────────────────────────────────
-// Mirrors SDK gpio_enable_second_function() for UART modes.
-// Both GFUNC_MODE_UART1 and GFUNC_MODE_UART2 use PERIAL_MODE_1 (value 0)
-// with config_mode = GMODE_SECOND_FUNC_PULL_UP.
-
-private void gpio_setup_uart_pins(uint id)
+private bool gpio_setup_uart_pins(uint id, ref const UartConfig cfg)
 {
-    ubyte tx_pin = default_tx_pins[id];
-    ubyte rx_pin = default_rx_pins[id];
+    ubyte tx_pin = cfg.tx_gpio == ubyte.max ? default_tx_pins[id] : cfg.tx_gpio;
+    ubyte rx_pin = cfg.rx_gpio == ubyte.max ? default_rx_pins[id] : cfg.rx_gpio;
 
-    // Set per-pin config to second-function with pull-up
-    reg_write(GPIO_BASE + tx_pin * 4, GMODE_SECOND_FUNC_PULL_UP);
-    reg_write(GPIO_BASE + rx_pin * 4, GMODE_SECOND_FUNC_PULL_UP);
+    if (tx_pin != default_tx_pins[id] || rx_pin != default_rx_pins[id])
+        return false;
 
-    // Set function mux to PERIAL_MODE_1 (value 0) for each pin.
-    // GPIO_FUNC_CFG has 2 bits per pin for GPIO 0-15.
-    uint func_cfg = reg_read(GPIO_FUNC_CFG);
-    func_cfg &= ~(0x3u << (tx_pin * 2));
-    func_cfg &= ~(0x3u << (rx_pin * 2));
-    reg_write(GPIO_FUNC_CFG, func_cfg);
+    gpio_set_function(tx_pin, UART_PERIAL_MODE, Pull.up);
+    gpio_set_function(rx_pin, UART_PERIAL_MODE, Pull.up);
+    return true;
 }
 
 
@@ -220,7 +204,9 @@ bool uart_hw_init(uint id, UartConfig cfg)
     icu_uart_clock_enable(id);
 
     // Step 2: Configure GPIO pins for UART function (SDK: CMD_GPIO_ENABLE_SECOND)
-    gpio_setup_uart_pins(id);
+    const pins_ok = gpio_setup_uart_pins(id, cfg);
+    if (!pins_ok)
+        return false;
 
     // Step 3: Disable TX/RX during configuration
     reg_write(base + REG_CONFIG, 0);

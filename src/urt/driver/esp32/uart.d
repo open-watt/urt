@@ -33,7 +33,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg)
     if (id >= num_uarts)
         return false;
     byte tx = cfg.tx_gpio == ubyte.max ? -1 : cast(byte)cfg.tx_gpio;
-    byte rx = cfg.tx_gpio == ubyte.max ? -1 : cast(byte)cfg.tx_gpio;
+    byte rx = cfg.rx_gpio == ubyte.max ? -1 : cast(byte)cfg.rx_gpio;
     return ow_uart_open(id, cfg.baud_rate, cfg.data_bits, cast(ubyte)cfg.stop_bits, cast(ubyte)cfg.parity, tx, rx) != 0;
 }
 

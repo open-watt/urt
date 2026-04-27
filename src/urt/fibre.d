@@ -574,12 +574,19 @@ else
                 {
                     // GDC: GCC extended asm (AT&T). DMD-style intel asm is not
                     // supported by GDC's frontend.
+                    //
+                    // The .cfi_undefined %rip terminates DWARF stack-walking
+                    // at co_swap. Without it, when an exception thrown inside
+                    // a fibre triggers stack-trace capture, _Unwind_Backtrace
+                    // walks past co_swap into the fibre's stack-base
+                    // GuardBand and segfaults.
                     pragma(inline, false)
                     extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
                     {
                         asm nothrow @nogc
                         {
                             `
+                            .cfi_undefined %rip
                             movq %%rsp,    (%%rsi)
                             movq    (%%rdi), %%rsp
                             popq %%rax
@@ -795,12 +802,16 @@ else
             p[12] = cast(void*)top; // x29 (frame pointer)
         }
 
+        // .cfi_undefined x30 terminates DWARF unwinding at co_swap so an
+        // exception thrown in a fibre doesn't walk past co_swap into the
+        // fibre's GuardBand sentinel during stack-trace capture.
         pragma(inline, false)
         extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
         {
             asm nothrow @nogc
             {
                 `
+                .cfi_undefined x30
                 mov x16,sp
                 stp x16,x30,[x1]
                 ldp x16,x30,[x0]

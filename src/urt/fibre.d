@@ -1,5 +1,6 @@
 module urt.fibre;
 
+import urt.attribute;
 import urt.mem;
 import urt.time;
 import urt.util : is_aligned, max;
@@ -569,28 +570,62 @@ else
                 // State: rsp, rbp, rbx, r12-r15
                 enum SaveStateLen = 7;
 
-                pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                version (DigitalMars)
                 {
-                    asm nothrow @nogc
+                    pragma(inline, false)
+                    extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
                     {
-                        naked;
-                        mov [RSI],RSP;
-                        mov RSP,[RDI];
-                        pop RAX;
-                        mov [RSI+ 8],RBP;
-                        mov [RSI+16],RBX;
-                        mov [RSI+24],R12;
-                        mov [RSI+32],R13;
-                        mov [RSI+40],R14;
-                        mov [RSI+48],R15;
-                        mov RBP,[RDI+ 8];
-                        mov RBX,[RDI+16];
-                        mov R12,[RDI+24];
-                        mov R13,[RDI+32];
-                        mov R14,[RDI+40];
-                        mov R15,[RDI+48];
-                        jmp RAX;
+                        asm nothrow @nogc
+                        {
+                            naked;
+                            mov [RSI],RSP;
+                            mov RSP,[RDI];
+                            pop RAX;
+                            mov [RSI+ 8],RBP;
+                            mov [RSI+16],RBX;
+                            mov [RSI+24],R12;
+                            mov [RSI+32],R13;
+                            mov [RSI+40],R14;
+                            mov [RSI+48],R15;
+                            mov RBP,[RDI+ 8];
+                            mov RBX,[RDI+16];
+                            mov R12,[RDI+24];
+                            mov R13,[RDI+32];
+                            mov R14,[RDI+40];
+                            mov R15,[RDI+48];
+                            jmp RAX;
+                        }
+                    }
+                }
+                else // LDC + GDC: GCC extended asm (AT&T)
+                {
+                    pragma(inline, false)
+                    extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+                    {
+                        asm nothrow @nogc
+                        {
+                            `
+                            movq %%rsp,    (%%rsi)
+                            movq    (%%rdi), %%rsp
+                            popq %%rax
+                            movq %%rbp,  8(%%rsi)
+                            movq %%rbx, 16(%%rsi)
+                            movq %%r12, 24(%%rsi)
+                            movq %%r13, 32(%%rsi)
+                            movq %%r14, 40(%%rsi)
+                            movq %%r15, 48(%%rsi)
+                            movq  8(%%rdi), %%rbp
+                            movq 16(%%rdi), %%rbx
+                            movq 24(%%rdi), %%r12
+                            movq 32(%%rdi), %%r13
+                            movq 40(%%rdi), %%r14
+                            movq 48(%%rdi), %%r15
+                            jmp *%%rax
+                            `
+                            : // no outputs
+                            : // no inputs (function is @naked, ABI puts newCtx in rdi, oldCtx in rsi)
+                            : "memory";
+                        }
                     }
                 }
             }

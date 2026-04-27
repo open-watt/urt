@@ -33,22 +33,11 @@ URT_I_FILES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_FILES))
 URT_SOURCES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_SOURCES))
 DFLAGS := -I $(GDC_I_DIR) $(DFLAGS)
 
-# co_swap.S replaces the @naked D version of co_swap, which GDC handles
-# unreliably (silently breaks the prologue contract on x86_64, unrecognized
-# attribute on aarch64). Compiled by host gcc, linked into the final binary.
-URT_S_FILES := $(URT_SRCDIR)/urt/co_swap.S
-URT_S_OBJECTS := $(patsubst $(URT_SRCDIR)/%.S,$(OBJDIR)/host/%.o,$(URT_S_FILES))
-URT_SOURCES := $(URT_SOURCES) $(URT_S_OBJECTS)
-
 $(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
 	@mkdir -p $(@D)
 	gcc -E -P -dD $< | \
 	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
 	         > $@
-
-$(OBJDIR)/host/%.o: $(URT_SRCDIR)/%.S
-	@mkdir -p $(@D)
-	gcc -c -o $@ $<
 endif
 
 # Linker script selection for cross-target unittest builds (ESP excluded --
@@ -143,7 +132,7 @@ endif
 # Build rule
 # =======================================================================
 
-$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES) $(URT_S_OBJECTS)
+$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)

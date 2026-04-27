@@ -699,9 +699,13 @@ else ifeq ($(COMPILER),gdc)
     endif
 
     # Strip druntime/phobos, use URT's own object.d.
+    # -fno-druntime drops implicit druntime imports and links, but it also
+    # implicitly disables RTTI/exceptions/ModuleInfo (betterC-like). URT
+    # provides its own TypeInfo classes and handles exceptions, so override
+    # those implications with explicit -frtti -fexceptions.
     # -fno-omit-frame-pointer: URT's exception unwinder walks the frame chain
     # (matches LDC's -frame-pointer=all).
-    DFLAGS := $(DFLAGS) -fno-druntime -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
+    DFLAGS := $(DFLAGS) -fno-druntime -frtti -fexceptions -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
 
     ifeq ($(ARCH),x86_64)
         DFLAGS := $(DFLAGS) -m64

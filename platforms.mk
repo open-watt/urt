@@ -695,7 +695,9 @@ else ifeq ($(COMPILER),gdc)
 
     DFLAGS := $(DFLAGS) $(addprefix -fpreview=,$(D_PREVIEWS))
     ifeq ($(CONFIG),unittest)
-        DFLAGS := $(DFLAGS) -funittest -fmain
+        # URT defines its own extern(C) main in src/urt/package.d, so don't
+        # pass -fmain (which would emit a duplicate _Dmain).
+        DFLAGS := $(DFLAGS) -funittest
     endif
 
     # Strip druntime/phobos, use URT's own object.d.

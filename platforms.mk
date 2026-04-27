@@ -702,16 +702,15 @@ else ifeq ($(COMPILER),gdc)
 
     # Strip druntime/phobos, use URT's own object.d.
     # -fno-druntime is too aggressive: it implies -fno-rtti -fno-exceptions
-    # -fno-moduleinfo, but uRT defines its own TypeInfo (needs RTTI) and
-    # uses try-catch (needs exceptions). Pick the subset we actually want:
+    # -fno-moduleinfo, but uRT defines its own TypeInfo (needs RTTI), uses
+    # try-catch (needs exceptions), and walks ModuleInfo to enumerate
+    # unittest functions. Pick the subset we actually want:
     #   -nophoboslib       skip linking libgphobos
-    #   -fno-moduleinfo    don't emit ModuleInfo
-    # Keep RTTI and exceptions ON so uRT's object.d can provide TypeInfo and
-    # the exception runtime. GDC's bundled druntime path is shadowed per
-    # module under src/core/ (newaa, array.construction, cast_, ...).
+    # GDC's bundled druntime path is shadowed per module under src/core/
+    # (newaa, array.construction, cast_, ...).
     # -fno-omit-frame-pointer: URT's exception unwinder walks the frame chain
     # (matches LDC's -frame-pointer=all).
-    DFLAGS := $(DFLAGS) -nophoboslib -fno-moduleinfo -fno-omit-frame-pointer -I $(URT_SRCDIR)
+    DFLAGS := $(DFLAGS) -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
 
     # GDC ignores pragma(lib, "mbedtls") on most binutils setups (.deplibs
     # is not honored by ld). Pass explicit -l flags on host posix builds.

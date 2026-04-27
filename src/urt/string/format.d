@@ -1,6 +1,7 @@
 module urt.string.format;
 
 import urt.conv : parse_int_fast;
+import urt.lifetime : forward;
 import urt.string;
 import urt.traits;
 import urt.util;

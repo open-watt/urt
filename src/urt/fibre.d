@@ -570,35 +570,10 @@ else
                 // State: rsp, rbp, rbx, r12-r15
                 enum SaveStateLen = 7;
 
-                version (DigitalMars)
+                version (GNU)
                 {
-                    pragma(inline, false)
-                    extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
-                    {
-                        asm nothrow @nogc
-                        {
-                            naked;
-                            mov [RSI],RSP;
-                            mov RSP,[RDI];
-                            pop RAX;
-                            mov [RSI+ 8],RBP;
-                            mov [RSI+16],RBX;
-                            mov [RSI+24],R12;
-                            mov [RSI+32],R13;
-                            mov [RSI+40],R14;
-                            mov [RSI+48],R15;
-                            mov RBP,[RDI+ 8];
-                            mov RBX,[RDI+16];
-                            mov R12,[RDI+24];
-                            mov R13,[RDI+32];
-                            mov R14,[RDI+40];
-                            mov R15,[RDI+48];
-                            jmp RAX;
-                        }
-                    }
-                }
-                else // LDC + GDC: GCC extended asm (AT&T)
-                {
+                    // GDC: GCC extended asm (AT&T). DMD-style intel asm is not
+                    // supported by GDC's frontend.
                     pragma(inline, false)
                     extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
                     {
@@ -625,6 +600,33 @@ else
                             : // no outputs
                             : // no inputs (function is @naked, ABI puts newCtx in rdi, oldCtx in rsi)
                             : "memory";
+                        }
+                    }
+                }
+                else // DMD + LDC: DMD-style intel asm
+                {
+                    pragma(inline, false)
+                    extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                    {
+                        asm nothrow @nogc
+                        {
+                            naked;
+                            mov [RSI],RSP;
+                            mov RSP,[RDI];
+                            pop RAX;
+                            mov [RSI+ 8],RBP;
+                            mov [RSI+16],RBX;
+                            mov [RSI+24],R12;
+                            mov [RSI+32],R13;
+                            mov [RSI+40],R14;
+                            mov [RSI+48],R15;
+                            mov RBP,[RDI+ 8];
+                            mov RBX,[RDI+16];
+                            mov R12,[RDI+24];
+                            mov R13,[RDI+32];
+                            mov R14,[RDI+40];
+                            mov R15,[RDI+48];
+                            jmp RAX;
                         }
                     }
                 }

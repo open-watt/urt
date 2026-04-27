@@ -5,6 +5,11 @@ public import urt.lifetime : emplace, moveEmplace, forward, move;
 public import urt.mem.alloc;
 public import urt.mem.allocator;
 
+// GDC's frontend ignores URT's object.d shadow for wchar_t and pulls in its
+// own bundled druntime header path; pick wchar_t up explicitly there.
+version (GNU)
+    import core.stdc.stddef : wchar_t;
+
 nothrow @nogc:
 
 

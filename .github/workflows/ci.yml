@@ -110,14 +110,35 @@ jobs:
       - name: Build unittest
         run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=${{ matrix.compiler }}
 
-      - name: Disassemble co_swap (gdc diagnostics)
+      - name: GDC diagnostics
         if: matrix.compiler == 'gdc' && matrix.os == 'ubuntu'
         run: |
           objdump -d -M intel --disassemble=co_swap \
             ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test || true
+          # Also dump co_switch and the unittest fibre body for the
+          # urt.fibre crash so we can see the whole call site.
+          objdump -d -M intel ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test \
+            | awk '/<.*co_switch>:/,/^$/' | head -60 || true
 
-      - name: Run unittest
-        run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }}
+      - name: Run unittest (collect core on crash)
+        run: |
+          sudo apt-get install -y gdb || true
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern=core.%p || true
+          mkdir -p cores; cd cores
+          ../bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }} || rc=$?
+          if [ -n "$rc" ]; then
+            echo "exit code: $rc"
+            ls -la
+            for c in core* /var/lib/apport/coredump/*; do
+              [ -f "$c" ] || continue
+              echo "=== $c ==="
+              gdb -batch -ex 'bt' -ex 'info registers' \
+                ../bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }} \
+                "$c" 2>&1 | head -80
+            done
+            exit $rc
+          fi
 
       - name: Build release library
         if: github.ref == 'refs/heads/release'

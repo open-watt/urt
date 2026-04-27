@@ -81,12 +81,13 @@ jobs:
         run: |
           sudo dpkg -i ~/gdc-debs/*.deb || sudo apt-get install -f -y --no-install-recommends
           sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
-          # Force GDC to use uRT's object.d / core.* shadows instead of its
-          # bundled druntime: physically remove the bundled D headers. With
-          # them gone, GDC's only source of `object` and `core.*` is uRT's
-          # src/ (via -I). See platforms.mk for context.
-          sudo rm -f /usr/lib/gcc/*-linux-gnu/16/include/d/object.d
-          sudo rm -rf /usr/lib/gcc/*-linux-gnu/16/include/d/core
+          # Force GDC to use uRT's object.d / core.* / std.* shadows instead
+          # of its bundled druntime+phobos: rm the entire bundled D include
+          # tree. With it gone, GDC's only source of D modules is uRT's src/
+          # (via -I). uRT takes full responsibility for object.d, _d_*
+          # runtime hooks, and any Phobos-style symbols that GDC's lowering
+          # needs (e.g. std.math.pow for the ^^ operator).
+          sudo rm -rf /usr/lib/gcc/*-linux-gnu/16/include/d
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

@@ -1,5 +1,10 @@
 URT_SRCDIR := src
 
+# The first non-pattern target in this Makefile -- needed up-front because
+# the GDC block below defines a static rule for the preprocessed mbedtls.i
+# that would otherwise become the default goal and short-circuit the build.
+.DEFAULT_GOAL := all
+
 include platforms.mk
 
 # =======================================================================
@@ -149,6 +154,9 @@ endif
 # =======================================================================
 # Build rule
 # =======================================================================
+
+.PHONY: all
+all: $(TARGET)
 
 $(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES)
 	mkdir -p $(OBJDIR) $(TARGETDIR)

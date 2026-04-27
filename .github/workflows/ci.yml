@@ -110,6 +110,12 @@ jobs:
       - name: Build unittest
         run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=${{ matrix.compiler }}
 
+      - name: Disassemble co_swap (gdc diagnostics)
+        if: matrix.compiler == 'gdc' && matrix.os == 'ubuntu'
+        run: |
+          objdump -d -M intel --disassemble=co_swap \
+            ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test || true
+
       - name: Run unittest
         run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }}
 

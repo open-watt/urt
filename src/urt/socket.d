@@ -8,6 +8,13 @@ public import urt.time;
 
 version (BareMetal)
     version = SocketCallbacks;
+version (UseInternalIPStack)
+    version = SocketCallbacks;
+version (Windows)
+{
+    version (SocketCallbacks) {} else
+        version = WindowsAndNotCallbacks;
+}
 
 version (SocketCallbacks)
 {
@@ -355,9 +362,15 @@ struct Socket
 nothrow @nogc:
     enum Socket invalid = Socket();
 
+    version (SocketCallbacks)
+    this(SocketHandle h) pure { handle = h; }
+
     bool opCast(T : bool)() const => handle != invalid.handle;
 
     void opAssign(typeof(null)) { handle = invalid.handle; }
+
+    version (SocketCallbacks)
+    SocketHandle raw_handle() const pure => handle;
 
 private:
     SocketHandle handle = INVALID_SOCKET;
@@ -1203,7 +1216,7 @@ Result get_socket_option(Socket socket, SocketOption option, out IPAddr output)
 
 Result set_keepalive(Socket socket, bool enable, Duration keepIdle, Duration keepInterval, int keepCount)
 {
-    version (Windows)
+    version (WindowsAndNotCallbacks)
     {
         tcp_keepalive alive;
         alive.onoff = enable ? 1 : 0;

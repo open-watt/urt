@@ -35,7 +35,12 @@ DFLAGS := -I $(GDC_I_DIR) $(DFLAGS)
 
 $(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
 	@mkdir -p $(@D)
-	gcc -E -P -o $@ $<
+	gcc -E -P $< | \
+	  sed -E -e 's/\b(register|__restrict|__restrict__)\b//g' \
+	         -e 's/__attribute__[[:space:]]*\(\([^)]*(\([^)]*\)[^)]*)*\)\)//g' \
+	         -e 's/__asm__[[:space:]]*\([^)]*\)//g' \
+	         -e 's/__extension__//g' \
+	         > $@
 endif
 
 # Linker script selection for cross-target unittest builds (ESP excluded --

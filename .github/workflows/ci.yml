@@ -82,9 +82,16 @@ jobs:
           sudo dpkg -i ~/gdc-debs/*.deb || sudo apt-get install -f -y --no-install-recommends
           sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
           # Bundled druntime/phobos stay on disk: -I src takes priority so
-          # uRT's object.d / core.* / std.* shadows win, and modules we don't
-          # shadow (e.g. __importc_builtins.d, gcc.*) resolve from the bundled
-          # tree. We don't link druntime, so unused symbols don't matter.
+          # uRT's core.* / std.* shadows win, and modules we don't shadow
+          # (e.g. __importc_builtins.d, gcc.*) resolve from the bundled tree.
+          # We don't link druntime, so unused symbols don't matter.
+          #
+          # Exception: `object` is special-cased by GDC (hardcoded druntime
+          # lookup wins over -I), so the bundled object.d must be removed
+          # to expose uRT's src/object.d.
+          for d in /usr/lib/gcc/*-linux-gnu/16/include/d; do
+            sudo rm -f "$d/object.d"
+          done
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

@@ -347,7 +347,8 @@ URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(UR
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
 
-# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets
+# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets.
+# urt/internal/os.c already enters via the posix driver dir below.
 ifeq ($(filter freertos baremetal,$(OS)),)
     URT_SOURCES := $(URT_SOURCES) $(URT_SRCDIR)/urt/internal/mbedtls.c
 endif

@@ -20,8 +20,9 @@ version (GNU)
 {
     version = LDC_OR_GDC;
 
-    static assert(false, "TODO: how to do naked functions, other intrinsics in GDC?");
-
+    // TODO: naked functions and other intrinsics still need GDC implementations
+    // (see usage sites). Removed the eager static assert so the build can
+    // progress past this module and surface the real gaps.
     enum IS_GDC = true;
 }
 else

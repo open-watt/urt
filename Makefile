@@ -19,6 +19,25 @@ include platforms.mk
 OBJDIR    := obj/$(BUILDNAME)_$(CONFIG)
 TARGETDIR := bin/$(BUILDNAME)_$(CONFIG)
 
+# =======================================================================
+# GDC ImportC: GDC's ImportC does not preprocess #include directives, so
+# any *.c the D side imports (urt.internal.os, urt.internal.mbedtls, ...)
+# must be preprocessed to *.i first via the host C compiler. We stage
+# them in $(OBJDIR)/imports/ and prepend that to the import path so GDC
+# resolves urt.internal.os to os.i instead of os.c.
+# =======================================================================
+ifeq ($(COMPILER),gdc)
+GDC_I_DIR := $(OBJDIR)/imports
+URT_C_FILES := $(shell find "$(URT_SRCDIR)" -type f -name '*.c' -not -path '$(URT_SRCDIR)/urt/driver/*')
+URT_I_FILES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_FILES))
+URT_SOURCES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_SOURCES))
+DFLAGS := -I $(GDC_I_DIR) $(DFLAGS)
+
+$(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
+	@mkdir -p $(@D)
+	gcc -E -P -o $@ $<
+endif
+
 # Linker script selection for cross-target unittest builds (ESP excluded --
 # no ESP-IDF on build slave). platforms.mk falls back to compile-only when
 # BAREMETAL_LD isn't set.
@@ -111,7 +130,7 @@ endif
 # Build rule
 # =======================================================================
 
-$(TARGET): $(BAREMETAL_OBJS)
+$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)

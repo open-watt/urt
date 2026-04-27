@@ -50,7 +50,7 @@ jobs:
       # to invalidate the cache when the PPA pushes a new gdc-16.
       - name: Install GDC (Ubuntu)
         if: matrix.compiler == 'gdc'
-        uses: awalsh128/cache-apt-pkgs-action@latest
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.0
         with:
           packages: gdc-16
           add-repository: ppa:ubuntu-toolchain-r/test

@@ -43,16 +43,21 @@ jobs:
       # https://github.com/actions/runner-images/issues  (filed 2026-04-24
       # "Add Ubuntu 26.04 LTS (Resolute Raccoon)"). Noble (24.04) ships gcc-13;
       # numbat (26.04) will ship gcc-16+ which has the DMD frontend 2.112+
-      # that uRT requires. Until then, this PPA install runs over launchpad.net
-      # (not Azure-mirrored) and burns ~10 minutes per GDC job. The Docker
-      # `gcc:16` route doesn't help -- Docker Hub tops out at `gcc:15`.
+      # that uRT requires. Until then, gdc-16 is fetched from
+      # ppa:ubuntu-toolchain-r/test (launchpad.net, not Azure-mirrored, ~10 min
+      # cold) and the install is wrapped in cache-apt-pkgs-action so subsequent
+      # runs restore from GHA's Azure cache in seconds. Bump `version:` below
+      # to invalidate the cache when the PPA pushes a new gdc-16.
       - name: Install GDC (Ubuntu)
         if: matrix.compiler == 'gdc'
-        run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          sudo apt-get install -y gdc-16
-          sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: gdc-16
+          add-repository: ppa:ubuntu-toolchain-r/test
+          version: 1
+      - name: Select gdc-16
+        if: matrix.compiler == 'gdc'
+        run: sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

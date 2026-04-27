@@ -36,7 +36,7 @@ DFLAGS := -I $(GDC_I_DIR) $(DFLAGS)
 $(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
 	@mkdir -p $(@D)
 	gcc -E -P $< | \
-	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*\(\((?:[^()]|\([^)]*\))*\)\)//g; s/__asm__\s*\("[^"]*"\)//g' \
+	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
 	         > $@
 endif
 

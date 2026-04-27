@@ -50,10 +50,13 @@ jobs:
       # actions/cache so subsequent runs restore from GHA's Azure cache in
       # seconds. Bump `gdc-cache-v<N>` below to invalidate the cache when a
       # new gdc-16 ships from the PPA.
-      - name: Cache gdc-16 .debs
+      # Restore now; save unconditionally at the end (build still fails on
+      # URT-side D-source issues so we need the cache to persist across red
+      # runs while we chip at them).
+      - name: Restore gdc-16 .debs
         if: matrix.compiler == 'gdc'
         id: gdc-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/gdc-debs
           key: gdc-16-debs-${{ runner.os }}-${{ runner.arch }}-v1
@@ -64,10 +67,15 @@ jobs:
           sudo apt-get update
           mkdir -p ~/gdc-debs
           cd ~/gdc-debs
-          # download-only: pulls gdc-16 + transitive deps as .debs, no install
           apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests \
             --no-conflicts --no-breaks --no-replaces --no-enhances \
             --no-pre-depends gdc-16 | grep "^\w" | sort -u)
+      - name: Save gdc-16 .debs
+        if: matrix.compiler == 'gdc' && steps.gdc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/gdc-debs
+          key: ${{ steps.gdc-cache.outputs.cache-primary-key }}
       - name: Install gdc-16 from .debs
         if: matrix.compiler == 'gdc'
         run: |

@@ -88,9 +88,12 @@ jobs:
           #
           # Exception: `object` is special-cased by GDC (hardcoded druntime
           # lookup wins over -I), so the bundled object.d must be removed
-          # to expose uRT's src/object.d.
+          # to expose uRT's src/object.d. The same problem hits nested
+          # modules under std/math/ -- gdc resolves std.math.exponential to
+          # its bundled file before checking -I src/std/math/exponential.d.
           for d in /usr/lib/gcc/*-linux-gnu/16/include/d; do
             sudo rm -f "$d/object.d"
+            sudo rm -rf "$d/std"
           done
 
       - name: Install mbedtls (Linux host)

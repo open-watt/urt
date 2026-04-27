@@ -713,6 +713,12 @@ else ifeq ($(COMPILER),gdc)
     # (matches LDC's -frame-pointer=all).
     DFLAGS := $(DFLAGS) -nophoboslib -fno-moduleinfo -fno-omit-frame-pointer -I $(URT_SRCDIR)
 
+    # GDC ignores pragma(lib, "mbedtls") on most binutils setups (.deplibs
+    # is not honored by ld). Pass explicit -l flags on host posix builds.
+    ifneq ($(filter linux ubuntu freebsd,$(OS)),)
+        DFLAGS := $(DFLAGS) -lmbedtls -lmbedx509 -lmbedcrypto
+    endif
+
     ifeq ($(ARCH),x86_64)
         DFLAGS := $(DFLAGS) -m64
     else ifeq ($(ARCH),x86)

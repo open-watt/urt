@@ -87,7 +87,7 @@ jobs:
           # gcc.builtins for __builtin_* intrinsics) that aren't part of
           # druntime/phobos and can't be replaced by uRT.
           for d in /usr/lib/gcc/*-linux-gnu/16/include/d; do
-            sudo find "$d" -mindepth 1 -maxdepth 1 ! -name 'gcc' -exec rm -rf {} +
+            sudo find "$d" -mindepth 1 -maxdepth 1 ! -name 'gcc' ! -name '__importc_builtins.d' -exec rm -rf {} +
           done
 
       - name: Install mbedtls (Linux host)

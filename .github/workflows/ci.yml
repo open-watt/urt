@@ -14,17 +14,6 @@ jobs:
   host:
     name: host ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.compiler }}
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || format('{0}-latest', matrix.os) }}
-    # GDC matrix entries pull `gcc:16` from Docker Hub instead of installing
-    # via PPA -- GHA noble runners only ship gcc-13 and the toolchain PPA fetch
-    # over launchpad.net (not Azure-mirrored) takes 10+ minutes per job.
-    #
-    # TODO: drop `container: gcc:16` and switch GDC entries back to the bare
-    # ubuntu-26.04 (and ubuntu-26.04-arm) runners once GHA ships them. Tracking
-    # issue: https://github.com/actions/runner-images/issues  (filed 2026-04-24
-    # "Add Ubuntu 26.04 LTS (Resolute Raccoon)"). Noble (24.04) ships gcc-13;
-    # numbat (26.04) is expected to ship gcc-16+ which has the DMD frontend
-    # 2.112+ that uRT requires.
-    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,9 +25,8 @@ jobs:
           - { compiler: dmd, arch: arm64 } # DMD arm64 still WIP
         include:
           # GDC: host-only, native arch only (cross promotes to LDC).
-          # Pulled from Docker Hub (gcc:16 multi-arch), so gdc is pre-installed.
-          - { os: ubuntu, compiler: gdc, arch: x86_64, container: 'gcc:16' }
-          - { os: ubuntu, compiler: gdc, arch: arm64,  container: 'gcc:16' }
+          - { os: ubuntu, compiler: gdc, arch: x86_64 }
+          - { os: ubuntu, compiler: gdc, arch: arm64 }
     env:
       MAKE_OS: ${{ matrix.os == 'ubuntu' && 'linux' || matrix.os }}
     steps:
@@ -50,12 +38,25 @@ jobs:
         with:
           compiler: ${{ matrix.compiler == 'dmd' && 'dmd-master' || matrix.compiler }}
 
+      # TODO: drop the PPA dance and switch to the bare ubuntu-26.04 (and
+      # ubuntu-26.04-arm) runners once GHA ships them. Tracking issue:
+      # https://github.com/actions/runner-images/issues  (filed 2026-04-24
+      # "Add Ubuntu 26.04 LTS (Resolute Raccoon)"). Noble (24.04) ships gcc-13;
+      # numbat (26.04) will ship gcc-16+ which has the DMD frontend 2.112+
+      # that uRT requires. Until then, this PPA install runs over launchpad.net
+      # (not Azure-mirrored) and burns ~10 minutes per GDC job. The Docker
+      # `gcc:16` route doesn't help -- Docker Hub tops out at `gcc:15`.
+      - name: Install GDC (Ubuntu)
+        if: matrix.compiler == 'gdc'
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gdc-16
+          sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
+
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'
-        run: |
-          SUDO=$([ "$(id -u)" = 0 ] && echo "" || echo "sudo")
-          $SUDO apt-get update
-          $SUDO apt-get install -y libmbedtls-dev
+        run: sudo apt-get update && sudo apt-get install -y libmbedtls-dev
 
       - name: Install 32-bit deps (Linux x86)
         if: matrix.os == 'ubuntu' && matrix.arch == 'x86'

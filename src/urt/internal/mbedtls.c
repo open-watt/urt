@@ -1,6 +1,8 @@
 // C wrappers for mbedtls - sizeof() for opaque types, and wrappers for
 // functions that access internal struct layouts D cannot safely replicate.
 
+#pragma attribute(push, nothrow, nogc)
+
 #if !defined(_WIN32)
 
 #include <stddef.h>

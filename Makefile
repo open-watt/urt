@@ -25,34 +25,19 @@ TARGETDIR := bin/$(BUILDNAME)_$(CONFIG)
 # must be preprocessed to *.i first via the host C compiler. We stage
 # them under $(OBJDIR)/imports/ and prepend that to the import path so
 # GDC resolves urt.internal.os to os.i instead of os.c.
-#
-# C files that are part of URT_SOURCES (those with function bodies, e.g.
-# urt/internal/mbedtls.c with the urt_pk_* wrappers) need different
-# handling: feeding the .i to GDC declares the same extern(C) symbols
-# already declared in the matching urt.internal.<name>.d shim, but
-# without the @nogc/nothrow attributes, which then "wins" lookup when
-# the call site sees both. So those C files are compiled to .o by host
-# gcc and linked in directly; the typed D-side declarations become the
-# only D view of the symbols.
 # =======================================================================
 ifeq ($(COMPILER),gdc)
 GDC_I_DIR := $(OBJDIR)/imports
-URT_C_BODIES   := $(filter %.c,$(URT_SOURCES))
-URT_C_HEADERS  := $(filter-out $(URT_C_BODIES),$(shell find "$(URT_SRCDIR)" -type f -name '*.c' -not -path '$(URT_SRCDIR)/urt/driver/*'))
-URT_I_FILES    := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_HEADERS))
-URT_C_OBJECTS  := $(patsubst $(URT_SRCDIR)/%.c,$(OBJDIR)/c/%.o,$(URT_C_BODIES))
-URT_SOURCES    := $(filter-out %.c,$(URT_SOURCES)) $(URT_C_OBJECTS)
-DFLAGS         := -I $(GDC_I_DIR) $(DFLAGS)
+URT_C_FILES := $(shell find "$(URT_SRCDIR)" -type f -name '*.c' -not -path '$(URT_SRCDIR)/urt/driver/*')
+URT_I_FILES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_FILES))
+URT_SOURCES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_SOURCES))
+DFLAGS := -I $(GDC_I_DIR) $(DFLAGS)
 
 $(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
 	@mkdir -p $(@D)
 	gcc -E -P -dD $< | \
 	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
 	         > $@
-
-$(OBJDIR)/c/%.o: $(URT_SRCDIR)/%.c
-	@mkdir -p $(@D)
-	gcc -c -O2 -fPIC -o $@ $<
 endif
 
 # Linker script selection for cross-target unittest builds (ESP excluded --
@@ -147,7 +132,7 @@ endif
 # Build rule
 # =======================================================================
 
-$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES) $(URT_C_OBJECTS)
+$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)

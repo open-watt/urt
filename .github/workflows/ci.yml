@@ -25,7 +25,6 @@ jobs:
           - { compiler: dmd, arch: arm64 } # DMD arm64 still WIP
         include:
           # GDC: host-only, native arch only (cross promotes to LDC).
-          # Use Ubuntu's packaged gdc rather than setup-dlang.
           - { os: ubuntu, compiler: gdc, arch: x86_64 }
           - { os: ubuntu, compiler: gdc, arch: arm64 }
     env:
@@ -39,9 +38,63 @@ jobs:
         with:
           compiler: ${{ matrix.compiler == 'dmd' && 'dmd-master' || matrix.compiler }}
 
-      - name: Install GDC (Ubuntu)
+      # TODO: drop the PPA dance and switch to the bare ubuntu-26.04 (and
+      # ubuntu-26.04-arm) runners once GHA ships them. Tracking issue:
+      # https://github.com/actions/runner-images/issues  (filed 2026-04-24
+      # "Add Ubuntu 26.04 LTS (Resolute Raccoon)"). Noble (24.04) ships gcc-13;
+      # numbat (26.04) will ship gcc-16+ which has the DMD frontend 2.112+
+      # that uRT requires.
+      #
+      # gdc-16 lives in ppa:ubuntu-toolchain-r/test (launchpad.net, not
+      # Azure-mirrored, ~10 min cold install). The .deb files are cached via
+      # actions/cache so subsequent runs restore from GHA's Azure cache in
+      # seconds. Bump `gdc-cache-v<N>` below to invalidate the cache when a
+      # new gdc-16 ships from the PPA.
+      # Restore now; save unconditionally at the end (build still fails on
+      # URT-side D-source issues so we need the cache to persist across red
+      # runs while we chip at them).
+      - name: Restore gdc-16 .debs
         if: matrix.compiler == 'gdc'
-        run: sudo apt-get update && sudo apt-get install -y gdc
+        id: gdc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/gdc-debs
+          key: gdc-16-debs-${{ runner.os }}-${{ runner.arch }}-v1
+      - name: Download gdc-16 .debs (cache miss)
+        if: matrix.compiler == 'gdc' && steps.gdc-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          mkdir -p ~/gdc-debs
+          cd ~/gdc-debs
+          apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests \
+            --no-conflicts --no-breaks --no-replaces --no-enhances \
+            --no-pre-depends gdc-16 | grep "^\w" | sort -u)
+      - name: Save gdc-16 .debs
+        if: matrix.compiler == 'gdc' && steps.gdc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/gdc-debs
+          key: ${{ steps.gdc-cache.outputs.cache-primary-key }}
+      - name: Install gdc-16 from .debs
+        if: matrix.compiler == 'gdc'
+        run: |
+          sudo dpkg -i ~/gdc-debs/*.deb || sudo apt-get install -f -y --no-install-recommends
+          sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
+          # Bundled druntime/phobos stay on disk: -I src takes priority so
+          # uRT's core.* / std.* shadows win, and modules we don't shadow
+          # (e.g. __importc_builtins.d, gcc.*) resolve from the bundled tree.
+          # We don't link druntime, so unused symbols don't matter.
+          #
+          # Exception: `object` is special-cased by GDC (hardcoded druntime
+          # lookup wins over -I), so the bundled object.d must be removed
+          # to expose uRT's src/object.d. The same problem hits nested
+          # modules under std/math/ -- gdc resolves std.math.exponential to
+          # its bundled file before checking -I src/std/math/exponential.d.
+          for d in /usr/lib/gcc/*-linux-gnu/16/include/d; do
+            sudo rm -f "$d/object.d"
+            sudo rm -rf "$d/std"
+          done
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'
@@ -57,8 +110,40 @@ jobs:
       - name: Build unittest
         run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=${{ matrix.compiler }}
 
-      - name: Run unittest
-        run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }}
+      - name: GDC diagnostics
+        if: matrix.compiler == 'gdc' && matrix.os == 'ubuntu'
+        run: |
+          objdump -d -M intel --disassemble=co_swap \
+            ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test || true
+          # Also dump co_switch and the unittest fibre body for the
+          # urt.fibre crash so we can see the whole call site.
+          objdump -d -M intel ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test \
+            | awk '/<.*co_switch>:/,/^$/' | head -60 || true
+
+      - name: Run unittest (Linux, collect core on crash)
+        if: matrix.os == 'ubuntu'
+        run: |
+          sudo apt-get install -y gdb || true
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern=core.%p || true
+          mkdir -p cores; cd cores
+          ../bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test || rc=$?
+          if [ -n "$rc" ]; then
+            echo "exit code: $rc"
+            ls -la
+            for c in core* /var/lib/apport/coredump/*; do
+              [ -f "$c" ] || continue
+              echo "=== $c ==="
+              gdb -batch -ex 'bt' -ex 'info registers' \
+                ../bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test \
+                "$c" 2>&1 | head -80
+            done
+            exit $rc
+          fi
+
+      - name: Run unittest (Windows)
+        if: matrix.os == 'windows'
+        run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test.exe
 
       - name: Build release library
         if: github.ref == 'refs/heads/release'

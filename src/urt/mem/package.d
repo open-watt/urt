@@ -5,6 +5,8 @@ public import urt.lifetime : emplace, moveEmplace, forward, move;
 public import urt.mem.alloc;
 public import urt.mem.allocator;
 
+// (uRT's object.d aliases wchar_t at module-object scope, visible everywhere.)
+
 nothrow @nogc:
 
 

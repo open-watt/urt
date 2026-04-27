@@ -347,7 +347,8 @@ URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(UR
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
 
-# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets
+# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets.
+# urt/internal/os.c already enters via the posix driver dir below.
 ifeq ($(filter freertos baremetal,$(OS)),)
     URT_SOURCES := $(URT_SOURCES) $(URT_SRCDIR)/urt/internal/mbedtls.c
 endif
@@ -694,13 +695,30 @@ else ifeq ($(COMPILER),gdc)
 
     DFLAGS := $(DFLAGS) $(addprefix -fpreview=,$(D_PREVIEWS))
     ifeq ($(CONFIG),unittest)
-        DFLAGS := $(DFLAGS) -funittest -fmain
+        # URT defines its own extern(C) main in src/urt/package.d, so don't
+        # pass -fmain (which would emit a duplicate _Dmain).
+        DFLAGS := $(DFLAGS) -funittest
     endif
 
     # Strip druntime/phobos, use URT's own object.d.
+    # -fno-druntime is too aggressive: it implies -fno-rtti -fno-exceptions
+    # -fno-moduleinfo, but uRT defines its own TypeInfo (needs RTTI), uses
+    # try-catch (needs exceptions), and walks ModuleInfo to enumerate
+    # unittest functions. Pick the subset we actually want:
+    #   -nophoboslib       skip linking libgphobos
+    # GDC's bundled druntime path is shadowed per module under src/core/
+    # (newaa, array.construction, cast_, ...).
     # -fno-omit-frame-pointer: URT's exception unwinder walks the frame chain
     # (matches LDC's -frame-pointer=all).
-    DFLAGS := $(DFLAGS) -fno-druntime -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
+    DFLAGS := $(DFLAGS) -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
+
+    # GDC ignores pragma(lib, "mbedtls") on most binutils setups (.deplibs
+    # is not honored by ld). Pass explicit -l flags on host posix builds.
+    # Use -Wl,--no-as-needed so the libs aren't dropped despite appearing
+    # before the object files that reference them on the link line.
+    ifneq ($(filter linux ubuntu freebsd,$(OS)),)
+        DFLAGS := $(DFLAGS) -Wl,--no-as-needed -lmbedtls -lmbedx509 -lmbedcrypto -Wl,--as-needed
+    endif
 
     ifeq ($(ARCH),x86_64)
         DFLAGS := $(DFLAGS) -m64

@@ -1,9 +1,12 @@
 // C wrappers for mbedtls - sizeof() for opaque types, and wrappers for
 // functions that access internal struct layouts D cannot safely replicate.
 
+#pragma attribute(push, nothrow, nogc)
+
 #if !defined(_WIN32)
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <mbedtls/version.h>
 #include <mbedtls/entropy.h>
@@ -19,6 +22,65 @@ size_t urt_sizeof_ctr_drbg(void)    { return sizeof(mbedtls_ctr_drbg_context); }
 size_t urt_sizeof_x509_crt(void)    { return sizeof(mbedtls_x509_crt); }
 size_t urt_sizeof_ssl_context(void) { return sizeof(mbedtls_ssl_context); }
 size_t urt_sizeof_ssl_config(void)  { return sizeof(mbedtls_ssl_config); }
+
+// Allocator wrappers for opaque-context types whose D-side struct decls
+// stop at `struct foo;` (we only ever hold a pointer). C-side malloc keeps
+// the struct layout an implementation detail of mbedtls.
+
+mbedtls_entropy_context* urt_entropy_new(void)
+{
+    mbedtls_entropy_context *ctx = malloc(sizeof(mbedtls_entropy_context));
+    if (ctx) mbedtls_entropy_init(ctx);
+    return ctx;
+}
+void urt_entropy_delete(mbedtls_entropy_context *ctx)
+{
+    if (ctx) { mbedtls_entropy_free(ctx); free(ctx); }
+}
+
+mbedtls_ctr_drbg_context* urt_ctr_drbg_new(void)
+{
+    mbedtls_ctr_drbg_context *ctx = malloc(sizeof(mbedtls_ctr_drbg_context));
+    if (ctx) mbedtls_ctr_drbg_init(ctx);
+    return ctx;
+}
+void urt_ctr_drbg_delete(mbedtls_ctr_drbg_context *ctx)
+{
+    if (ctx) { mbedtls_ctr_drbg_free(ctx); free(ctx); }
+}
+
+mbedtls_x509_crt* urt_x509_crt_new(void)
+{
+    mbedtls_x509_crt *crt = malloc(sizeof(mbedtls_x509_crt));
+    if (crt) mbedtls_x509_crt_init(crt);
+    return crt;
+}
+void urt_x509_crt_delete(mbedtls_x509_crt *crt)
+{
+    if (crt) { mbedtls_x509_crt_free(crt); free(crt); }
+}
+
+mbedtls_ssl_context* urt_ssl_new(void)
+{
+    mbedtls_ssl_context *ssl = malloc(sizeof(mbedtls_ssl_context));
+    if (ssl) mbedtls_ssl_init(ssl);
+    return ssl;
+}
+void urt_ssl_delete(mbedtls_ssl_context *ssl)
+{
+    if (ssl) { mbedtls_ssl_free(ssl); free(ssl); }
+}
+
+mbedtls_ssl_config* urt_ssl_config_new(void)
+{
+    mbedtls_ssl_config *conf = malloc(sizeof(mbedtls_ssl_config));
+    if (conf) mbedtls_ssl_config_init(conf);
+    return conf;
+}
+void urt_ssl_config_delete(mbedtls_ssl_config *conf)
+{
+    if (conf) { mbedtls_ssl_config_free(conf); free(conf); }
+}
 
 // Generate an ECDSA P-256 key into a pk context.
 // Handles pk_setup + ecp_gen_key internally so D never needs to access

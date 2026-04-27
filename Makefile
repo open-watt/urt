@@ -1,5 +1,10 @@
 URT_SRCDIR := src
 
+# The first non-pattern target in this Makefile -- needed up-front because
+# the GDC block below defines a static rule for the preprocessed mbedtls.i
+# that would otherwise become the default goal and short-circuit the build.
+.DEFAULT_GOAL := all
+
 include platforms.mk
 
 # =======================================================================
@@ -18,6 +23,57 @@ include platforms.mk
 
 OBJDIR    := obj/$(BUILDNAME)_$(CONFIG)
 TARGETDIR := bin/$(BUILDNAME)_$(CONFIG)
+
+# =======================================================================
+# GDC ImportC: GDC's ImportC does not preprocess #include directives, so
+# any *.c the D side imports (urt.internal.os, urt.internal.mbedtls, ...)
+# must be preprocessed to *.i first via the host C compiler. We stage
+# them under $(OBJDIR)/imports/ and prepend that to the import path so
+# GDC resolves urt.internal.os to os.i instead of os.c.
+#
+# Two layouts of preprocessed .i:
+#  * `urt/internal/foo.c` → `imports/urt/internal/foo.i` for files
+#    consumed via path-based `import urt.internal.foo` (e.g. os.c).
+#  * `urt/internal/bar.c` → `imports/bar.i` (flat) for files passed as
+#    sources in URT_SOURCES (e.g. mbedtls.c) -- DMD/LDC's ImportC names
+#    those by basename, so urt.internal.bar.d is a thin shim that does
+#    `public import bar;` and stays consistent across all compilers.
+# =======================================================================
+ifeq ($(COMPILER),gdc)
+GDC_I_DIR := $(OBJDIR)/imports
+URT_C_SOURCES   := $(filter %.c,$(URT_SOURCES))
+URT_C_HEADERS   := $(filter-out $(URT_C_SOURCES),$(shell find "$(URT_SRCDIR)" -type f -name '*.c' -not -path '$(URT_SRCDIR)/urt/driver/*'))
+URT_I_HEADERS   := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_HEADERS))
+URT_I_SOURCES   := $(patsubst %.c,$(GDC_I_DIR)/%.i,$(notdir $(URT_C_SOURCES)))
+URT_I_FILES     := $(URT_I_HEADERS) $(URT_I_SOURCES)
+URT_SOURCES     := $(filter-out %.c,$(URT_SOURCES)) $(URT_I_SOURCES)
+DFLAGS          := -I $(GDC_I_DIR) $(DFLAGS)
+
+# AArch64: GCC's __attribute__((naked)) is silently dropped on aarch64,
+# so co_swap can't be inline asm there. Compile src/urt/co_swap.S via host
+# gcc and link the .o; fibre.d's aarch64 GNU branch is just an extern decl.
+ifeq ($(ARCH),arm64)
+URT_S_OBJECTS   := $(OBJDIR)/host/co_swap.o
+URT_SOURCES     := $(URT_SOURCES) $(URT_S_OBJECTS)
+endif
+
+$(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
+	@mkdir -p $(@D)
+	gcc -E -P -dD $< | \
+	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
+	         > $@
+
+# Flat-path rule for URT_SOURCES C files (basename in $(GDC_I_DIR)).
+$(GDC_I_DIR)/mbedtls.i: $(URT_SRCDIR)/urt/internal/mbedtls.c
+	@mkdir -p $(@D)
+	gcc -E -P -dD $< | \
+	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
+	         > $@
+
+$(OBJDIR)/host/%.o: $(URT_SRCDIR)/%.S
+	@mkdir -p $(@D)
+	gcc -c -o $@ $<
+endif
 
 # Linker script selection for cross-target unittest builds (ESP excluded --
 # no ESP-IDF on build slave). platforms.mk falls back to compile-only when
@@ -111,7 +167,10 @@ endif
 # Build rule
 # =======================================================================
 
-$(TARGET): $(BAREMETAL_OBJS)
+.PHONY: all
+all: $(TARGET)
+
+$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES) $(URT_S_OBJECTS)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)

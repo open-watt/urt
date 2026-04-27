@@ -86,8 +86,13 @@ jobs:
           # contains GDC-specific D extensions (gcc.attributes for @naked,
           # gcc.builtins for __builtin_* intrinsics) that aren't part of
           # druntime/phobos and can't be replaced by uRT.
+          # Locate __importc_builtins.d wherever gdc-16 ships it, then prune
+          # the bundled D tree (preserving gcc/ for D-specific extensions).
+          builtins=$(dpkg -L gdc-16 | grep '__importc_builtins\.d$' | head -1)
+          echo "importc builtins: $builtins"
           for d in /usr/lib/gcc/*-linux-gnu/16/include/d; do
-            sudo find "$d" -mindepth 1 -maxdepth 1 ! -name 'gcc' ! -name '__importc_builtins.d' -exec rm -rf {} +
+            sudo find "$d" -mindepth 1 -maxdepth 1 ! -name 'gcc' -exec rm -rf {} +
+            ls -la "$d"
           done
 
       - name: Install mbedtls (Linux host)

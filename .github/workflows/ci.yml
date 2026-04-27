@@ -41,7 +41,10 @@ jobs:
 
       - name: Install GDC (Ubuntu)
         if: matrix.compiler == 'gdc'
-        run: sudo apt-get update && sudo apt-get install -y gdc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdc-14
+          sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-14 100
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

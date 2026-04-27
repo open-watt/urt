@@ -1,6 +1,6 @@
 module urt.array;
 
-import urt.lifetime : move, emplace, moveEmplace;
+import urt.lifetime : move, emplace, moveEmplace, forward;
 import urt.mem : memcpy, memmove, memset;
 import urt.mem.alloc;
 import urt.mem.allocator : NoGCAllocator;

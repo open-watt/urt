@@ -81,19 +81,10 @@ jobs:
         run: |
           sudo dpkg -i ~/gdc-debs/*.deb || sudo apt-get install -f -y --no-install-recommends
           sudo update-alternatives --install /usr/bin/gdc gdc /usr/bin/gdc-16 100
-          # Force GDC to use uRT's object.d / core.* / std.* shadows instead
-          # of its bundled druntime+phobos: rm everything except gcc/, which
-          # contains GDC-specific D extensions (gcc.attributes for @naked,
-          # gcc.builtins for __builtin_* intrinsics) that aren't part of
-          # druntime/phobos and can't be replaced by uRT.
-          # Locate __importc_builtins.d wherever gdc-16 ships it, then prune
-          # the bundled D tree (preserving gcc/ for D-specific extensions).
-          builtins=$(dpkg -L gdc-16 | grep '__importc_builtins\.d$' | head -1)
-          echo "importc builtins: $builtins"
-          for d in /usr/lib/gcc/*-linux-gnu/16/include/d; do
-            sudo find "$d" -mindepth 1 -maxdepth 1 ! -name 'gcc' -exec rm -rf {} +
-            ls -la "$d"
-          done
+          # Bundled druntime/phobos stay on disk: -I src takes priority so
+          # uRT's object.d / core.* / std.* shadows win, and modules we don't
+          # shadow (e.g. __importc_builtins.d, gcc.*) resolve from the bundled
+          # tree. We don't link druntime, so unused symbols don't matter.
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

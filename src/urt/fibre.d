@@ -586,7 +586,7 @@ else
                         asm nothrow @nogc
                         {
                             `
-                            .cfi_undefined %rip
+                            .cfi_undefined %%rip
                             movq %%rsp,    (%%rsi)
                             movq    (%%rdi), %%rsp
                             popq %%rax

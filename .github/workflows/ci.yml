@@ -23,15 +23,25 @@ jobs:
         exclude:
           - { os: windows, arch: arm64 }   # windows-arm64 runner not in free tier
           - { compiler: dmd, arch: arm64 } # DMD arm64 still WIP
+        include:
+          # GDC: host-only, native arch only (cross promotes to LDC).
+          # Use Ubuntu's packaged gdc rather than setup-dlang.
+          - { os: ubuntu, compiler: gdc, arch: x86_64 }
+          - { os: ubuntu, compiler: gdc, arch: arm64 }
     env:
       MAKE_OS: ${{ matrix.os == 'ubuntu' && 'linux' || matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup D compiler
+        if: matrix.compiler != 'gdc'
         uses: dlang-community/setup-dlang@v2
         with:
           compiler: ${{ matrix.compiler == 'dmd' && 'dmd-master' || matrix.compiler }}
+
+      - name: Install GDC (Ubuntu)
+        if: matrix.compiler == 'gdc'
+        run: sudo apt-get update && sudo apt-get install -y gdc
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

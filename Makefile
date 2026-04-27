@@ -122,6 +122,13 @@ ifeq ($(BUILD_MODE),lib)
 else
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -makedeps $(URT_SOURCES) > $(DEPFILE)
 endif
+else ifeq ($(COMPILER),gdc)
+ifeq ($(BUILD_MODE),lib)
+	"$(DC)" $(DFLAGS) -c -o $(OBJDIR)/urt.o $(URT_SOURCES)
+	$(AR) rcs $(TARGET) $(OBJDIR)/urt.o
+else
+	"$(DC)" $(DFLAGS) -o $(TARGET) $(URT_SOURCES)
+endif
 endif
 ifeq ($(BUILD_MODE),embedded-exe)
 	$(BAREMETAL_OBJCOPY) -O binary $(OBJCOPY_FLAGS) $(TARGET) $(TARGETDIR)/$(TARGETNAME).bin

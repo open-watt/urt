@@ -304,6 +304,11 @@ endif
 
 # =======================================================================
 # Compiler auto-selection: cross-compilation targets use LDC
+#
+# DMD: only x86/x86_64 host, anything else -> LDC.
+# GDC: host-only (any arch with a host toolchain); freertos/baremetal -> LDC.
+#      Cross GCC toolchains do ship gdc, but wiring those in is a separate
+#      effort; for now we promote to LDC.
 # =======================================================================
 
 ifeq ($(COMPILER),dmd)
@@ -313,6 +318,12 @@ ifneq ($(ARCH),x86)
     COMPILER = ldc
 endif
 endif
+endif
+endif
+
+ifeq ($(COMPILER),gdc)
+ifneq ($(filter freertos baremetal,$(OS)),)
+    COMPILER := ldc
 endif
 endif
 
@@ -382,7 +393,9 @@ endif
 # imports stay in the consumer Makefile.
 # =======================================================================
 
-DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=in #-preview=nosharedaccess <- TODO
+# Preview flags translated per-compiler below: dmd/ldc accept -preview=X,
+# gdc takes -fpreview=X.
+D_PREVIEWS := bitfields rvaluerefparam in #nosharedaccess <- TODO
 
 # OS-level versions
 ifeq ($(OS),freertos)
@@ -467,15 +480,15 @@ else ifeq ($(PLATFORM),esp32-p4)
     DFLAGS := $(DFLAGS) -d-version=ESP32_P4
 endif
 
-ifeq ($(CONFIG),unittest)
-    DFLAGS := $(DFLAGS) -unittest
-endif
-
 # =======================================================================
 # Compiler configuration -- triple, mattr, link flags
 # =======================================================================
 
 ifeq ($(COMPILER),ldc)
+    DFLAGS := $(DFLAGS) $(addprefix -preview=,$(D_PREVIEWS))
+    ifeq ($(CONFIG),unittest)
+        DFLAGS := $(DFLAGS) -unittest
+    endif
     # Prefer dlang-installer LDC (avoids system package conflicts with cross-compile)
     DC := $(lastword $(sort $(wildcard $(HOME)/dlang/ldc-*/bin/ldc2)))
     DC := $(if $(DC),$(DC),ldc2)
@@ -652,6 +665,11 @@ ifeq ($(COMPILER),ldc)
 else ifeq ($(COMPILER),dmd)
     DC ?= dmd
 
+    DFLAGS := $(DFLAGS) $(addprefix -preview=,$(D_PREVIEWS))
+    ifeq ($(CONFIG),unittest)
+        DFLAGS := $(DFLAGS) -unittest
+    endif
+
     # Strip druntime/phobos, use URT's own object.d.
     # Consumers may need to prepend their own -I to shadow druntime's
     # __importc_builtins.di (e.g. OpenWatt's third_party/dmd/ for MSVC va_list).
@@ -669,6 +687,35 @@ else ifeq ($(COMPILER),dmd)
         DFLAGS := $(DFLAGS) -release -O -inline
     else
         DFLAGS := $(DFLAGS) -g -debug
+    endif
+
+else ifeq ($(COMPILER),gdc)
+    DC ?= gdc
+
+    DFLAGS := $(DFLAGS) $(addprefix -fpreview=,$(D_PREVIEWS))
+    ifeq ($(CONFIG),unittest)
+        DFLAGS := $(DFLAGS) -funittest -fmain
+    endif
+
+    # Strip druntime/phobos, use URT's own object.d.
+    # -fno-omit-frame-pointer: URT's exception unwinder walks the frame chain
+    # (matches LDC's -frame-pointer=all).
+    DFLAGS := $(DFLAGS) -fno-druntime -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
+
+    ifeq ($(ARCH),x86_64)
+        DFLAGS := $(DFLAGS) -m64
+    else ifeq ($(ARCH),x86)
+        DFLAGS := $(DFLAGS) -m32
+    else ifeq ($(ARCH),arm64)
+        # Native arm64 host build -- nothing to add; gdc's default target matches.
+    else
+        $(error "GDC: unsupported ARCH=$(ARCH) for PLATFORM=$(PLATFORM) (use COMPILER=ldc)")
+    endif
+
+    ifeq ($(CONFIG),release)
+        DFLAGS := $(DFLAGS) -O3 -frelease -finline-functions
+    else
+        DFLAGS := $(DFLAGS) -g -fdebug
     endif
 else
     $(error "Unknown D compiler: $(COMPILER)")

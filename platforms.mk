@@ -715,8 +715,10 @@ else ifeq ($(COMPILER),gdc)
 
     # GDC ignores pragma(lib, "mbedtls") on most binutils setups (.deplibs
     # is not honored by ld). Pass explicit -l flags on host posix builds.
+    # Use -Wl,--no-as-needed so the libs aren't dropped despite appearing
+    # before the object files that reference them on the link line.
     ifneq ($(filter linux ubuntu freebsd,$(OS)),)
-        DFLAGS := $(DFLAGS) -lmbedtls -lmbedx509 -lmbedcrypto
+        DFLAGS := $(DFLAGS) -Wl,--no-as-needed -lmbedtls -lmbedx509 -lmbedcrypto -Wl,--as-needed
     endif
 
     ifeq ($(ARCH),x86_64)

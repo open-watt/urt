@@ -1120,10 +1120,6 @@ version (Posix)
 {
     import urt.internal.mbedtls;
 
-    pragma(lib, "mbedtls");
-    pragma(lib, "mbedx509");
-    pragma(lib, "mbedcrypto");
-
     // lazily-initialized global CSPRNG for mbedtls operations
     mbedtls_ctr_drbg_context* get_rng()
     {

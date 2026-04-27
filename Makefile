@@ -25,15 +25,33 @@ TARGETDIR := bin/$(BUILDNAME)_$(CONFIG)
 # must be preprocessed to *.i first via the host C compiler. We stage
 # them under $(OBJDIR)/imports/ and prepend that to the import path so
 # GDC resolves urt.internal.os to os.i instead of os.c.
+#
+# Two layouts of preprocessed .i:
+#  * `urt/internal/foo.c` → `imports/urt/internal/foo.i` for files
+#    consumed via path-based `import urt.internal.foo` (e.g. os.c).
+#  * `urt/internal/bar.c` → `imports/bar.i` (flat) for files passed as
+#    sources in URT_SOURCES (e.g. mbedtls.c) -- DMD/LDC's ImportC names
+#    those by basename, so urt.internal.bar.d is a thin shim that does
+#    `public import bar;` and stays consistent across all compilers.
 # =======================================================================
 ifeq ($(COMPILER),gdc)
 GDC_I_DIR := $(OBJDIR)/imports
-URT_C_FILES := $(shell find "$(URT_SRCDIR)" -type f -name '*.c' -not -path '$(URT_SRCDIR)/urt/driver/*')
-URT_I_FILES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_FILES))
-URT_SOURCES := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_SOURCES))
-DFLAGS := -I $(GDC_I_DIR) $(DFLAGS)
+URT_C_SOURCES   := $(filter %.c,$(URT_SOURCES))
+URT_C_HEADERS   := $(filter-out $(URT_C_SOURCES),$(shell find "$(URT_SRCDIR)" -type f -name '*.c' -not -path '$(URT_SRCDIR)/urt/driver/*'))
+URT_I_HEADERS   := $(patsubst $(URT_SRCDIR)/%.c,$(GDC_I_DIR)/%.i,$(URT_C_HEADERS))
+URT_I_SOURCES   := $(patsubst %.c,$(GDC_I_DIR)/%.i,$(notdir $(URT_C_SOURCES)))
+URT_I_FILES     := $(URT_I_HEADERS) $(URT_I_SOURCES)
+URT_SOURCES     := $(filter-out %.c,$(URT_SOURCES)) $(URT_I_SOURCES)
+DFLAGS          := -I $(GDC_I_DIR) $(DFLAGS)
 
 $(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
+	@mkdir -p $(@D)
+	gcc -E -P -dD $< | \
+	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
+	         > $@
+
+# Flat-path rule for URT_SOURCES C files (basename in $(GDC_I_DIR)).
+$(GDC_I_DIR)/mbedtls.i: $(URT_SRCDIR)/urt/internal/mbedtls.c
 	@mkdir -p $(@D)
 	gcc -E -P -dD $< | \
 	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \

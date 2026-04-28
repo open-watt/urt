@@ -802,6 +802,15 @@ else
             p[12] = cast(void*)top; // x29 (frame pointer)
         }
 
+        version (GNU)
+        {
+            // GCC doesn't honor __attribute__((naked)) on aarch64 (listed
+            // for ARM/x86/AVR only), so use a hand-written .S compiled by
+            // host gcc and linked via the Makefile.
+            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx);
+        }
+        else
+        {
         // .cfi_undefined x30 terminates DWARF unwinding at co_swap so an
         // exception thrown in a fibre doesn't walk past co_swap into the
         // fibre's GuardBand sentinel during stack-trace capture.
@@ -842,6 +851,7 @@ else
                 : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
                 : "x16", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory";
             }
+        }
         }
     }
     else version (RISCV64)

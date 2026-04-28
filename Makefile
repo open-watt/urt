@@ -49,6 +49,14 @@ URT_I_FILES     := $(URT_I_HEADERS) $(URT_I_SOURCES)
 URT_SOURCES     := $(filter-out %.c,$(URT_SOURCES)) $(URT_I_SOURCES)
 DFLAGS          := -I $(GDC_I_DIR) $(DFLAGS)
 
+# AArch64: GCC's __attribute__((naked)) is silently dropped on aarch64,
+# so co_swap can't be inline asm there. Compile src/urt/co_swap.S via host
+# gcc and link the .o; fibre.d's aarch64 GNU branch is just an extern decl.
+ifeq ($(ARCH),arm64)
+URT_S_OBJECTS   := $(OBJDIR)/host/co_swap.o
+URT_SOURCES     := $(URT_SOURCES) $(URT_S_OBJECTS)
+endif
+
 $(GDC_I_DIR)/%.i: $(URT_SRCDIR)/%.c
 	@mkdir -p $(@D)
 	gcc -E -P -dD $< | \
@@ -61,6 +69,10 @@ $(GDC_I_DIR)/mbedtls.i: $(URT_SRCDIR)/urt/internal/mbedtls.c
 	gcc -E -P -dD $< | \
 	  perl -0777 -pe 's/\b(register|__restrict|__restrict__|__inline__|__inline|__extension__|__signed__|__signed)\b//g; s/__attribute__\s*(\((?:[^()]++|(?1))*\))//g; s/__asm__\s*\(\s*(?:"[^"]*"\s*)+\)//g' \
 	         > $@
+
+$(OBJDIR)/host/%.o: $(URT_SRCDIR)/%.S
+	@mkdir -p $(@D)
+	gcc -c -o $@ $<
 endif
 
 # Linker script selection for cross-target unittest builds (ESP excluded --
@@ -158,7 +170,7 @@ endif
 .PHONY: all
 all: $(TARGET)
 
-$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES)
+$(TARGET): $(BAREMETAL_OBJS) $(URT_I_FILES) $(URT_S_OBJECTS)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)

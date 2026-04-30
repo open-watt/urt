@@ -143,7 +143,5 @@ bool _resolve_address(void* addr, out Resolved r) @trusted
 /// No on-device symbols - caller should treat `results[]` as empty.
 bool _resolve_batch(const(void*)[] addrs, Resolved[] results) @trusted
 {
-    cast(void) addrs;
-    cast(void) results;
     return false;
 }

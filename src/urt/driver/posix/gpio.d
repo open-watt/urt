@@ -50,21 +50,20 @@ uint gpio_count()
 void gpio_output_init(uint pin, bool initial = false, DriveMode mode = DriveMode.push_pull)
 {
     assert(mode == DriveMode.push_pull, "posix gpio: open-drain not supported via sysfs");
-    cast(void) save_file("/sys/class/gpio/export", tconcat(pin));   // EBUSY = already exported
+    save_file("/sys/class/gpio/export", tconcat(pin));   // EBUSY = already exported
     // "low" / "high" atomically set direction=out plus initial value.
-    cast(void) save_file(tconcat("/sys/class/gpio/gpio", pin, "/direction"), initial ? "high" : "low");
+    save_file(tconcat("/sys/class/gpio/gpio", pin, "/direction"), initial ? "high" : "low");
 }
 
 void gpio_input_init(uint pin, Pull pull = Pull.none)
 {
-    cast(void) pull;
-    cast(void) save_file("/sys/class/gpio/export", tconcat(pin));
-    cast(void) save_file(tconcat("/sys/class/gpio/gpio", pin, "/direction"), "in");
+    save_file("/sys/class/gpio/export", tconcat(pin));
+    save_file(tconcat("/sys/class/gpio/gpio", pin, "/direction"), "in");
 }
 
 void gpio_output_set(uint pin, bool value)
 {
-    cast(void) save_file(tconcat("/sys/class/gpio/gpio", pin, "/value"), value ? "1" : "0");
+    save_file(tconcat("/sys/class/gpio/gpio", pin, "/value"), value ? "1" : "0");
 }
 
 void gpio_output_toggle(uint pin)
@@ -73,7 +72,7 @@ void gpio_output_toggle(uint pin)
     bool current;
     if (!read_bool_file(path, current))
         return;
-    cast(void) save_file(path, current ? "0" : "1");
+    save_file(path, current ? "0" : "1");
 }
 
 bool gpio_input_read(uint pin)
@@ -84,12 +83,11 @@ bool gpio_input_read(uint pin)
 
 void gpio_set_pull(uint pin, Pull pull)
 {
-    cast(void) pin; cast(void) pull;
 }
 
 void gpio_release(uint pin)
 {
-    cast(void) save_file("/sys/class/gpio/unexport", tconcat(pin));
+    save_file("/sys/class/gpio/unexport", tconcat(pin));
 }
 
 

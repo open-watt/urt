@@ -29,44 +29,37 @@ uint gpio_count() => num_gpio;
 
 void gpio_output_init(uint pin, bool initial = false, DriveMode mode = DriveMode.push_pull)
 {
-    cast(void) pin; cast(void) initial; cast(void) mode;
     assert(false, "bk7231 gpio: gpio_output_init not yet implemented");
 }
 
 void gpio_input_init(uint pin, Pull pull = Pull.none)
 {
-    cast(void) pin; cast(void) pull;
     assert(false, "bk7231 gpio: gpio_input_init not yet implemented");
 }
 
 void gpio_output_set(uint pin, bool value)
 {
-    cast(void) pin; cast(void) value;
     assert(false, "bk7231 gpio: gpio_output_set not yet implemented");
 }
 
 void gpio_output_toggle(uint pin)
 {
-    cast(void) pin;
     assert(false, "bk7231 gpio: gpio_output_toggle not yet implemented");
 }
 
 bool gpio_input_read(uint pin)
 {
-    cast(void) pin;
     assert(false, "bk7231 gpio: gpio_input_read not yet implemented");
     return false;
 }
 
 void gpio_set_pull(uint pin, Pull pull)
 {
-    cast(void) pin; cast(void) pull;
     assert(false, "bk7231 gpio: gpio_set_pull not yet implemented");
 }
 
 void gpio_release(uint pin)
 {
-    cast(void) pin;
     assert(false, "bk7231 gpio: gpio_release not yet implemented");
 }
 

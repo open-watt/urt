@@ -156,7 +156,7 @@ pragma(inline, true)
 void delay_loops(ulong n)
 {
     import ldc.llvmasm;
-    cast(void) __asm!ulong(`
+    __asm!ulong(`
         1: addi $0, $0, -1
            bnez $0, 1b
     `, "=r,0", n);

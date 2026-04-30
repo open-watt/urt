@@ -20,8 +20,15 @@ version (GNU)
 {
     version = LDC_OR_GDC;
 
-    static assert(false, "TODO: how to do naked functions, other intrinsics in GDC?");
-
+    // GDC support, established mechanisms:
+    //   - Naked functions:    @naked UDA from gcc.attributes (re-exported via urt.attribute).
+    //   - Inline asm:         GCC extended-asm syntax inside `asm { "..." : : : "..."; }`.
+    //                         See urt.fibre x86_64 SystemV co_swap for the reference example.
+    //   - Builtins/intrinsics: `import gcc.builtins;` (see urt.intrinsic).
+    //
+    // Per-arch context-switching asm and other compiler-specific bits not yet
+    // ported to GDC carry their own static asserts at the usage site -- those
+    // remain real TODOs.
     enum IS_GDC = true;
 }
 else

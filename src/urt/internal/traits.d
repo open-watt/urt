@@ -1,6 +1,7 @@
 // TODO: THIS NEEDS TO BE DISSOLVED...
 module urt.internal.traits;
 
+import urt.meta;
 import urt.traits;
 
 template Fields(T)

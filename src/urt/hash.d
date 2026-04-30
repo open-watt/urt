@@ -19,7 +19,7 @@ template fnv1_initial(T)
         enum T fnv1_initial = 0xCBF29CE484222325;
 }
 
-T fnv1(T, bool alternate)(const ubyte[] s, T hash = fnv1_initial!T) pure nothrow @nogc
+T fnv1(T, bool alternate)(const ubyte[] s, T hash = fnv1_initial!T) pure
     if (is(T == ushort) || is(T == uint) || is(T == ulong))
 {
     static if (is(T == ushort))
@@ -68,7 +68,7 @@ version (Espressif)
 }
 else
 {
-    uint adler32(const void[] data, uint init = 1)
+    uint adler32(const void[] data, uint init = 1) pure
     {
         enum A32_BASE = 65521;
 
@@ -194,7 +194,7 @@ unittest
 // NOTE: progressive accumulation via `initial` works only when prior chunks have even length!!!
 // odd-length chunks misalign the 16-bit word pairing. fixing this requires carrying a pending byte between calls :/
 // maybe there's some way to protect against misuse?
-ushort internet_checksum(const void[] data, ushort initial = 0xFFFF)
+ushort internet_checksum(const void[] data, ushort initial = 0xFFFF) pure
 {
     auto bytes = cast(const(const ubyte)[])data;
 

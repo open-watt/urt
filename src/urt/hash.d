@@ -198,7 +198,7 @@ ushort internet_checksum(const void[] data, ushort initial = 0xFFFF)
 {
     auto bytes = cast(const(const ubyte)[])data;
 
-    uint sum = ~initial;
+    uint sum = initial ^ 0xFFFF;
     while (bytes.length > 1)
     {
         sum += (bytes.ptr[0] << 8) | bytes.ptr[1];
@@ -211,4 +211,50 @@ ushort internet_checksum(const void[] data, ushort initial = 0xFFFF)
         sum = (sum & 0xFFFF) + (sum >> 16);
 
     return cast(ushort)~sum;
+}
+
+unittest
+{
+    // Empty input: checksum of nothing is 0xFFFF (~0).
+    assert(internet_checksum(null) == 0xFFFF);
+
+    // RFC 1071 §B vector.
+    static immutable ubyte[8] rfc1071 = [0x00, 0x01, 0xF2, 0x03, 0xF4, 0xF5, 0xF6, 0xF7];
+    assert(internet_checksum(rfc1071[]) == 0x220D);
+
+    // Real IPv4 header (checksum field zeroed).
+    static immutable ubyte[20] ip_hdr = [
+        0x45, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00,
+        0x40, 0x06, 0x00, 0x00,
+        0xC0, 0xA8, 0x00, 0xC8, 0xC0, 0xA8, 0x03, 0x0C,
+    ];
+    ushort cs = internet_checksum(ip_hdr[]);
+    assert(cs == 0xF5A7);
+
+    // Patching the computed checksum back in must verify to zero.
+    ubyte[20] verified = ip_hdr;
+    verified[10] = cast(ubyte)(cs >> 8);
+    verified[11] = cast(ubyte)cs;
+    assert(internet_checksum(verified[]) == 0);
+
+    // Progressive accumulation across even-length chunks must match all-at-once.
+    ushort first = internet_checksum(ip_hdr[0 .. 10]);
+    ushort whole = internet_checksum(ip_hdr[10 .. $], first);
+    assert(whole == cs);
+
+    // Odd-length input: trailing byte is treated as the high byte of a 16-bit word.
+    static immutable ubyte[3] odd = [0xAA, 0xBB, 0xCC];
+    assert(internet_checksum(odd[]) == 0x8943);
+
+    // Chained checksum across two buffers must equal the concatenated buffer's
+    // checksum, when the prior result is passed directly as `initial`. (This
+    // is the pseudo-header + segment pattern used by TCP/UDP.)
+    static immutable ubyte[6] part_a = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC];
+    static immutable ubyte[6] part_b = [0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44];
+    ubyte[12] joined;
+    joined[0 .. 6] = part_a;
+    joined[6 .. 12] = part_b;
+    ushort partial = internet_checksum(part_a[]);
+    ushort chained = internet_checksum(part_b[], partial);
+    assert(chained == internet_checksum(joined[]));
 }

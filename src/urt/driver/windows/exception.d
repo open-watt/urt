@@ -333,7 +333,7 @@ bool _resolve_batch(const(void*)[] addrs, Resolved[] results) @trusted
     if (!_dbg_available)
         return false;
     foreach (i, a; addrs)
-        cast(void) _resolve_address(cast(void*) a, results[i]);
+        _resolve_address(cast(void*) a, results[i]);
     return true;
 }
 

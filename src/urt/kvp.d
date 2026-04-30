@@ -18,8 +18,14 @@ nothrow @nogc:
 //    }
     this(ref KVP!(K, V) kvp)
     {
-        this.key = kvp.key;
-        this.value = kvp.value;
+        static if (__traits(hasCopyConstructor, K))
+            this.key.__ctor(kvp.key);
+        else
+            this.key = kvp.key;
+        static if (__traits(hasCopyConstructor, V))
+            this.value.__ctor(kvp.value);
+        else
+            this.value = kvp.value;
     }
 
     this(_K, _V)(auto ref _K key, auto ref _V value)

@@ -434,10 +434,13 @@ ubyte popcnt(T)(T x)
     {
         version (GNU)
         {
+            // Cast to Unsigned!T first; otherwise byte(-1) etc. sign-extend
+            // when promoted to int and __builtin_popcount counts the whole
+            // 32-bit pattern instead of just T's bits.
             static if (T.sizeof == 8)// && size_t.sizeof == 8)
-                return cast(ubyte)__builtin_popcountll(x);
+                return cast(ubyte)__builtin_popcountll(cast(Unsigned!T)x);
             else
-                return cast(ubyte)__builtin_popcount(x);
+                return cast(ubyte)__builtin_popcount(cast(Unsigned!T)x);
         }
         else version (LDC)
             return cast(ubyte)_llvm_ctpop(x);

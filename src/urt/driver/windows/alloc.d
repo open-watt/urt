@@ -51,7 +51,7 @@ void[] _alloc_exec(size_t size) pure
 
 void _free_exec(void[] mem) pure
 {
-    cast(void)VirtualFree(mem.ptr, 0, MEM_RELEASE);
+    VirtualFree(mem.ptr, 0, MEM_RELEASE);
 }
 
 

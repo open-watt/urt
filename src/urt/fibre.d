@@ -1,5 +1,6 @@
 module urt.fibre;
 
+import urt.attribute;
 import urt.mem;
 import urt.time;
 import urt.util : is_aligned, max;
@@ -569,28 +570,71 @@ else
                 // State: rsp, rbp, rbx, r12-r15
                 enum SaveStateLen = 7;
 
-                pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                version (GNU)
                 {
-                    asm nothrow @nogc
+                    // GDC: GCC extended asm (AT&T). DMD-style intel asm is not
+                    // supported by GDC's frontend.
+                    //
+                    // The .cfi_undefined %rip terminates DWARF stack-walking
+                    // at co_swap. Without it, when an exception thrown inside
+                    // a fibre triggers stack-trace capture, _Unwind_Backtrace
+                    // walks past co_swap into the fibre's stack-base
+                    // GuardBand and segfaults.
+                    pragma(inline, false)
+                    extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
                     {
-                        naked;
-                        mov [RSI],RSP;
-                        mov RSP,[RDI];
-                        pop RAX;
-                        mov [RSI+ 8],RBP;
-                        mov [RSI+16],RBX;
-                        mov [RSI+24],R12;
-                        mov [RSI+32],R13;
-                        mov [RSI+40],R14;
-                        mov [RSI+48],R15;
-                        mov RBP,[RDI+ 8];
-                        mov RBX,[RDI+16];
-                        mov R12,[RDI+24];
-                        mov R13,[RDI+32];
-                        mov R14,[RDI+40];
-                        mov R15,[RDI+48];
-                        jmp RAX;
+                        asm nothrow @nogc
+                        {
+                            `
+                            .cfi_undefined %%rip
+                            movq %%rsp,    (%%rsi)
+                            movq    (%%rdi), %%rsp
+                            popq %%rax
+                            movq %%rbp,  8(%%rsi)
+                            movq %%rbx, 16(%%rsi)
+                            movq %%r12, 24(%%rsi)
+                            movq %%r13, 32(%%rsi)
+                            movq %%r14, 40(%%rsi)
+                            movq %%r15, 48(%%rsi)
+                            movq  8(%%rdi), %%rbp
+                            movq 16(%%rdi), %%rbx
+                            movq 24(%%rdi), %%r12
+                            movq 32(%%rdi), %%r13
+                            movq 40(%%rdi), %%r14
+                            movq 48(%%rdi), %%r15
+                            jmp *%%rax
+                            `
+                            : // no outputs
+                            : // no inputs (function is @naked, ABI puts newCtx in rdi, oldCtx in rsi)
+                            : "memory";
+                        }
+                    }
+                }
+                else // DMD + LDC: DMD-style intel asm
+                {
+                    pragma(inline, false)
+                    extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                    {
+                        asm nothrow @nogc
+                        {
+                            naked;
+                            mov [RSI],RSP;
+                            mov RSP,[RDI];
+                            pop RAX;
+                            mov [RSI+ 8],RBP;
+                            mov [RSI+16],RBX;
+                            mov [RSI+24],R12;
+                            mov [RSI+32],R13;
+                            mov [RSI+40],R14;
+                            mov [RSI+48],R15;
+                            mov RBP,[RDI+ 8];
+                            mov RBX,[RDI+16];
+                            mov R12,[RDI+24];
+                            mov R13,[RDI+32];
+                            mov R14,[RDI+40];
+                            mov R15,[RDI+48];
+                            jmp RAX;
+                        }
                     }
                 }
             }
@@ -758,12 +802,25 @@ else
             p[12] = cast(void*)top; // x29 (frame pointer)
         }
 
+        version (GNU)
+        {
+            // GCC doesn't honor __attribute__((naked)) on aarch64 (listed
+            // for ARM/x86/AVR only), so use a hand-written .S compiled by
+            // host gcc and linked via the Makefile.
+            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx);
+        }
+        else
+        {
+        // .cfi_undefined x30 terminates DWARF unwinding at co_swap so an
+        // exception thrown in a fibre doesn't walk past co_swap into the
+        // fibre's GuardBand sentinel during stack-trace capture.
         pragma(inline, false)
         extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
         {
             asm nothrow @nogc
             {
                 `
+                .cfi_undefined x30
                 mov x16,sp
                 stp x16,x30,[x1]
                 ldp x16,x30,[x0]
@@ -794,6 +851,7 @@ else
                 : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
                 : "x16", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory";
             }
+        }
         }
     }
     else version (RISCV64)

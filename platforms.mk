@@ -304,6 +304,11 @@ endif
 
 # =======================================================================
 # Compiler auto-selection: cross-compilation targets use LDC
+#
+# DMD: only x86/x86_64 host, anything else -> LDC.
+# GDC: host-only (any arch with a host toolchain); freertos/baremetal -> LDC.
+#      Cross GCC toolchains do ship gdc, but wiring those in is a separate
+#      effort; for now we promote to LDC.
 # =======================================================================
 
 ifeq ($(COMPILER),dmd)
@@ -313,6 +318,12 @@ ifneq ($(ARCH),x86)
     COMPILER = ldc
 endif
 endif
+endif
+endif
+
+ifeq ($(COMPILER),gdc)
+ifneq ($(filter freertos baremetal,$(OS)),)
+    COMPILER := ldc
 endif
 endif
 
@@ -336,7 +347,8 @@ URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(UR
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
 
-# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets
+# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets.
+# urt/internal/os.c already enters via the posix driver dir below.
 ifeq ($(filter freertos baremetal,$(OS)),)
     URT_SOURCES := $(URT_SOURCES) $(URT_SRCDIR)/urt/internal/mbedtls.c
 endif
@@ -382,7 +394,9 @@ endif
 # imports stay in the consumer Makefile.
 # =======================================================================
 
-DFLAGS := $(DFLAGS) -preview=bitfields -preview=rvaluerefparam -preview=in #-preview=nosharedaccess <- TODO
+# Preview flags translated per-compiler below: dmd/ldc accept -preview=X,
+# gdc takes -fpreview=X.
+D_PREVIEWS := bitfields rvaluerefparam in #nosharedaccess <- TODO
 
 # OS-level versions
 ifeq ($(OS),freertos)
@@ -467,15 +481,15 @@ else ifeq ($(PLATFORM),esp32-p4)
     DFLAGS := $(DFLAGS) -d-version=ESP32_P4
 endif
 
-ifeq ($(CONFIG),unittest)
-    DFLAGS := $(DFLAGS) -unittest
-endif
-
 # =======================================================================
 # Compiler configuration -- triple, mattr, link flags
 # =======================================================================
 
 ifeq ($(COMPILER),ldc)
+    DFLAGS := $(DFLAGS) $(addprefix -preview=,$(D_PREVIEWS))
+    ifeq ($(CONFIG),unittest)
+        DFLAGS := $(DFLAGS) -unittest
+    endif
     # Prefer dlang-installer LDC (avoids system package conflicts with cross-compile)
     DC := $(lastword $(sort $(wildcard $(HOME)/dlang/ldc-*/bin/ldc2)))
     DC := $(if $(DC),$(DC),ldc2)
@@ -652,6 +666,11 @@ ifeq ($(COMPILER),ldc)
 else ifeq ($(COMPILER),dmd)
     DC ?= dmd
 
+    DFLAGS := $(DFLAGS) $(addprefix -preview=,$(D_PREVIEWS))
+    ifeq ($(CONFIG),unittest)
+        DFLAGS := $(DFLAGS) -unittest
+    endif
+
     # Strip druntime/phobos, use URT's own object.d.
     # Consumers may need to prepend their own -I to shadow druntime's
     # __importc_builtins.di (e.g. OpenWatt's third_party/dmd/ for MSVC va_list).
@@ -669,6 +688,52 @@ else ifeq ($(COMPILER),dmd)
         DFLAGS := $(DFLAGS) -release -O -inline
     else
         DFLAGS := $(DFLAGS) -g -debug
+    endif
+
+else ifeq ($(COMPILER),gdc)
+    DC ?= gdc
+
+    DFLAGS := $(DFLAGS) $(addprefix -fpreview=,$(D_PREVIEWS))
+    ifeq ($(CONFIG),unittest)
+        # URT defines its own extern(C) main in src/urt/package.d, so don't
+        # pass -fmain (which would emit a duplicate _Dmain).
+        DFLAGS := $(DFLAGS) -funittest
+    endif
+
+    # Strip druntime/phobos, use URT's own object.d.
+    # -fno-druntime is too aggressive: it implies -fno-rtti -fno-exceptions
+    # -fno-moduleinfo, but uRT defines its own TypeInfo (needs RTTI), uses
+    # try-catch (needs exceptions), and walks ModuleInfo to enumerate
+    # unittest functions. Pick the subset we actually want:
+    #   -nophoboslib       skip linking libgphobos
+    # GDC's bundled druntime path is shadowed per module under src/core/
+    # (newaa, array.construction, cast_, ...).
+    # -fno-omit-frame-pointer: URT's exception unwinder walks the frame chain
+    # (matches LDC's -frame-pointer=all).
+    DFLAGS := $(DFLAGS) -nophoboslib -fno-omit-frame-pointer -I $(URT_SRCDIR)
+
+    # GDC ignores pragma(lib, "mbedtls") on most binutils setups (.deplibs
+    # is not honored by ld). Pass explicit -l flags on host posix builds.
+    # Use -Wl,--no-as-needed so the libs aren't dropped despite appearing
+    # before the object files that reference them on the link line.
+    ifneq ($(filter linux ubuntu freebsd,$(OS)),)
+        DFLAGS := $(DFLAGS) -Wl,--no-as-needed -lmbedtls -lmbedx509 -lmbedcrypto -Wl,--as-needed
+    endif
+
+    ifeq ($(ARCH),x86_64)
+        DFLAGS := $(DFLAGS) -m64
+    else ifeq ($(ARCH),x86)
+        DFLAGS := $(DFLAGS) -m32
+    else ifeq ($(ARCH),arm64)
+        # Native arm64 host build -- nothing to add; gdc's default target matches.
+    else
+        $(error "GDC: unsupported ARCH=$(ARCH) for PLATFORM=$(PLATFORM) (use COMPILER=ldc)")
+    endif
+
+    ifeq ($(CONFIG),release)
+        DFLAGS := $(DFLAGS) -O3 -frelease -finline-functions
+    else
+        DFLAGS := $(DFLAGS) -g -fdebug
     endif
 else
     $(error "Unknown D compiler: $(COMPILER)")

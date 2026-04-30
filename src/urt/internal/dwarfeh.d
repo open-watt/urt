@@ -203,6 +203,12 @@ version (LDC)
     private enum catch_mangle = "_d_eh_enter_catch";
     private enum personality_mangle = "_d_eh_personality";
 }
+else version (GNU)
+{
+    private enum throw_mangle = "_d_throw";
+    private enum catch_mangle = "__gdc_begin_catch";
+    private enum personality_mangle = "__gdc_personality_v0";
+}
 else
 {
     private enum throw_mangle = "_d_throwdwarf";

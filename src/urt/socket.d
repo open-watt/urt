@@ -6,8 +6,12 @@ public import urt.mem;
 public import urt.result;
 public import urt.time;
 
-version (BareMetal)
+version (UseInternalIPStack)
     version = SocketCallbacks;
+else version (BareMetal)
+    version = SocketCallbacks;
+else version (Windows)
+    version = WinSock;
 
 version (SocketCallbacks)
 {
@@ -46,7 +50,7 @@ version (SocketCallbacks)
         _socket_backend = backend;
     }
 }
-else version (Windows)
+else version (WinSock)
 {
     // TODO: this is in core.sys.windows.winsock2; why do I need it here?
     pragma(lib, "ws2_32");
@@ -239,10 +243,18 @@ enum SocketResult
     would_block,
     no_buffer,
     network_down,
+    network_unreachable,
+    host_unreachable,
     connection_refused,
     connection_reset,
     connection_aborted,
     connection_closed,
+    address_in_use,
+    address_not_available,
+    timed_out,
+    not_connected,
+    already_connected,
+    permission_denied,
     interrupted,
     invalid_socket,
     invalid_argument,
@@ -359,7 +371,6 @@ nothrow @nogc:
 
     void opAssign(typeof(null)) { handle = invalid.handle; }
 
-private:
     SocketHandle handle = INVALID_SOCKET;
 }
 
@@ -388,7 +399,7 @@ Result close(Socket socket)
     else
     {
         int result;
-        version (Windows)
+        version (WinSock)
             result = closesocket(socket.handle);
         else version (BSDSockets)
             result = _close(socket.handle);
@@ -409,7 +420,7 @@ Result shutdown(Socket socket, SocketShutdownMode how)
         int t = int(how);
         switch (how)
         {
-            version (Windows)
+            version (WinSock)
             {
                 case SocketShutdownMode.read:       t = SD_RECEIVE; break;
                 case SocketShutdownMode.write:      t = SD_SEND;    break;
@@ -524,7 +535,7 @@ Result send(Socket socket, MsgFlags flags, size_t* bytes_sent, const void[][] bu
 {
     version (SocketCallbacks)
         return sendmsg(socket, null, flags, null, bytes_sent, buffers);
-    else version (Windows)
+    else version (WinSock)
     {
         uint sent;
         WSABUF[32] bufs = void;
@@ -557,7 +568,7 @@ Result sendto(Socket socket, const(void)[] message, MsgFlags flags = MsgFlags.no
 {
     version (SocketCallbacks)
         return sendmsg(socket, address, flags, null, bytes_sent, (&message)[0..1]);
-    else version (Windows)
+    else version (WinSock)
         return sendto(socket, address, bytes_sent, (&message)[0..1]);
     else
         return sendmsg(socket, address, flags, null, bytes_sent, (&message)[0..1]);
@@ -567,7 +578,7 @@ Result sendto(Socket socket, const InetAddress* address, size_t* bytes_sent, con
 {
     version (SocketCallbacks)
         return sendmsg(socket, address, MsgFlags.none, null, bytes_sent, buffers);
-    else version (Windows)
+    else version (WinSock)
     {
         ubyte[sockaddr_storage.sizeof] tmp = void;
         size_t addr_len;
@@ -620,7 +631,7 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
             assert(sock_addr, "Invalid socket address");
         }
 
-        version (Windows)
+        version (WinSock)
         {
             uint sent;
             WSAMSG msg;
@@ -694,7 +705,7 @@ Result pending(Socket socket, out size_t bytes_available)
         return Result(_socket_backend.pending(socket, bytes_available));
     else
     {
-        version (Windows)
+        version (WinSock)
         {
             import urt.internal.sys.windows.winsock2 : ioctlsocket, FIONREAD;
             uint avail;
@@ -775,7 +786,7 @@ Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, In
 
         if (local_address)
         {
-            version (Windows)
+            version (WinSock)
             {
                 assert(WSARecvMsg, "WSARecvMsg not available!");
 
@@ -872,7 +883,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
         if (option == SocketOption.non_blocking)
         {
             bool value = *cast(const(bool)*)optval;
-            version (Windows)
+            version (WinSock)
             {
                 uint opt = value ? 1 : 0;
                 r.system_code = ioctlsocket(socket.handle, FIONBIO, &opt);
@@ -1203,7 +1214,7 @@ Result get_socket_option(Socket socket, SocketOption option, out IPAddr output)
 
 Result set_keepalive(Socket socket, bool enable, Duration keepIdle, Duration keepInterval, int keepCount)
 {
-    version (Windows)
+    version (WinSock)
     {
         tcp_keepalive alive;
         alive.onoff = enable ? 1 : 0;
@@ -1349,7 +1360,7 @@ Result poll(PollFd[] pollFds, Duration timeout, out uint numEvents)
     {
         enum MaxFds = 512;
         assert(pollFds.length <= MaxFds, "Too many fds!");
-        version (Windows)
+        version (WinSock)
             WSAPOLLFD[MaxFds] fds;
         else
             pollfd[MaxFds] fds;
@@ -1361,7 +1372,7 @@ Result poll(PollFd[] pollFds, Duration timeout, out uint numEvents)
                             ((pollFds[i].request_events & PollEvents.write) ? POLLWRNORM : 0));
         }
         int r;
-        version (Windows)
+        version (WinSock)
             r = WSAPoll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
         else version (BSDSockets)
             r = _poll(fds.ptr, cast(uint)pollFds.length, timeout.ticks < 0 ? -1 : cast(int)timeout.as!"msecs");
@@ -1507,7 +1518,7 @@ SocketResult socket_result(Result result)
             return SocketResult.success;
         if (result.system_code == ConnectionClosedResult.system_code)
             return SocketResult.connection_closed;
-        else version (Windows)
+        else version (WinSock)
         {
             if (result.system_code == WSAEWOULDBLOCK)
                 return SocketResult.would_block;
@@ -1517,10 +1528,28 @@ SocketResult socket_result(Result result)
                 return SocketResult.no_buffer;
             if (result.system_code == WSAENETDOWN)
                 return SocketResult.network_down;
+            if (result.system_code == WSAENETUNREACH)
+                return SocketResult.network_unreachable;
+            if (result.system_code == WSAEHOSTUNREACH)
+                return SocketResult.host_unreachable;
             if (result.system_code == WSAECONNREFUSED)
                 return SocketResult.connection_refused;
             if (result.system_code == WSAECONNRESET)
                 return SocketResult.connection_reset;
+            if (result.system_code == WSAECONNABORTED)
+                return SocketResult.connection_aborted;
+            if (result.system_code == WSAEADDRINUSE)
+                return SocketResult.address_in_use;
+            if (result.system_code == WSAEADDRNOTAVAIL)
+                return SocketResult.address_not_available;
+            if (result.system_code == WSAETIMEDOUT)
+                return SocketResult.timed_out;
+            if (result.system_code == WSAENOTCONN)
+                return SocketResult.not_connected;
+            if (result.system_code == WSAEISCONN)
+                return SocketResult.already_connected;
+            if (result.system_code == WSAEACCES)
+                return SocketResult.permission_denied;
             if (result.system_code == WSAEINTR)
                 return SocketResult.interrupted;
             if (result.system_code == WSAENOTSOCK)
@@ -1542,10 +1571,28 @@ SocketResult socket_result(Result result)
                 return SocketResult.no_buffer;
             if (result.system_code == ENETDOWN)
                 return SocketResult.network_down;
+            if (result.system_code == ENETUNREACH)
+                return SocketResult.network_unreachable;
+            if (result.system_code == EHOSTUNREACH)
+                return SocketResult.host_unreachable;
             if (result.system_code == ECONNREFUSED)
                 return SocketResult.connection_refused;
             if (result.system_code == ECONNRESET)
                 return SocketResult.connection_reset;
+            if (result.system_code == ECONNABORTED)
+                return SocketResult.connection_aborted;
+            if (result.system_code == EADDRINUSE)
+                return SocketResult.address_in_use;
+            if (result.system_code == EADDRNOTAVAIL)
+                return SocketResult.address_not_available;
+            if (result.system_code == ETIMEDOUT)
+                return SocketResult.timed_out;
+            if (result.system_code == ENOTCONN)
+                return SocketResult.not_connected;
+            if (result.system_code == EISCONN)
+                return SocketResult.already_connected;
+            if (result.system_code == EACCES)
+                return SocketResult.permission_denied;
             if (result.system_code == EINTR)
                 return SocketResult.interrupted;
             if (result.system_code == EINVAL)
@@ -1561,7 +1608,7 @@ version (SocketCallbacks) {} else {
 
 Result socket_getlasterror()
 {
-    version (Windows)
+    version (WinSock)
         return Result(WSAGetLastError());
     else version (Errno)
         return errno_result();
@@ -1586,7 +1633,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
             version (lwIP)
                 ain.sin_len = sockaddr_in.sizeof;
             ain.sin_family = s_addressFamily[AddressFamily.ipv4];
-            version (Windows)
+            version (WinSock)
             {
                 ain.sin_addr.S_un.S_un_b.s_b1 = address._a.ipv4.addr.b[0];
                 ain.sin_addr.S_un.S_un_b.s_b2 = address._a.ipv4.addr.b[1];
@@ -1618,7 +1665,7 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                 storeBigEndian(cast(uint*)&ain6.sin6_scope_id, address._a.ipv6.scopeId);
                 for (int a = 0; a < 8; ++a)
                 {
-                    version (Windows)
+                    version (WinSock)
                         storeBigEndian(&ain6.sin6_addr.in6_u.u6_addr16[a], address._a.ipv6.addr.s[a]);
                     else version (Posix)
                         storeBigEndian(&ain6.sin6_addr.__in6_u.__u6_addr16[a], address._a.ipv6.addr.s[a]);
@@ -1717,7 +1764,7 @@ InetAddress make_InetAddress(const(sockaddr)* sock_address)
 IPAddr make_IPAddr(ref const in_addr in4)
 {
     IPAddr addr;
-    version (Windows)
+    version (WinSock)
     {
         addr.b[0] = in4.S_un.S_un_b.s_b1;
         addr.b[1] = in4.S_un.S_un_b.s_b2;
@@ -1736,7 +1783,7 @@ IPv6Addr make_IPv6Addr(ref const in6_addr in6)
     IPv6Addr addr;
     for (int a = 0; a < 8; ++a)
     {
-        version (Windows)
+        version (WinSock)
             addr.s[a] = loadBigEndian(&in6.in6_u.u6_addr16[a]);
         else version (Posix)
             addr.s[a] = loadBigEndian(&in6.__in6_u.__u6_addr16[a]);
@@ -1877,7 +1924,7 @@ else
     ];
 }
 
-version (Windows) // BS_NETWORK_WINDOWS_VERSION >= _WIN32_WINNT_VISTA
+version (WinSock) // BS_NETWORK_WINDOWS_VERSION >= _WIN32_WINNT_VISTA
 {
     __gshared immutable OptInfo[SocketOption.max] s_socketOptions = [
         OptInfo( -1, OptType.bool_, OptType.bool_ ), // NonBlocking
@@ -1999,7 +2046,7 @@ int map_addrinfo_flags(AddressInfoFlags flags)
     if (flags & AddressInfoFlags.all) r |= AI_ALL;
     if (flags & AddressInfoFlags.addr_config) r |= AI_ADDRCONFIG;
     if (flags & AddressInfoFlags.v4_mapped) r |= AI_V4MAPPED;
-    version (Windows)
+    version (WinSock)
         if (flags & AddressInfoFlags.fqdn) r |= AI_FQDN;
     return r;
 }
@@ -2016,7 +2063,7 @@ OptLevel get_optlevel(SocketOption opt)
 }
 
 
-version (Windows)
+version (WinSock)
 {
     pragma(crt_constructor)
     void crt_bootup()
@@ -2065,7 +2112,7 @@ version (Windows)
 
 
 // TODO: REMOVE ME - pushed to druntime...
-version (Windows)
+version (WinSock)
 {
     // stuff that's missing from the windows headers...
 

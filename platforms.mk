@@ -673,3 +673,18 @@ else ifeq ($(COMPILER),dmd)
 else
     $(error "Unknown D compiler: $(COMPILER)")
 endif
+
+# User-specified D version idents, comma-separated (e.g. VERSIONS=Foo,Bar)
+ifdef VERSIONS
+    comma := ,
+    empty :=
+    space := $(empty) $(empty)
+    ifeq ($(COMPILER),dmd)
+        VERSION_FLAG := -version=
+    else ifeq ($(COMPILER),gdc)
+        VERSION_FLAG := -fversion=
+    else
+        VERSION_FLAG := -d-version=
+    endif
+    DFLAGS := $(DFLAGS) $(addprefix $(VERSION_FLAG),$(subst $(comma),$(space),$(VERSIONS)))
+endif

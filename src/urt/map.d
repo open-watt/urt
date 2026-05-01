@@ -169,6 +169,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
         emplace(&node.kvp, forward!key, forward!val);
         node._base.left = node._base.right = null;
         node._base.height = 1;
+        node._base.key_offset = Node.kvp.offsetof + KVP!(K, V).key.offsetof;
         _root = insert(_root, node);
         return node.kvp.value;
     }
@@ -519,7 +520,8 @@ public:
 struct BaseNode
 {
     BaseNode* left, right;
-    int height;
+    ushort key_offset;
+    ushort height;
 }
 
 struct AVLTreeNode(K, V)
@@ -819,12 +821,15 @@ alias CompFn = ptrdiff_t function(const void* a, const void* b) pure nothrow @no
 alias MoveFn = void function(void* from, void* to) nothrow @nogc;
 alias DestroyFn = void function(void* a) nothrow @nogc;
 
-int height(const(BaseNode)* n) pure
+inout(void)* node_key(inout(BaseNode)* n) pure
+    => cast(inout(void)*)n + n.key_offset;
+
+ushort height(const(BaseNode)* n) pure
 {
     return n ? n.height : 0;
 }
 
-int max_height(const(BaseNode)* n) pure
+ushort max_height(const(BaseNode)* n) pure
 {
     if (!n)
         return 0;
@@ -855,8 +860,8 @@ BaseNode* right_rotate(BaseNode* y) pure
     y.left = T2;
 
     // Update heights
-    y.height = max_height(y) + 1;
-    x.height = max_height(x) + 1;
+    y.height = cast(ushort)(max_height(y) + 1);
+    x.height = cast(ushort)(max_height(x) + 1);
 
     // Return new root
     return x;
@@ -872,8 +877,8 @@ BaseNode* left_rotate(BaseNode* x) pure
     x.right = T2;
 
     //  Update heights
-    x.height = max_height(x) + 1;
-    y.height = max_height(y) + 1;
+    x.height = cast(ushort)(max_height(x) + 1);
+    y.height = cast(ushort)(max_height(y) + 1);
 
     // Return new root
     return y;
@@ -886,7 +891,7 @@ BaseNode* rebalance(BaseNode* root) pure
         return null;
 
     // STEP 2: UPDATE HEIGHT OF THE CURRENT NODE
-    root.height = max(height(root.left), height(root.right)) + 1;
+    root.height = cast(ushort)(max(height(root.left), height(root.right)) + 1);
 
     // STEP 3: GET THE BALANCE FACTOR OF THIS NODE (to check whether
     //  this Node became unbalanced)
@@ -923,7 +928,7 @@ inout(BaseNode)* find_node(inout(BaseNode)* n, CompFn pred, const void* key) pur
 {
     if (n is null)
         return null;
-    ptrdiff_t c = pred(&n[1], key);
+    ptrdiff_t c = pred(node_key(n), key);
     if (c > 0)
         return find_node(n.left, pred, key);
     if (c < 0)
@@ -951,7 +956,7 @@ BaseNode* insert_node(BaseNode* n, BaseNode* newnode, ref size_t num_nodes, Comp
         return newnode;
     }
 
-    ptrdiff_t c = pred(&newnode[1], &n[1]);
+    ptrdiff_t c = pred(node_key(newnode), node_key(n));
     if (c < 0)
         n.left = insert_node(n.left, newnode, num_nodes, pred, free_fun);
     else if (c > 0)
@@ -968,7 +973,7 @@ BaseNode* insert_node(BaseNode* n, BaseNode* newnode, ref size_t num_nodes, Comp
     }
 
     // 2. Update height of this ancestor Node
-    n.height = max_height(n) + 1;
+    n.height = cast(ushort)(max_height(n) + 1);
 
     // 3. get the balance factor of this ancestor Node to check whether
     //    this Node became unbalanced
@@ -978,7 +983,7 @@ BaseNode* insert_node(BaseNode* n, BaseNode* newnode, ref size_t num_nodes, Comp
 
     if (balance > 1)
     {
-        ptrdiff_t lc = pred(&newnode[1], &n.left[1]);
+        ptrdiff_t lc = pred(node_key(newnode), node_key(n.left));
         // Left Left Case
         if (lc < 0)
             return right_rotate(n);
@@ -993,7 +998,7 @@ BaseNode* insert_node(BaseNode* n, BaseNode* newnode, ref size_t num_nodes, Comp
 
     if (balance < -1)
     {
-        ptrdiff_t rc = pred(&newnode[1], &n.right[1]);
+        ptrdiff_t rc = pred(node_key(newnode), node_key(n.right));
 
         // Right Right Case
         if (rc > 0)
@@ -1018,7 +1023,7 @@ BaseNode* delete_node(BaseNode* root, const void* key, ref size_t num_nodes, Com
     if (root is null)
         return root;
 
-    ptrdiff_t c = pred(&root[1], key);
+    ptrdiff_t c = pred(node_key(root), key);
 
     // If the key to be deleted is smaller than the root's key,
     // then it lies in left subtree
@@ -1076,7 +1081,7 @@ BaseNode* do_delete(BaseNode* root, ref size_t num_nodes, CompFn pred, MoveFn mo
         move_fun(next, root);
 
         // Delete the node we just shifted
-        root.right = delete_node(root.right, &next[1], num_nodes, pred, move_fun, free_fun);
+        root.right = delete_node(root.right, node_key(next), num_nodes, pred, move_fun, free_fun);
     }
 
     return root;

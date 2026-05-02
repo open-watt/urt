@@ -315,6 +315,79 @@ version (none)
     }
 }
 
+// signal
+//
+// Linux/glibc/musl layout. Signal numbers and sa_flags constants are
+// consistent across x86, x86_64, ARM, AArch64, RISC-V on Linux.
+// MIPS/Alpha/SPARC differ - not supported here.
+
+version (linux)
+{
+    enum SIGHUP   = 1;
+    enum SIGINT   = 2;
+    enum SIGILL   = 4;
+    enum SIGABRT  = 6;
+    enum SIGBUS   = 7;
+    enum SIGFPE   = 8;
+    enum SIGSEGV  = 11;
+    enum SIGPIPE  = 13;
+    enum SIGALRM  = 14;
+    enum SIGTERM  = 15;
+
+    enum SA_NOCLDSTOP = 0x00000001;
+    enum SA_NOCLDWAIT = 0x00000002;
+    enum SA_SIGINFO   = 0x00000004;
+    enum SA_ONSTACK   = 0x08000000;
+    enum SA_RESTART   = 0x10000000;
+    enum SA_NODEFER   = 0x40000000;
+    enum SA_RESETHAND = 0x80000000;
+
+    enum SS_ONSTACK = 1;
+    enum SS_DISABLE = 2;
+
+    enum MINSIGSTKSZ = 2048;
+    enum SIGSTKSZ    = 8192;
+
+    // Linux kernel sigset_t is 1024 bits / 128 bytes regardless of arch.
+    struct sigset_t { ulong[16] __val; }
+
+    // siginfo_t is kernel ABI - 128 bytes on every Linux arch. Treat as
+    // opaque; the only field we read is the signal number passed
+    // separately in the handler's first argument.
+    struct siginfo_t { ubyte[128] _opaque; }
+
+    struct stack_t
+    {
+        void*  ss_sp;
+        int    ss_flags;
+        size_t ss_size;
+    }
+
+    alias sigaction_handler_t  = extern(C) void function(int) nothrow @nogc;
+    alias sigaction_sigaction_t = extern(C) void function(int, siginfo_t*, void*) nothrow @nogc;
+
+    // Linux glibc/musl layout: handler union, then sa_mask, then sa_flags,
+    // then sa_restorer. (MIPS reorders these - excluded above.)
+    struct sigaction_t
+    {
+        union
+        {
+            sigaction_handler_t  sa_handler;
+            sigaction_sigaction_t sa_sigaction;
+        }
+        sigset_t sa_mask;
+        int      sa_flags;
+        extern(C) void function() nothrow @nogc sa_restorer;
+    }
+
+    int sigaction(int signum, const(sigaction_t)* act, sigaction_t* oldact);
+    int sigaltstack(const(stack_t)* ss, stack_t* old_ss);
+    int sigemptyset(sigset_t* set);
+    int sigfillset(sigset_t* set);
+    int raise(int sig);
+    uint alarm(uint seconds);
+}
+
 // ── poll ──
 
 struct pollfd

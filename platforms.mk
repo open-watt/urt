@@ -646,7 +646,9 @@ ifeq ($(COMPILER),ldc)
         # Xtensa: -Oz to fit in flash; bitcode emission set above
         DFLAGS := $(DFLAGS) --enable-asserts -Oz -enable-inlining -d-debug
     else
-        DFLAGS := $(DFLAGS) -g -d-debug
+        # Frame pointers required for x86/x86_64 crash-handler RBP walk;
+        # other arches use _Unwind_Backtrace and don't care.
+        DFLAGS := $(DFLAGS) -g -d-debug -frame-pointer=all
     endif
 
 else ifeq ($(COMPILER),dmd)

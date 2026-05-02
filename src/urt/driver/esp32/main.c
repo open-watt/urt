@@ -3,11 +3,13 @@
 // .init_array (D module constructors) are called automatically by
 // ESP-IDF startup before app_main, so we just call D's main().
 
-#include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#ifdef OW_USE_LWIP
+#include "esp_netif.h"
+#endif
 
 extern int ets_printf(const char *fmt, ...);
 extern int main(int argc, char **argv);
@@ -47,10 +49,14 @@ void app_main(void)
         nvs_flash_init();
     }
 
-    // Initialize lwIP and event loop early -- D code may open sockets
-    // during startup before any WiFi/Ethernet interface is created.
-    esp_netif_init();
+    // Event loop is required for WIFI_EVENT delivery.
     esp_event_loop_create_default();
+
+#ifdef OW_USE_LWIP
+    // Bring up lwIP early -- D code may open sockets during startup before
+    // any WiFi/Ethernet interface is created.
+    esp_netif_init();
+#endif
 
     xTaskCreate(watchdog_task, "ow_wdt", 2048, NULL, 1, NULL);
 

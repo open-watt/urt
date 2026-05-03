@@ -803,7 +803,6 @@ nothrow @nogc:
     ref MutableString!Embed insert_format(Things...)(size_t offset, const(char)[] format, auto ref Things args)
     {
         import urt.string.format : _format = format;
-        import urt.util : max, next_power_of_2;
 
         char* oldPtr = ptr;
         size_t oldLen = length();
@@ -815,7 +814,7 @@ nothrow @nogc:
         debug assert(newLen <= MaxStringLen, "String too long");
 
         size_t oldAlloc = allocated();
-        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(max(16, cast(ushort)newLen + 4).next_power_of_2 - 4);
+        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(grow_capacity(newLen, oldAlloc));
         memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
         _format(ptr[offset .. offset + insertLen], format, forward!args);
         writeLength(newLen);
@@ -896,6 +895,20 @@ private:
         return (cast(ushort*)ptr)[-2];
     }
 
+    static ushort grow_capacity(size_t target, size_t current) pure
+    {
+        import urt.util : next_power_of_2;
+        size_t doubled = (current + 4) * 2;
+        size_t total = target + 4;
+        if (total <= doubled)
+            total = next_power_of_2(total);
+        if (total < 16)
+            total = 16;
+        if (total > MaxStringLen + 4)
+            total = MaxStringLen + 4;
+        return cast(ushort)(total - 4);
+    }
+
     void writeLength(size_t len)
     {
         (cast(ushort*)ptr)[-1] = cast(ushort)len;
@@ -926,7 +939,6 @@ private:
     ref MutableString!Embed insert_impl(Things...)(size_t offset, Tuple!Things args)
     {
         import urt.string.format : concat_impl;
-        import urt.util : max, next_power_of_2;
 
         char* oldPtr = ptr;
         size_t oldLen = length();
@@ -938,7 +950,7 @@ private:
         debug assert(newLen <= MaxStringLen, "String too long");
 
         size_t oldAlloc = allocated();
-        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(max(16, cast(ushort)newLen + 4).next_power_of_2 - 4);
+        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(grow_capacity(newLen, oldAlloc));
         memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
         concat_impl(ptr[offset .. offset + insertLen], args);
         writeLength(newLen);

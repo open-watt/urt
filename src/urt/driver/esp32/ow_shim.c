@@ -9,7 +9,9 @@
 #include "hal/uart_periph.h"
 #include "esp_rom_gpio.h"
 #include "esp_rom_serial_output.h"
+#ifdef OW_USE_LWIP
 #include "lwip/netdb.h"
+#endif
 
 // ESP32-C3 ROM exports uart_tx_one_char but not esp_rom_uart_putc.
 // Provide the missing symbol so the D object links.
@@ -270,21 +272,24 @@ int32_t ow_uart_flush(unsigned port)
 #if CONFIG_ESP_WIFI_ENABLED
 #include "esp_wifi.h"
 #include "esp_private/wifi.h"
-#include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_mac.h"
 
+static int ow_wifi_refcount;
+
+#ifdef OW_USE_LWIP
+#include "esp_netif.h"
+
 static esp_netif_t *ow_wifi_netif_sta;
 static esp_netif_t *ow_wifi_netif_ap;
-static int ow_wifi_refcount;
+#endif
 
 typedef void (*ow_wifi_event_cb_t)(int event_id, void *data, int data_len);
 
 static ow_wifi_event_cb_t ow_wifi_sta_cb;
 static ow_wifi_event_cb_t ow_wifi_ap_cb;
 
-static void ow_wifi_event_handler(void *arg, esp_event_base_t base,
-                                  int32_t event_id, void *event_data)
+static void ow_wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     if (base == WIFI_EVENT)
     {
@@ -307,11 +312,13 @@ static void ow_wifi_event_handler(void *arg, esp_event_base_t base,
             break;
         }
     }
+#ifdef OW_USE_LWIP
     else if (base == IP_EVENT)
     {
         if (event_id == IP_EVENT_STA_GOT_IP && ow_wifi_sta_cb)
             ow_wifi_sta_cb(event_id, event_data, 0);
     }
+#endif
 }
 
 int ow_wifi_init(void)
@@ -327,17 +334,16 @@ int ow_wifi_init(void)
         return (int)err;
     }
 
-    // Create netifs before registering RX callbacks or starting WiFi,
-    // so esp_netif_receive() always has valid targets.
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &ow_wifi_event_handler, NULL);
+
+#ifdef OW_USE_LWIP
+    // Create netifs before RX callbacks fire, so esp_netif_receive() has valid targets.
     if (!ow_wifi_netif_sta)
         ow_wifi_netif_sta = esp_netif_create_default_wifi_sta();
     if (!ow_wifi_netif_ap)
         ow_wifi_netif_ap = esp_netif_create_default_wifi_ap();
-
-    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                               &ow_wifi_event_handler, NULL);
-    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                               &ow_wifi_event_handler, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ow_wifi_event_handler, NULL);
+#endif
 
     return 0;
 }
@@ -350,6 +356,7 @@ void ow_wifi_deinit(void)
     esp_wifi_stop();
     esp_wifi_deinit();
 
+#ifdef OW_USE_LWIP
     if (ow_wifi_netif_sta)
     {
         esp_netif_destroy(ow_wifi_netif_sta);
@@ -360,6 +367,7 @@ void ow_wifi_deinit(void)
         esp_netif_destroy(ow_wifi_netif_ap);
         ow_wifi_netif_ap = NULL;
     }
+#endif
 }
 
 int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bssid)
@@ -386,8 +394,7 @@ int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bs
     return esp_wifi_set_config(WIFI_IF_STA, &cfg) == ESP_OK ? 1 : 0;
 }
 
-int ow_wifi_ap_config(const char *ssid, const char *password,
-                      uint8_t channel, uint8_t max_conn, uint8_t hidden)
+int ow_wifi_ap_config(const char *ssid, const char *password, uint8_t channel, uint8_t max_conn, uint8_t hidden)
 {
     wifi_config_t cfg = {0};
     if (ssid)
@@ -426,14 +433,28 @@ static esp_err_t ow_wifi_sta_rx(void *buffer, uint16_t len, void *eb)
 {
     if (ow_wifi_rx_callback)
         ow_wifi_rx_callback((const uint8_t *)buffer, len, 0);
+#ifdef OW_USE_LWIP
     return esp_netif_receive(ow_wifi_netif_sta, buffer, len, eb);
+#else
+    // Internal stack consumes via ow_wifi_rx_callback; we own the eb buffer
+    // (esp_netif_receive normally frees it).
+    if (eb)
+        esp_wifi_internal_free_rx_buffer(eb);
+    return ESP_OK;
+#endif
 }
 
 static esp_err_t ow_wifi_ap_rx(void *buffer, uint16_t len, void *eb)
 {
     if (ow_wifi_rx_callback)
         ow_wifi_rx_callback((const uint8_t *)buffer, len, 1);
+#ifdef OW_USE_LWIP
     return esp_netif_receive(ow_wifi_netif_ap, buffer, len, eb);
+#else
+    if (eb)
+        esp_wifi_internal_free_rx_buffer(eb);
+    return ESP_OK;
+#endif
 }
 
 int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb)
@@ -608,6 +629,7 @@ twai_handle_t ow_can_open(unsigned, uint32_t, int, int, uint8_t, uint8_t, uint8_
 
 #endif // SOC_TWAI_SUPPORTED
 
+#ifdef OW_USE_LWIP
 // -- lwIP netdb wrappers (link-order fix) --
 // D object references lwip_getaddrinfo/lwip_freeaddrinfo but the D object
 // appears after liblwip.a in the link. These wrappers are in libmain.a
@@ -622,3 +644,4 @@ void ow_lwip_freeaddrinfo(struct addrinfo *ai)
 {
     lwip_freeaddrinfo(ai);
 }
+#endif

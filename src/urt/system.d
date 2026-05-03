@@ -6,12 +6,14 @@ import urt.time;
 
 version (Espressif)
 {
-    enum uint MALLOC_CAP_DEFAULT = 1 << 12;
+    enum uint MALLOC_CAP_SPIRAM   = 1 << 10;
+    enum uint MALLOC_CAP_INTERNAL = 1 << 11;
     extern(C) nothrow @nogc
     {
         size_t heap_caps_get_total_size(uint caps);
         size_t heap_caps_get_free_size(uint caps);
         size_t heap_caps_get_minimum_free_size(uint caps);
+        size_t heap_caps_get_largest_free_block(uint caps);
     }
 }
 
@@ -69,15 +71,20 @@ void sleep(Duration duration)
     }
 }
 
+struct MemoryPool
+{
+    ulong total;          // capacity in bytes (0 if pool absent)
+    ulong used;           // currently allocated
+    ulong peak_used;      // high-water mark of used (0 if unavailable)
+    ulong largest_free;   // largest contiguous allocatable block (0 if unknown)
+}
+
 struct SystemInfo
 {
     string os_name;
     string processor;
-    ulong total_memory;     // total physical RAM or heap region
-    ulong used_memory;      // actively allocated
-    ulong reserved_memory;  // claimed from OS/sbrk (>= used, includes freed blocks)
-    ulong avail_memory;     // system-wide available for new allocations
-    ulong peak_memory;      // high-water mark (0 if unavailable)
+    MemoryPool fast_ram;   // internal SRAM (host: process resident set)
+    MemoryPool ext_ram;    // PSRAM; zero fields when not present
     Duration uptime;
 }
 
@@ -91,17 +98,13 @@ SystemInfo get_sysinfo()
         MEMORYSTATUSEX mem;
         mem.dwLength = MEMORYSTATUSEX.sizeof;
         if (GlobalMemoryStatusEx(&mem))
-        {
-            r.total_memory = mem.ullTotalPhys;
-            r.avail_memory = mem.ullAvailPhys;
-        }
+            r.fast_ram.total = mem.ullTotalPhys;
         PROCESS_MEMORY_COUNTERS pmc;
         pmc.cb = PROCESS_MEMORY_COUNTERS.sizeof;
         if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, pmc.sizeof))
         {
-            r.reserved_memory = pmc.WorkingSetSize;      // resident pages
-            r.used_memory = pmc.PagefileUsage;            // committed private bytes
-            r.peak_memory = pmc.PeakWorkingSetSize;
+            r.fast_ram.used = pmc.WorkingSetSize;          // process resident
+            r.fast_ram.peak_used = pmc.PeakWorkingSetSize; // peak resident
         }
         r.uptime = msecs(GetTickCount64());
     }
@@ -113,14 +116,15 @@ SystemInfo get_sysinfo()
         if (sysinfo(&info) < 0)
             assert(false, "sysinfo() failed!");
 
-        auto unit = cast(ulong)info.mem_unit;
-        r.total_memory = info.totalram * unit;
-        r.avail_memory = info.freeram * unit;
+        r.fast_ram.total = info.totalram * cast(ulong)info.mem_unit;
 
-        // Process-level stats from /proc/self/status
-        r.reserved_memory = read_proc_self_field("VmRSS:");   // resident set
-        r.used_memory = read_proc_self_field("VmSize:");       // virtual size (committed)
-        r.peak_memory = read_proc_self_field("VmPeak:");
+        // mallinfo2 gives heap-precise bytes-in-use; VmHWM is peak resident
+        // (process-level, includes code/libs/stack but glibc has no peak-heap
+        // counter so it's the tightest available proxy).
+        Mallinfo2 mi = mallinfo2();
+        r.fast_ram.used = mi.uordblks + mi.hblkhd;
+        r.fast_ram.peak_used = read_proc_self_field("VmHWM:");
+
         r.uptime = seconds(info.uptime);
     }
     else version (Posix)
@@ -133,27 +137,36 @@ SystemInfo get_sysinfo()
 
         assert(pages >= 0 && page_size >= 0, "sysconf() failed!");
 
-        r.total_memory = cast(ulong)pages * page_size;
-        r.avail_memory = (avail >= 0) ? cast(ulong)avail * page_size : 0;
-        r.used_memory = r.total_memory - r.avail_memory;
-        r.reserved_memory = r.used_memory;
+        r.fast_ram.total = cast(ulong)pages * page_size;
+        if (avail >= 0)
+            r.fast_ram.used = r.fast_ram.total - cast(ulong)avail * page_size;
     }
     else version (Espressif)
     {
-        r.total_memory = heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
-        r.avail_memory = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-        r.used_memory = r.total_memory - r.avail_memory;
-        r.peak_memory = r.total_memory - heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
+        r.fast_ram.total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+        if (r.fast_ram.total > 0)
+        {
+            r.fast_ram.used = r.fast_ram.total - heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            r.fast_ram.peak_used = r.fast_ram.total - heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+            r.fast_ram.largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        }
+
+        r.ext_ram.total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+        if (r.ext_ram.total > 0)
+        {
+            r.ext_ram.used = r.ext_ram.total - heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            r.ext_ram.peak_used = r.ext_ram.total - heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+            r.ext_ram.largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        }
+
         r.uptime = getAppTime();
     }
     else version (Bouffalo)
     {
         auto mi = mallinfo();
-        r.total_memory = heap_len();
-        r.used_memory = mi.uordblks;
-        r.reserved_memory = mi.arena;
-        r.avail_memory = r.total_memory - mi.arena + mi.fordblks;
-        r.peak_memory = mi.max_total_mem;
+        r.fast_ram.total = heap_len();
+        r.fast_ram.used = mi.uordblks;
+        r.fast_ram.peak_used = mi.max_total_mem;
         r.uptime = getAppTime();
     }
     return r;
@@ -191,10 +204,11 @@ unittest
 
     import urt.io;
     writelnf("System: {0} - {1}", info.os_name, info.processor);
-    writelnf("  total: {0}kb  used: {1}kb  reserved: {2}kb  free: {3}kb  peak: {4}kb",
-        info.total_memory / 1024, info.used_memory / 1024,
-        info.reserved_memory / 1024, info.avail_memory / 1024,
-        info.peak_memory / 1024);
+    writelnf("  fast: {0}kb used / {1}kb total (peak {2}kb)",
+        info.fast_ram.used / 1024, info.fast_ram.total / 1024, info.fast_ram.peak_used / 1024);
+    if (info.ext_ram.total > 0)
+        writelnf("  ext:  {0}kb used / {1}kb total (peak {2}kb)",
+            info.ext_ram.used / 1024, info.ext_ram.total / 1024, info.ext_ram.peak_used / 1024);
 
     version (Embedded)
     {
@@ -244,6 +258,21 @@ version (Bouffalo)
 
 version (linux)
 {
+    struct Mallinfo2
+    {
+        size_t arena;     // non-mmapped space allocated from system
+        size_t ordblks;   // number of free chunks
+        size_t smblks;    // number of free fastbin blocks
+        size_t hblks;     // number of mmapped regions
+        size_t hblkhd;    // space allocated in mmapped regions
+        size_t usmblks;   // unused (historical)
+        size_t fsmblks;   // space in freed fastbin blocks
+        size_t uordblks;  // total allocated (in-use) space
+        size_t fordblks;  // total free space
+        size_t keepcost;  // top-most releasable space
+    }
+    extern(C) Mallinfo2 mallinfo2() nothrow @nogc;
+
     // Read a field from /proc/self/status, returns value in bytes (field is in kB)
     ulong read_proc_self_field(string field) nothrow @nogc
     {

@@ -316,6 +316,14 @@ endif
 endif
 endif
 
+ifeq ($(COMPILER),dmd)
+    VERSION_FLAG := -version=
+else ifeq ($(COMPILER),gdc)
+    VERSION_FLAG := -fversion=
+else
+    VERSION_FLAG := -d-version=
+endif
+
 # =======================================================================
 # Toolchain discovery (Espressif)
 # =======================================================================
@@ -412,7 +420,8 @@ endif
 
 # Vendor/family versions consumed by URT's urt/driver/<x> code
 ifneq ($(filter esp%,$(PLATFORM)),)
-    DFLAGS := $(DFLAGS) -d-version=Espressif -d-version=lwIP -d-version=CRuntime_Picolibc
+    DFLAGS := $(DFLAGS) -d-version=Espressif -d-version=CRuntime_Picolibc
+    USE_LWIP := 1
 endif
 ifeq ($(PLATFORM),bl808)
   ifeq ($(PROCESSOR),c906)
@@ -467,6 +476,14 @@ else ifeq ($(PLATFORM),esp32-p4)
     DFLAGS := $(DFLAGS) -d-version=ESP32_P4
 endif
 
+# IP stack: URT internal stack may override vendor stacks
+USE_INTERNAL_IP_STACK ?=
+ifeq ($(USE_INTERNAL_IP_STACK),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseInternalIPStack
+else ifeq ($(USE_LWIP),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)lwIP
+endif
+
 ifeq ($(CONFIG),unittest)
     DFLAGS := $(DFLAGS) -unittest
 endif
@@ -487,8 +504,17 @@ ifeq ($(COMPILER),ldc)
     #
     # -frame-pointer=all: keep the frame pointer in every function. URT's
     # exception/unwind machinery walks EBP/RBP chains directly (notably on
-    # x86 Windows SEH); leaf-FPO would leave gaps and crash the walker.
-    DFLAGS := $(DFLAGS) -defaultlib= -frame-pointer=all -I $(URT_SRCDIR)
+    # x86 Windows SEH and bare-metal stack-trace capture); leaf-FPO would
+    # leave gaps and crash the walker. Skipped for Espressif targets, which
+    # use libgcc _Unwind_Backtrace (DWARF) and have no FP-chain walker --
+    # and where the attribute also triggers an Xtensa LLVM register
+    # scavenger bug at -O>=1 (LLVM_BUG_5_REGSCAVENGER_SPILL).
+    DFLAGS := $(DFLAGS) -defaultlib= -I $(URT_SRCDIR)
+    ifneq ($(filter esp%,$(PLATFORM)),)
+        # ESP32 family: DWARF unwind, no FP-chain walking.
+    else
+        DFLAGS := $(DFLAGS) -frame-pointer=all
+    endif
 
     ifeq ($(ARCH),x86_64)
 #        DFLAGS := $(DFLAGS) -mtriple=x86_64-linux-gnu
@@ -679,12 +705,5 @@ ifdef VERSIONS
     comma := ,
     empty :=
     space := $(empty) $(empty)
-    ifeq ($(COMPILER),dmd)
-        VERSION_FLAG := -version=
-    else ifeq ($(COMPILER),gdc)
-        VERSION_FLAG := -fversion=
-    else
-        VERSION_FLAG := -d-version=
-    endif
     DFLAGS := $(DFLAGS) $(addprefix $(VERSION_FLAG),$(subst $(comma),$(space),$(VERSIONS)))
 endif

@@ -473,7 +473,7 @@ nothrow @nogc:
                 else
                     static assert(false, "Invalid type for concat");
             }
-            reserve(_length + ext_len);
+            grow(_length + ext_len);
             static foreach (i; 0 .. things.length)
             {
                 static if (is(Things[i] == V[], V) && is(V : T))
@@ -518,7 +518,7 @@ nothrow @nogc:
             auto args = normalise_args(things);
 
             size_t ext_len = _concat(null, args).length;
-            reserve(_length + ext_len);
+            grow(_length + ext_len);
             _concat(ptr[_length .. _length + ext_len], args);
             _length += ext_len;
             return this;
@@ -529,7 +529,7 @@ nothrow @nogc:
             import urt.string.format : _format = format;
 
             size_t ext_len = _format(null, format, args).length;
-            reserve(_length + ext_len);
+            grow(_length + ext_len);
             _format(ptr[_length .. _length + ext_len], format, forward!args);
             _length += ext_len;
             return this;
@@ -541,7 +541,7 @@ nothrow @nogc:
         assert(_length + length <= uint.max);
 
         size_t old_len = _length;
-        reserve(_length + length);
+        grow(_length + length);
         static if (do_init)
             init_all(ptr[_length .. _length + length]);
         _length += cast(uint)length;
@@ -681,7 +681,7 @@ nothrow @nogc:
     {
         debug assert(i + count <= _length, "Range error");
         if (i < _length - count)
-            move_to!true(ptr[_length - count .. _length], ptr[i .. count]);
+            move_to!true(ptr[_length - count .. _length], ptr[i .. i + count]);
         destroy_all!false(ptr[_length - count .. length]);
         _length -= cast(uint)count;
     }
@@ -827,12 +827,20 @@ private:
         .free((cast(void*)ptr - AllocPrefixBytes)[0 .. AllocPrefixBytes + T.sizeof * alloc_count()]);
     }
 
-    pragma(inline, true)
-    static uint num_to_alloc(uint i) pure
+    void grow(size_t target)
     {
-        // TODO: i'm sure we can imagine a better heuristic...
-        return i > 16 ? i * 2 : 16;
+        size_t cap = alloc_count();
+        if (target <= cap)
+            return;
+        assert(target <= uint.max && cap < uint.max);
+        size_t new_cap = cap * 2;
+        if (new_cap < target)
+            new_cap = target;
+        if (new_cap > uint.max)
+            new_cap = uint.max;
+        reserve(new_cap);
     }
+
     version (Windows)
     {
         auto __debugExpanded() const pure => ptr[0 .. _length];

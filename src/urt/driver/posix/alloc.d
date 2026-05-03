@@ -36,7 +36,7 @@ void[] _alloc_exec(size_t size) pure
 
 void _free_exec(void[] mem) pure
 {
-    cast(void)munmap(mem.ptr, mem.length);
+    munmap(mem.ptr, mem.length);
 }
 
 

@@ -956,8 +956,8 @@ template staticMap(alias F, T...)
 version (CoreUnittest) package(core)
 void assertCTFEable(alias dg)()
 {
-    static assert({ cast(void) dg(); return true; }());
-    cast(void) dg();
+    static assert({ dg(); return true; }());
+    dg();
 }
 
 // std.traits.FunctionTypeOf

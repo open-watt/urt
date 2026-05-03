@@ -151,7 +151,7 @@ private Result create_self_signed_win32(ref KeyPair key, out CertRef cert, const
             return Result(cast(uint)ss);
 
         wchar[48] name_buf = void;
-        cast(void)generate_key_name(name_buf[]);
+        generate_key_name(name_buf[]);
 
         NCRYPT_KEY_HANDLE hncrypt;
         ss = NCryptCreatePersistedKey(hprov, &hncrypt, BCRYPT_ECDSA_P256_ALGORITHM.ptr, name_buf.ptr, 0, NCRYPT_OVERWRITE_KEY_FLAG);

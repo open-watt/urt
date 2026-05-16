@@ -115,6 +115,7 @@ size_t findLast(bool case_insensitive = false, T, U)(const(T)[] s, const U c)
         {
             if (s[last] == c)
                 return cast(size_t)last;
+            --last;
         }
         else
         {

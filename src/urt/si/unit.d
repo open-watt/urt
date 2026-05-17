@@ -71,7 +71,9 @@ enum Gram = ScaledUnit(Kilogram, -3);
 enum Milligram = ScaledUnit(Kilogram, -6);
 enum Nanosecond = ScaledUnit(Second, -9);
 enum Hertz = Cycle / Second;
-//enum Kilohertz = TODO: ONOES! Our system can't encode kilohertz! This is disaster!!
+enum Kilohertz = ScaledUnit(Hertz, SiPrefix.Kilo);
+enum Megahertz = ScaledUnit(Hertz, SiPrefix.Mega);
+enum Gigahertz = ScaledUnit(Hertz, SiPrefix.Giga);
 enum Newton = Kilogram * Metre / Second^^2;
 enum Pascal = Newton / Metre^^2;
 enum PSI = ScaledUnit(Pascal, ScaleFactor.PSI);
@@ -80,7 +82,9 @@ enum Watt = Joule / Second;
 enum Kilowatt = ScaledUnit(Watt, 3);
 enum AmpereHour = ScaledUnit(Coulomb, ScaleFactor.Hour);
 enum WattHour = ScaledUnit(Joule, ScaleFactor.Hour);
-//enum KilowattHour = TODO: ONOES! Our system can't encode kilowatt-hours! This is disaster!!
+enum KilowattHour = ScaledUnit(WattHour, SiPrefix.Kilo);
+enum MegawattHour = ScaledUnit(WattHour, SiPrefix.Mega);
+enum GigawattHour = ScaledUnit(WattHour, SiPrefix.Giga);
 enum Coulomb = Ampere * Second;
 enum Volt = Watt / Ampere;
 enum Ohm = Volt / Ampere;
@@ -333,9 +337,14 @@ unittest
 
 enum ScaleFactor : ubyte
 {
+    // prefix-mode factors (contiguous low range): ee field encodes an SI prefix
+    // (none/k/M/G); no exponentiation other than ^^-1
     Minute = 0,
     Hour,
     Day,
+    Cycles,
+
+    // power-mode factors: ee field encodes a power exponent (1..4); no SI prefix
     Inch,
     Foot,
     Mile,
@@ -346,10 +355,22 @@ enum ScaleFactor : ubyte
     UKFluidOunce,
     UKGallon,
     PSI,
-    Cycles,
     Degrees,
 }
 static assert(ScaleFactor.max < 15);
+
+enum LastPrefixModeFactor = ScaleFactor.Cycles;
+
+bool is_prefix_mode(ScaleFactor f) pure
+    => f <= LastPrefixModeFactor;
+
+enum SiPrefix : ubyte
+{
+    None = 0,    // 10^^0
+    Kilo,        // 10^^3
+    Mega,        // 10^^6
+    Giga,        // 10^^9
+}
 
 enum ExtendedScaleFactor : ubyte
 {
@@ -383,6 +404,8 @@ nothrow:
 
     this(Unit u, ScaleFactor sf, int e = 1) pure
     {
+        debug assert(!is_prefix_mode(sf) || e == 1 || e == -1, "Prefix-mode ScaleFactor only supports e == ±1; use the SiPrefix overload for prefixed units");
+
         pack = u.pack;
 
         if (e == 0)
@@ -394,6 +417,12 @@ nothrow:
             pack |= 0x81000000 | (sf << 25) | (~e << 29);
         else
             pack |= 0x01000000 | (sf << 25) | ((e - 1) << 29);
+    }
+
+    this(ScaledUnit base, SiPrefix prefix) pure
+    {
+        debug assert(!base.siScale() && !base.isExtended() && is_prefix_mode(base.sf()), "SI prefix only valid on prefix-mode extended ScaledUnit");
+        pack = (base.pack & ~(3U << 29)) | (uint(prefix) << 29);
     }
 
     this(Unit u, ExtendedScaleFactor scaleFactor, bool inverse = false) pure
@@ -438,7 +467,16 @@ nothrow:
         if (isExtended())
             return extScaleFactor[(pack >> 29) ^ (invert << 2)];
 
-        double s = scaleFactor[(pack >> 31) ^ invert][sf()];
+        ScaleFactor f = sf();
+        uint inv = (pack >> 31) ^ invert;
+
+        if (is_prefix_mode(f))
+        {
+            double s = scaleFactor[0][f] * prefixScale[(pack >> 29) & 3];
+            return inv ? 1.0 / s : s;
+        }
+
+        double s = scaleFactor[inv][f];
         for (uint i = ((pack >> 29) & 3); i > 0; --i)
             s *= s;
         return s;
@@ -474,6 +512,8 @@ nothrow:
 
         // if it's extended, we can't exponentiate these units...
         assert(!isExtended(), "Temperature units can't be multiplied");
+
+        assert(!is_prefix_mode(sf()), "Prefix-mode units only support exponents of ±1");
 
         int f = decodeExp[pack >> 29] * e;
 
@@ -539,6 +579,17 @@ nothrow:
         assert(!b.siScale(), "Can't combine SI and arbitrary units");
         assert(!isExtended(), "Temperature units can't be multiplied");
         assert(sf() == b.sf(), "Can't combine mismatching arbitrary units");
+
+        if (is_prefix_mode(sf()))
+        {
+            // prefix-mode factors don't compose; division of identical scales cancels
+            static if (op == "/")
+            {
+                if ((pack & 0xFF000000) == (b.pack & 0xFF000000))
+                    return ScaledUnit(u);
+            }
+            assert(false, "Prefix-mode units don't compose with multiplication");
+        }
 
         static if (op == "*")
             int e = decodeExp[f >> 5] + decodeExp[bf >> 5];
@@ -674,8 +725,18 @@ nothrow:
                     r *= ScaledUnit(su.unit, su.exp + e) ^^ (invert ? -p : p);
                 else if (const ScaledUnit* su = term in noScaleUnitMapSI)
                 {
-                    r *= (*su) ^^ (invert ? -p : p);
-                    pre_scale *= 10.0^^e;
+                    // if SI exponent fits in our 2-bit prefix table (none / k / M / G), encode the prefix into the ScaledUnit exponent
+                    // TODO: should we round e4,5->3 with 10-100x scaling, rather than 10,000-100,000x scaling as would be applied below?
+                    if (!su.siScale() && !su.isExtended() && is_prefix_mode(su.sf()) && (e == 0 || e == 3 || e == 6 || e == 9))
+                    {
+                        SiPrefix prefix = cast(SiPrefix)(e / 3);
+                        r *= ScaledUnit(*su, prefix) ^^ (invert ? -p : p);
+                    }
+                    else
+                    {
+                        r *= (*su) ^^ (invert ? -p : p);
+                        pre_scale *= 10.0^^e;
+                    }
                 }
                 else
                     return -1; // string was not taken?
@@ -879,6 +940,25 @@ unittest
 
     assert(Metre * Inch == ScaledUnit(Metre^^2, ScaleFactor.Inch));
     assert(Metre / Inch == ScaledUnit(Unit(), ScaleFactor.Inch, -1));
+
+    // bit-stability check
+    assert(WattHour.unit == Joule);
+
+    // prefix-mode extended units (hybrid SI prefix + named ScaleFactor)
+    assert(WattHour.scale() == 3600.0);
+    assert(KilowattHour.scale() == 3600.0 * 1000);
+    assert(MegawattHour.scale() == 3600.0 * 1e6);
+    assert(GigawattHour.scale() == 3600.0 * 1e9);
+
+    // inversion of prefix-mode extended units
+    assert((WattHour^^-1).scale() == 1.0 / 3600);
+    assert((KilowattHour^^-1).scale() == 1.0 / (3600.0 * 1000));
+
+    // Hertz family (Cycles scale factor): kHz/MHz/GHz scale = Hz scale × prefix
+    assert(Kilohertz.scale() == Hertz.scale() * 1e3);
+    assert(Megahertz.scale() == Hertz.scale() * 1e6);
+    assert(Gigahertz.scale() == Hertz.scale() * 1e9);
+    assert((Kilohertz^^-1).scale() == 1.0 / (Hertz.scale() * 1e3));
 }
 
 
@@ -892,40 +972,42 @@ immutable ubyte[9] encodeExp = [ 7, 6, 5, 4, 0, 0, 1, 2, 3 ];
 immutable double[19] sciScaleFactor = [ 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9 ];
 
 immutable double[16][2] scaleFactor = [ [
-    60,     // Minute
-    3600,   // Hour
-    86400,  // Day
-    0.0254, // Inch
-    0.3048, // Foot
-    1609.344, // Mile
+    60,         // Minute
+    3600,       // Hour
+    86400,      // Day
+    2*PI,       // Cycles
+    0.0254,     // Inch
+    0.3048,     // Foot
+    1609.344,   // Mile
     453.59237 / 16, // Ounce
-    453.59237, // Pound
+    453.59237,  // Pound
     3.785411784 / 128, // USFluidOunce
     3.785411784, // USGallon
     4.54609 / 160, // UKFluidOunce
-    4.54609, // UKGallon
+    4.54609,    // UKGallon
     6894.7572931683, // PSI => 4.4482216152605/(0.0254*0.0254)
-    2*PI, // Cycles
-    PI/180, // Degrees
-    double.nan // extended...
+    PI/180,     // Degrees
+    double.nan  // extended...
 ], [
-    1/60.0,   // Minute
-    1/3600.0, // Hour
-    1/86400.0, // Day
-    1/0.0254, // Inch
-    1/0.3048, // Foot
+    1/60.0,     // Minute
+    1/3600.0,   // Hour
+    1/86400.0,  // Day
+    1/(2*PI),   // Cycles
+    1/0.0254,   // Inch
+    1/0.3048,   // Foot
     1/1609.344, // Mile
     16/453.59237, // Ounce
     1/453.59237, // Pound
     128/3.785411784, // USFluidOunce
     1/3.785411784, // USGallon
     160/4.54609, // UKFluidOunce
-    1/4.54609, // UKGallon
+    1/4.54609,  // UKGallon
     1/6894.7572931683, // PSI
-    1/(2*PI), // Cycles
-    180/PI, // Degrees
-    double.nan // extended...
+    180/PI,     // Degrees
+    double.nan  // extended...
 ] ];
+
+immutable double[4] prefixScale = [ 1.0, 1e3, 1e6, 1e9 ];
 
 immutable double[8] extScaleFactor = [
     0,      // Res1
@@ -1002,10 +1084,16 @@ immutable string[ScaledUnit] scaledUnitNames = [
     Gram        : "g",
     Milligram   : "mg",
     Hertz       : "Hz",
+    Kilohertz   : "kHz",
+    Megahertz   : "MHz",
+    Gigahertz   : "GHz",
     PSI         : "psi",
     Kilowatt    : "kW",
     AmpereHour  : "Ah",
     WattHour    : "Wh",
+    KilowattHour : "kWh",
+    MegawattHour : "MWh",
+    GigawattHour : "GWh",
 ];
 
 immutable Unit[string] unitMap = [

@@ -35,6 +35,20 @@ nothrow @nogc:
     else
         alias unit = _unit;
 
+    static if (is_some_float!T)
+    {
+        enum nan        = This(T.nan);
+        enum infinity   = This(T.infinity);
+        enum epsilon    = This(T.epsilon);
+        enum max        = This(T.max);
+        enum min_normal = This(T.min_normal);
+    }
+    else static if (is_some_int!T)
+    {
+        enum min = This(T.min);
+        enum max = This(T.max);
+    }
+
     bool isCompatible(U, ScaledUnit _U)(Quantity!(U, _U) compatibleWith) const pure
         if (is(U : T))
         => unit.unit == compatibleWith.unit.unit;
@@ -66,7 +80,18 @@ nothrow @nogc:
         else
         {
             static if (b.Dynamic)
-                assert(isCompatible(b), "Incompatible units!");
+            {
+                static if (is_some_float!T)
+                {
+                    if (!isCompatible(b))
+                    {
+                        value = T.nan;
+                        return;
+                    }
+                }
+                else
+                    assert(isCompatible(b), "Incompatible units!");
+            }
             else
                 static assert(IsCompatible!_U, "Incompatible units: ", unit.toString, " and ", b.unit.toString);
             value = adjust_scale(b);
@@ -496,6 +521,16 @@ unittest
     assert(DegreesK(200).opEquals!epsilon(DegreesF(-99.67)));
     assert(DegreesC(100).opEquals!epsilon(DegreesF(212)));
     assert(DegreesF(100).opEquals!epsilon(DegreesC(37.77777777777777)));
+
+    // nan property exists for float Quantities (both typed and Dynamic)
+    {
+        Metres nan_m = Metres.nan;
+        assert(nan_m.value != nan_m.value);  // NaN != NaN
+
+        VarQuantity nan_v = VarQuantity.nan;
+        assert(nan_v.value != nan_v.value);
+    }
+    static assert(!__traits(compiles, Quantity!(int, ScaledUnit(Metre)).nan));
 }
 
 

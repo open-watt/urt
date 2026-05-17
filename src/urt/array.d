@@ -573,23 +573,10 @@ nothrow @nogc:
     }
     ref T pushFront(U)(auto ref U item)
         if (is(U : T))
-    {
-        reserve(_length + 1);
-        static if (is_trivial!T)
-            memmove(ptr + 1, ptr, _length++ * T.sizeof);
-        else
-        {
-            for (uint i = _length++; i > 0; --i)
-            {
-                moveEmplace!T(ptr[i-1], ptr[i]);
-                destroy!false(ptr[i-1]);
-            }
-        }
-        static if (is(T == class) || is(T == interface))
-            return (ptr[0] = item);
-        else
-            return *emplace!T(&ptr[0], forward!item);
-    }
+        => insert(0, forward!item);
+    ref T emplaceFront(Args...)(auto ref Args args)
+        if (!is(T == class) && !is(T == interface))
+        => insertEmplace(0, forward!args);
 
     ref T pushBack()()
     {
@@ -607,29 +594,50 @@ nothrow @nogc:
         else
             return *emplace!T(&ptr[_length++], forward!item);
     }
-
-    ref T emplaceFront(Args...)(auto ref Args args)
-        if (!is(T == class) && !is(T == interface))
-    {
-        reserve(_length + 1);
-        static if (is_trivial!T)
-            memmove(ptr + 1, ptr, _length++ * T.sizeof);
-        else
-        {
-            for (uint i = _length++; i > 0; --i)
-            {
-                moveEmplace!T(ptr[i-1], ptr[i]);
-                destroy!false(ptr[i-1]);
-            }
-        }
-        return *emplace!T(&ptr[0], forward!args);
-    }
-
     ref T emplaceBack(Args...)(auto ref Args args)
         if (!is(T == class) && !is(T == interface))
     {
         reserve(_length + 1);
         return *emplace!T(&ptr[_length++], forward!args);
+    }
+
+    ref T insert(U)(size_t pos, auto ref U item)
+        if (is(U : T))
+    {
+        assert(pos <= _length, "Insert position out of range");
+        reserve(_length + 1);
+        static if (is_trivial!T)
+            memmove(ptr + pos + 1, ptr + pos, (_length++ - pos) * T.sizeof);
+        else
+        {
+            for (uint i = _length++; i > pos; --i)
+            {
+                moveEmplace!T(ptr[i-1], ptr[i]);
+                destroy!false(ptr[i-1]);
+            }
+        }
+        static if (is(T == class) || is(T == interface))
+            return (ptr[pos] = item);
+        else
+            return *emplace!T(&ptr[pos], forward!item);
+    }
+
+    ref T insertEmplace(Args...)(size_t pos, auto ref Args args)
+        if (!is(T == class) && !is(T == interface))
+    {
+        assert(pos <= _length, "Insert position out of range");
+        reserve(_length + 1);
+        static if (is_trivial!T)
+            memmove(ptr + pos + 1, ptr + pos, (_length++ - pos) * T.sizeof);
+        else
+        {
+            for (uint i = _length++; i > pos; --i)
+            {
+                moveEmplace!T(ptr[i-1], ptr[i]);
+                destroy!false(ptr[i-1]);
+            }
+        }
+        return *emplace!T(&ptr[pos], forward!args);
     }
 
     T popFront()

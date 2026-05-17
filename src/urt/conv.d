@@ -627,6 +627,39 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
     size_t len = result.ptr.strlen();
     if (result[len - 1] == '.')
         --len; // trim trailing '.' if no digits follow it
+    else
+    {
+        // normalise output - gcvt may emit something like "5.e-003"
+        // strip lone '.', strip leading zeroes, result: 5e-3
+        foreach (i; 1 .. len)
+        {
+            if (result[i] != 'e' && result[i] != 'E')
+                continue;
+
+            size_t e = i;
+            if (result[e - 1] == '.')
+            {
+                foreach (j; e .. len)
+                    result[j - 1] = result[j];
+                --len;
+                --e;
+            }
+
+            size_t exp_d = e + 1;
+            if (exp_d < len && (result[exp_d] == '+' || result[exp_d] == '-'))
+                ++exp_d;
+            size_t zeros = 0;
+            while (exp_d + zeros + 1 < len && result[exp_d + zeros] == '0')
+                ++zeros;
+            if (zeros)
+            {
+                foreach (j; exp_d + zeros .. len)
+                    result[j - zeros] = result[j];
+                len -= zeros;
+            }
+            break;
+        }
+    }
     if (buffer.ptr)
     {
         if (len > buffer.length)
@@ -653,11 +686,11 @@ unittest
     len = format_float(1.5, buf);
     assert(buf[0..len] == "1.5");
     len = format_float(1e6, buf);
-    assert(buf[0..len] == "1.e+006" || buf[0..len] == "1e+06");
+    assert(buf[0..len] == "1e+6");
     len = format_float(1e6, buf, ".7");
     assert(buf[0..len] == "1000000");
     len = format_float(0.001, buf);
-    assert(buf[0..len] == "0.001" || buf[0..len] == "1.e-003"); // i don't know why it emits e-3 :/
+    assert(buf[0..len] == "0.001" || buf[0..len] == "1e-3"); // i don't know why it emits e-3 :/
     len = format_float(-0.0, buf);
     assert(buf[0..len] == "-0"); // do we want to print -0?
 }

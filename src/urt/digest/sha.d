@@ -15,6 +15,7 @@ struct SHA1Context
 {
     enum DigestBits = 160;
     enum DigestLen = DigestBits / 8;
+    enum BlockBytes = 64;
 
     version (Espressif)
         private SHA_CTX ctx;
@@ -39,6 +40,7 @@ struct SHA224Context
 {
     enum DigestBits = 224;
     enum DigestLen = DigestBits / 8;
+    enum BlockBytes = 64;
 
     // TODO: ESP32 hardware SHA-224 should be possible by writing the SHA-224 IV to SHA_TEXT_BASE,
     // triggering SHA_256_LOAD_REG, then running as SHA2_256 with truncated output.
@@ -65,6 +67,7 @@ struct SHA256Context
 {
     enum DigestBits = 256;
     enum DigestLen = DigestBits / 8;
+    enum BlockBytes = 64;
 
     version (Espressif)
         private SHA_CTX ctx;

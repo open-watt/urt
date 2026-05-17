@@ -876,6 +876,18 @@ Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
         assert(0, "PKI: not implemented for this platform");
 }
 
+Result export_private_scalar(ref KeyPair kp, out ubyte[32] d)
+{
+    Array!ubyte der;
+    Result r = export_private_key(kp, der);
+    if (r.failed)
+        return r;
+    ubyte[32] x = void, y = void;
+    if (!parse_ec_sec1_der(der[], d, x, y))
+        return InternalResult.data_error;
+    return Result.success;
+}
+
 private:
 
 // Build SEC 1 ECPrivateKey DER (RFC 5915) for P-256 from raw components.
@@ -1118,43 +1130,8 @@ version (Windows)
 
 version (Posix)
 {
+    import urt.crypto.random : get_rng;
     import urt.internal.mbedtls;
-
-    // lazily-initialized global CSPRNG for mbedtls operations
-    mbedtls_ctr_drbg_context* get_rng()
-    {
-        __gshared mbedtls_ctr_drbg_context* rng;
-        __gshared mbedtls_entropy_context* entropy;
-        __gshared bool initialized;
-
-        if (initialized)
-            return rng;
-
-        entropy = urt_entropy_new();
-        if (entropy is null)
-            return null;
-
-        rng = urt_ctr_drbg_new();
-        if (rng is null)
-        {
-            urt_entropy_delete(entropy);
-            entropy = null;
-            return null;
-        }
-
-        int ret = mbedtls_ctr_drbg_seed(rng, &mbedtls_entropy_func, cast(void*)entropy, null, 0);
-        if (ret != 0)
-        {
-            urt_ctr_drbg_delete(rng);
-            urt_entropy_delete(entropy);
-            rng = null;
-            entropy = null;
-            return null;
-        }
-
-        initialized = true;
-        return rng;
-    }
 
     // convert DER-encoded ECDSA signature SEQUENCE { INTEGER r, INTEGER s }
     // to raw R||S format (32 bytes each for P-256)

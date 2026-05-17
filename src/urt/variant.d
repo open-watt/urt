@@ -51,7 +51,7 @@ nothrow @nogc:
         }
         else if (rh.isString)
         {
-            *cast(String*)&value.s = *cast(String*)&rh.value.s;
+            new(*cast(String*)&value.s) String(*cast(String*)&rh.value.s);
             count = rh.count;
             flags = rh.flags;
         }
@@ -60,6 +60,22 @@ nothrow @nogc:
             ptr = defaultAllocator.alloc(rh.count).ptr;
             ptr[0 .. rh.count] = rh.ptr[0 .. rh.count];
             count = rh.count;
+            flags = rh.flags;
+        }
+        else if (rh.isUserType)
+        {
+            ref const TypeDetails td = (rh.flags & Flags.Embedded) ? find_type_details(rh.alloc) : g_type_details[rh.alloc];
+            assert(td.copy_emplace !is null, "User type has no copy_emplace");
+            if (rh.flags & Flags.Embedded)
+                td.copy_emplace(rh.embed.ptr, embed.ptr, false);
+            else
+            {
+                void* mem = defaultAllocator.alloc(td.size, td.alignment).ptr;
+                td.copy_emplace(rh.ptr, mem, false);
+                ptr = mem;
+            }
+            count = rh.count;
+            alloc = rh.alloc;
             flags = rh.flags;
         }
         else
@@ -81,7 +97,7 @@ nothrow @nogc:
         }
         else if (rh.isString)
         {
-            *cast(String*)&value.s = *cast(String*)&rh.value.s;
+            new(*cast(String*)&value.s) String(*cast(String*)&rh.value.s);
             count = rh.count;
             flags = rh.flags;
         }
@@ -91,6 +107,22 @@ nothrow @nogc:
             mem[0 .. rh.count] = rh.ptr[0 .. rh.count];
             ptr = cast(inout(void)*)mem;
             count = rh.count;
+            flags = rh.flags;
+        }
+        else if (rh.isUserType)
+        {
+            ref const TypeDetails td = (rh.flags & Flags.Embedded) ? find_type_details(rh.alloc) : g_type_details[rh.alloc];
+            assert(td.copy_emplace !is null, "User type has no copy_emplace");
+            if (rh.flags & Flags.Embedded)
+                td.copy_emplace(cast(void*)rh.embed.ptr, cast(void*)embed.ptr, false);
+            else
+            {
+                void* mem = defaultAllocator.alloc(td.size, td.alignment).ptr;
+                td.copy_emplace(cast(void*)rh.ptr, mem, false);
+                ptr = cast(inout(void)*)mem;
+            }
+            count = rh.count;
+            alloc = rh.alloc;
             flags = rh.flags;
         }
         else
@@ -1567,8 +1599,10 @@ public template TypeDetailsFor(T)
                 moveEmplace(*cast(T*)src, *cast(T*)dst);
             else
             {
-                static if (__traits(compiles, { *cast(T*)dst = *cast(const T*)src; }))
-                    *cast(T*)dst = *cast(const T*)src;
+                static if (is_trivial!T)
+                    *cast(T*)dst = *cast(T*)src;
+                else static if (__traits(compiles, new(*cast(T*)dst) T(*cast(T*)src)))
+                    new(*cast(T*)dst) T(*cast(T*)src);
                 else
                     assert(false, "Can't copy " ~ T.stringof);
             }

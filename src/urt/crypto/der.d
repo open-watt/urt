@@ -16,8 +16,10 @@ static immutable ubyte[3] oid_common_name = [0x55, 0x04, 0x03]; // 2.5.4.3
 
 uint der_length_size(size_t len) pure
 {
-    if (len < 0x80) return 1;
-    if (len < 0x100) return 2;
+    if (len < 0x80)
+        return 1;
+    if (len < 0x100)
+        return 2;
     return 3;
 }
 

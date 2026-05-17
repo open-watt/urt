@@ -15,14 +15,14 @@ nothrow @nogc:
 struct KeyPair
 {
 nothrow @nogc:
-    version (Windows)
+    version (MbedTLS)
+    {
+        mbedtls_pk_context pk;
+    }
+    else version (Windows)
     {
         BCRYPT_ALG_HANDLE halg;
         BCRYPT_KEY_HANDLE hcng;
-    }
-    else version (Posix)
-    {
-        mbedtls_pk_context pk;
     }
     else version (FreeStanding)
     {
@@ -34,10 +34,10 @@ nothrow @nogc:
 
     bool valid() const pure
     {
-        version (Windows)
-            return hcng !is null;
-        else version (Posix)
+        version (MbedTLS)
             return pk.pk_info !is null;
+        else version (Windows)
+            return hcng !is null;
         else
             return false;
     }
@@ -46,23 +46,23 @@ nothrow @nogc:
 struct CertRef
 {
 nothrow @nogc:
-    version (Windows)
+    version (MbedTLS)
+    {
+        mbedtls_x509_crt* crt;     // heap-allocated via urt_x509_crt_new
+    }
+    else version (Windows)
     {
         PCCERT_CONTEXT context;
         HCERTSTORE store;
         NCRYPT_KEY_HANDLE hncrypt;  // persisted NCrypt key for SChannel (set by associate_key)
     }
-    else version (Posix)
-    {
-        mbedtls_x509_crt* crt;     // heap-allocated via urt_x509_crt_new
-    }
 
     bool valid() const pure
     {
-        version (Windows)
-            return context !is null;
-        else version (Posix)
+        version (MbedTLS)
             return crt !is null;
+        else version (Windows)
+            return context !is null;
         else
             return false;
     }
@@ -71,7 +71,20 @@ nothrow @nogc:
 
 Result generate_keypair(out KeyPair kp)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        mbedtls_pk_init(&kp.pk);
+        int ret = urt_pk_gen_ec_p256_key(&kp.pk);
+        if (ret != 0)
+        {
+            mbedtls_pk_free(&kp.pk);
+            kp.pk = mbedtls_pk_context.init;
+            return Result(cast(uint)ret);
+        }
+
+        return Result.success;
+    }
+    else version (Windows)
     {
         NTSTATUS status = BCryptOpenAlgorithmProvider(&kp.halg, BCRYPT_ECDSA_P256_ALGORITHM.ptr, null, 0);
         if (status != 0)
@@ -97,26 +110,18 @@ Result generate_keypair(out KeyPair kp)
 
         return Result.success;
     }
-    else version (Posix)
-    {
-        mbedtls_pk_init(&kp.pk);
-        int ret = urt_pk_gen_ec_p256_key(&kp.pk, &mbedtls_ctr_drbg_random, get_rng());
-        if (ret != 0)
-        {
-            mbedtls_pk_free(&kp.pk);
-            kp.pk = mbedtls_pk_context.init;
-            return Result(cast(uint)ret);
-        }
-
-        return Result.success;
-    }
     else
         assert(0, "PKI: generate_keypair not implemented for this platform");
 }
 
 void free_keypair(ref KeyPair kp)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        mbedtls_pk_free(&kp.pk);
+        kp.pk = mbedtls_pk_context.init;
+    }
+    else version (Windows)
     {
         if (kp.hcng !is null)
             BCryptDestroyKey(kp.hcng);
@@ -125,24 +130,18 @@ void free_keypair(ref KeyPair kp)
         kp.hcng = null;
         kp.halg = null;
     }
-    else version (Posix)
-    {
-        mbedtls_pk_free(&kp.pk);
-        kp.pk = mbedtls_pk_context.init;
-    }
 }
 
-Result create_self_signed(ref KeyPair key, out CertRef cert, const(char)[] cn, const(char)[] hostname = null, uint validity_days = 365)
-{
-    version (Windows)
-        return create_self_signed_win32(key, cert, cn, hostname, validity_days);
-    else
-        return create_self_signed_portable(key, cert, cn, hostname, validity_days);
-}
+version (MbedTLS)
+    alias create_self_signed = create_self_signed_portable;
+else version (Windows)
+    alias create_self_signed = create_self_signed_win32;
+else
+    alias create_self_signed = create_self_signed_portable;
 
-private Result create_self_signed_win32(ref KeyPair key, out CertRef cert, const(char)[] cn, const(char)[] hostname, uint validity_days = 365)
+version (Windows)
 {
-    version (Windows)
+    Result create_self_signed_win32(ref KeyPair key, out CertRef cert, const(char)[] cn, const(char)[] hostname = null, uint validity_days = 365)
     {
         // create a persisted NCrypt ECDSA P-256 key (SChannel requires persisted keys)
         NCRYPT_PROV_HANDLE hprov;
@@ -250,11 +249,9 @@ private Result create_self_signed_win32(ref KeyPair key, out CertRef cert, const
 
         return Result.success;
     }
-    else
-        assert(false);
 }
 
-private Result create_self_signed_portable(ref KeyPair key, out CertRef cert, const(char)[] cn, const(char)[] hostname, uint validity_days = 365)
+private Result create_self_signed_portable(ref KeyPair key, out CertRef cert, const(char)[] cn, const(char)[] hostname = null, uint validity_days = 365)
 {
     if (!key.valid)
         return InternalResult.invalid_parameter;
@@ -328,38 +325,7 @@ private Result create_self_signed_portable(ref KeyPair key, out CertRef cert, co
 
 Result load_certificate(const(ubyte)[] cert_data, out CertRef cert)
 {
-    version (Windows)
-    {
-        if (cert_data.length == 0)
-            return InternalResult.invalid_parameter;
-
-        const(ubyte)[] der = cert_data;
-        Array!ubyte decoded;
-
-        if (is_pem(cast(const(char)[])cert_data))
-        {
-            decoded = decode_pem(cast(const(char)[])cert_data);
-            if (decoded.length == 0)
-                return InternalResult.data_error;
-            der = decoded[];
-        }
-
-        cert.store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, null);
-        if (cert.store is null)
-            return getlasterror_result();
-
-        if (!CertAddEncodedCertificateToStore(cert.store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-            der.ptr, cast(DWORD)der.length, CERT_STORE_ADD_REPLACE_EXISTING, cast(PCCERT_CONTEXT*)&cert.context))
-        {
-            auto r = getlasterror_result();
-            CertCloseStore(cert.store, 0);
-            cert.store = null;
-            return r;
-        }
-
-        return Result.success;
-    }
-    else version (Posix)
+    version (MbedTLS)
     {
         if (cert_data.length == 0)
             return InternalResult.invalid_parameter;
@@ -391,13 +357,52 @@ Result load_certificate(const(ubyte)[] cert_data, out CertRef cert)
 
         return Result.success;
     }
+    else version (Windows)
+    {
+        if (cert_data.length == 0)
+            return InternalResult.invalid_parameter;
+
+        const(ubyte)[] der = cert_data;
+        Array!ubyte decoded;
+
+        if (is_pem(cast(const(char)[])cert_data))
+        {
+            decoded = decode_pem(cast(const(char)[])cert_data);
+            if (decoded.length == 0)
+                return InternalResult.data_error;
+            der = decoded[];
+        }
+
+        cert.store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, null);
+        if (cert.store is null)
+            return getlasterror_result();
+
+        if (!CertAddEncodedCertificateToStore(cert.store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+            der.ptr, cast(DWORD)der.length, CERT_STORE_ADD_REPLACE_EXISTING, cast(PCCERT_CONTEXT*)&cert.context))
+        {
+            auto r = getlasterror_result();
+            CertCloseStore(cert.store, 0);
+            cert.store = null;
+            return r;
+        }
+
+        return Result.success;
+    }
     else
         assert(0, "PKI: not implemented for this platform");
 }
 
 Result associate_key(ref CertRef cert, ref KeyPair key)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        // no-op: mbedtls doesn't require key-to-cert binding in a system store.
+        // the cert and key are passed separately to mbedtls_ssl_conf_own_cert.
+        if (!cert.valid || !key.valid)
+            return InternalResult.invalid_parameter;
+        return Result.success;
+    }
+    else version (Windows)
     {
         if (!cert.valid || !key.valid)
             return InternalResult.invalid_parameter;
@@ -525,21 +530,19 @@ Result associate_key(ref CertRef cert, ref KeyPair key)
 
         return Result.success;
     }
-    else version (Posix)
-    {
-        // no-op: mbedtls doesn't require key-to-cert binding in a system store.
-        // the cert and key are passed separately to mbedtls_ssl_conf_own_cert.
-        if (!cert.valid || !key.valid)
-            return InternalResult.invalid_parameter;
-        return Result.success;
-    }
     else
         assert(0, "PKI: not implemented for this platform");
 }
 
 void free_cert(ref CertRef cert)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        if (cert.crt !is null)
+            urt_x509_crt_delete(cert.crt);
+        cert.crt = null;
+    }
+    else version (Windows)
     {
         if (cert.hncrypt !is null)
             NCryptDeleteKey(cert.hncrypt, 0);
@@ -551,26 +554,20 @@ void free_cert(ref CertRef cert)
         cert.context = null;
         cert.store = null;
     }
-    else version (Posix)
-    {
-        if (cert.crt !is null)
-            urt_x509_crt_delete(cert.crt);
-        cert.crt = null;
-    }
 }
 
 SysTime cert_expiry(ref const CertRef cert)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        // TODO: parse cert.crt.valid_to (mbedtls_x509_time) and convert to SysTime
+        return SysTime();
+    }
+    else version (Windows)
     {
         if (cert.context is null || cert.context.pCertInfo is null)
             return SysTime();
         return SysTime(*cast(ulong*)&cert.context.pCertInfo.NotAfter);
-    }
-    else version (Posix)
-    {
-        // TODO: parse cert.crt.valid_to (mbedtls_x509_time) and convert to SysTime
-        return SysTime();
     }
     else
         return SysTime();
@@ -578,10 +575,10 @@ SysTime cert_expiry(ref const CertRef cert)
 
 inout(void)* native_cert_context(ref inout CertRef cert)
 {
-    version (Windows)
-        return cast(inout(void)*)cert.context;
-    else version (Posix)
+    version (MbedTLS)
         return cast(inout(void)*)cert.crt;
+    else version (Windows)
+        return cast(inout(void)*)cert.context;
     else
         return null;
 }
@@ -589,7 +586,31 @@ inout(void)* native_cert_context(ref inout CertRef cert)
 
 Result sign_hash(ref KeyPair kp, const(ubyte)[] hash, out Array!ubyte signature)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        if (!kp.valid)
+            return InternalResult.invalid_parameter;
+
+        // mbedtls_pk_sign produces DER-encoded ECDSA signature.
+        // we need raw R||S format (64 bytes for P-256) to match the Windows contract.
+        ubyte[256] sig_buf = void;
+        size_t sig_len = 0;
+        int ret = urt_pk_sign(&kp.pk,
+            hash.ptr, hash.length, sig_buf.ptr, sig_buf.length, &sig_len);
+        if (ret != 0)
+            return Result(cast(uint)ret);
+
+        // parse DER SEQUENCE { INTEGER r, INTEGER s } → raw R||S (32 bytes each)
+        signature = Array!ubyte(Alloc, 64);
+        if (!der_sig_to_raw(sig_buf[0 .. sig_len], signature.ptr[0 .. 64]))
+        {
+            signature = Array!ubyte();
+            return InternalResult.data_error;
+        }
+
+        return Result.success;
+    }
+    else version (Windows)
     {
         if (kp.hcng is null)
             return InternalResult.invalid_parameter;
@@ -610,38 +631,34 @@ Result sign_hash(ref KeyPair kp, const(ubyte)[] hash, out Array!ubyte signature)
         signature.resize(sig_size);
         return Result.success;
     }
-    else version (Posix)
-    {
-        if (!kp.valid)
-            return InternalResult.invalid_parameter;
-
-        // mbedtls_pk_sign produces DER-encoded ECDSA signature.
-        // we need raw R||S format (64 bytes for P-256) to match the Windows contract.
-        ubyte[256] sig_buf = void;
-        size_t sig_len = 0;
-        int ret = urt_pk_sign(&kp.pk,
-            hash.ptr, hash.length, sig_buf.ptr, sig_buf.length, &sig_len,
-            &mbedtls_ctr_drbg_random, get_rng());
-        if (ret != 0)
-            return Result(cast(uint)ret);
-
-        // parse DER SEQUENCE { INTEGER r, INTEGER s } → raw R||S (32 bytes each)
-        signature = Array!ubyte(Alloc, 64);
-        if (!der_sig_to_raw(sig_buf[0 .. sig_len], signature.ptr[0 .. 64]))
-        {
-            signature = Array!ubyte();
-            return InternalResult.data_error;
-        }
-
-        return Result.success;
-    }
     else
         assert(0, "PKI: not implemented for this platform");
 }
 
 Result export_public_key_raw(ref KeyPair kp, out Array!ubyte x, out Array!ubyte y)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        if (!kp.valid)
+            return InternalResult.invalid_parameter;
+
+        // export uncompressed point: 0x04 || X || Y
+        ubyte[65] pt_buf = void; // 1 + 32 + 32 for P-256
+        size_t olen = 0;
+        int ret = urt_pk_export_pubkey_xy(&kp.pk, pt_buf.ptr, pt_buf.length, &olen);
+        if (ret != 0)
+            return Result(cast(uint)ret);
+
+        if (olen != 65) // 0x04 + 32 + 32
+            return InternalResult.data_error;
+
+        x = Array!ubyte(Alloc, 32);
+        y = Array!ubyte(Alloc, 32);
+        x.ptr[0 .. 32] = pt_buf[1 .. 33];
+        y.ptr[0 .. 32] = pt_buf[33 .. 65];
+        return Result.success;
+    }
+    else version (Windows)
     {
         if (kp.hcng is null)
             return InternalResult.invalid_parameter;
@@ -666,27 +683,6 @@ Result export_public_key_raw(ref KeyPair kp, out Array!ubyte x, out Array!ubyte 
 
         x = blob[8 .. 8 + key_len];
         y = blob[8 + key_len .. 8 + 2 * key_len];
-        return Result.success;
-    }
-    else version (Posix)
-    {
-        if (!kp.valid)
-            return InternalResult.invalid_parameter;
-
-        // export uncompressed point: 0x04 || X || Y
-        ubyte[65] pt_buf = void; // 1 + 32 + 32 for P-256
-        size_t olen = 0;
-        int ret = urt_pk_export_pubkey_xy(&kp.pk, pt_buf.ptr, pt_buf.length, &olen);
-        if (ret != 0)
-            return Result(cast(uint)ret);
-
-        if (olen != 65) // 0x04 + 32 + 32
-            return InternalResult.data_error;
-
-        x = Array!ubyte(Alloc, 32);
-        y = Array!ubyte(Alloc, 32);
-        x.ptr[0 .. 32] = pt_buf[1 .. 33];
-        y.ptr[0 .. 32] = pt_buf[33 .. 65];
         return Result.success;
     }
     else
@@ -753,7 +749,28 @@ Array!ubyte generate_csr(ref KeyPair kp, const(char)[] cn)
 
 Result export_private_key(ref KeyPair kp, out Array!ubyte key_out)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        if (!kp.valid)
+            return InternalResult.invalid_parameter;
+
+        // Extract raw d, X, Y from mbedtls pk context
+        ubyte[32] d = void;
+        ubyte[65] xy_buf = void;
+        size_t d_len = 0, xy_len = 0;
+
+        int ret = urt_pk_export_privkey_d(&kp.pk, d.ptr, d.length, &d_len);
+        if (ret != 0)
+            return Result(cast(uint)ret);
+
+        ret = urt_pk_export_pubkey_xy(&kp.pk, xy_buf.ptr, xy_buf.length, &xy_len);
+        if (ret != 0)
+            return Result(cast(uint)ret);
+
+        // xy_buf is 0x04 || X[32] || Y[32]
+        return build_ec_sec1_der(d, xy_buf[1 .. 33], xy_buf[33 .. 65], key_out);
+    }
+    else version (Windows)
     {
         if (kp.hcng is null)
             return InternalResult.invalid_parameter;
@@ -775,34 +792,47 @@ Result export_private_key(ref KeyPair kp, out Array!ubyte key_out)
         // Build SEC 1 ECPrivateKey DER from the BCrypt blob components
         return build_ec_sec1_der(blob[72 .. 104][0..32], blob[8 .. 40][0..32], blob[40 .. 72][0..32], key_out);
     }
-    else version (Posix)
-    {
-        if (!kp.valid)
-            return InternalResult.invalid_parameter;
-
-        // Extract raw d, X, Y from mbedtls pk context
-        ubyte[32] d = void;
-        ubyte[65] xy_buf = void;
-        size_t d_len = 0, xy_len = 0;
-
-        int ret = urt_pk_export_privkey_d(&kp.pk, d.ptr, d.length, &d_len);
-        if (ret != 0)
-            return Result(cast(uint)ret);
-
-        ret = urt_pk_export_pubkey_xy(&kp.pk, xy_buf.ptr, xy_buf.length, &xy_len);
-        if (ret != 0)
-            return Result(cast(uint)ret);
-
-        // xy_buf is 0x04 || X[32] || Y[32]
-        return build_ec_sec1_der(d, xy_buf[1 .. 33], xy_buf[33 .. 65], key_out);
-    }
     else
         assert(0, "PKI: not implemented for this platform");
 }
 
 Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
 {
-    version (Windows)
+    version (MbedTLS)
+    {
+        const(ubyte)[] der = key_data;
+        Array!ubyte decoded;
+
+        if (is_pem(cast(const(char)[])key_data))
+        {
+            decoded = decode_pem(cast(const(char)[])key_data);
+            if (decoded.length == 0)
+                return InternalResult.data_error;
+            der = decoded[];
+        }
+
+        ubyte[32] d = void, x = void, y = void;
+        if (!parse_ec_sec1_der(der, d, x, y))
+            return InternalResult.data_error;
+
+        // Build uncompressed point: 0x04 || X || Y
+        ubyte[65] xy = void;
+        xy[0] = 0x04;
+        xy[1 .. 33] = x[];
+        xy[33 .. 65] = y[];
+
+        mbedtls_pk_init(&kp.pk);
+        int ret = urt_pk_import_ec_p256_key(&kp.pk, d.ptr, d.length, xy.ptr, xy.length);
+        if (ret != 0)
+        {
+            mbedtls_pk_free(&kp.pk);
+            kp.pk = mbedtls_pk_context.init;
+            return Result(cast(uint)ret);
+        }
+
+        return Result.success;
+    }
+    else version (Windows)
     {
         const(ubyte)[] der = key_data;
         Array!ubyte decoded;
@@ -838,42 +868,20 @@ Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
         }
         return Result(cast(uint)status);
     }
-    else version (Posix)
-    {
-        const(ubyte)[] der = key_data;
-        Array!ubyte decoded;
-
-        if (is_pem(cast(const(char)[])key_data))
-        {
-            decoded = decode_pem(cast(const(char)[])key_data);
-            if (decoded.length == 0)
-                return InternalResult.data_error;
-            der = decoded[];
-        }
-
-        ubyte[32] d = void, x = void, y = void;
-        if (!parse_ec_sec1_der(der, d, x, y))
-            return InternalResult.data_error;
-
-        // Build uncompressed point: 0x04 || X || Y
-        ubyte[65] xy = void;
-        xy[0] = 0x04;
-        xy[1 .. 33] = x[];
-        xy[33 .. 65] = y[];
-
-        mbedtls_pk_init(&kp.pk);
-        int ret = urt_pk_import_ec_p256_key(&kp.pk, d.ptr, d.length, xy.ptr, xy.length);
-        if (ret != 0)
-        {
-            mbedtls_pk_free(&kp.pk);
-            kp.pk = mbedtls_pk_context.init;
-            return Result(cast(uint)ret);
-        }
-
-        return Result.success;
-    }
     else
         assert(0, "PKI: not implemented for this platform");
+}
+
+Result export_private_scalar(ref KeyPair kp, out ubyte[32] d)
+{
+    Array!ubyte der;
+    Result r = export_private_key(kp, der);
+    if (r.failed)
+        return r;
+    ubyte[32] x = void, y = void;
+    if (!parse_ec_sec1_der(der[], d, x, y))
+        return InternalResult.data_error;
+    return Result.success;
 }
 
 private:
@@ -1116,45 +1124,9 @@ version (Windows)
     }
 }
 
-version (Posix)
+version (MbedTLS)
 {
     import urt.internal.mbedtls;
-
-    // lazily-initialized global CSPRNG for mbedtls operations
-    mbedtls_ctr_drbg_context* get_rng()
-    {
-        __gshared mbedtls_ctr_drbg_context* rng;
-        __gshared mbedtls_entropy_context* entropy;
-        __gshared bool initialized;
-
-        if (initialized)
-            return rng;
-
-        entropy = urt_entropy_new();
-        if (entropy is null)
-            return null;
-
-        rng = urt_ctr_drbg_new();
-        if (rng is null)
-        {
-            urt_entropy_delete(entropy);
-            entropy = null;
-            return null;
-        }
-
-        int ret = mbedtls_ctr_drbg_seed(rng, &mbedtls_entropy_func, cast(void*)entropy, null, 0);
-        if (ret != 0)
-        {
-            urt_ctr_drbg_delete(rng);
-            urt_entropy_delete(entropy);
-            rng = null;
-            entropy = null;
-            return null;
-        }
-
-        initialized = true;
-        return rng;
-    }
 
     // convert DER-encoded ECDSA signature SEQUENCE { INTEGER r, INTEGER s }
     // to raw R||S format (32 bytes each for P-256)

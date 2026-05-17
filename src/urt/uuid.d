@@ -71,7 +71,8 @@ align(1):
         {
             size_t off = i < 2 ? 19 + i*2 : 20 + i*2;
             ulong b = s[off .. off + 2].parse_uint(&n, 16);
-            if (n != 2) return -1;
+            if (n != 2)
+                return -1;
             data4[i] = cast(ubyte)b;
         }
         return 36;

@@ -679,6 +679,217 @@ pure nothrow @nogc:
     }
 }
 
+struct TimeOfDay
+{
+pure nothrow @nogc:
+
+    ubyte hour;
+    ubyte minute;
+    ubyte second;
+    uint ns;
+
+    ushort msec() const => cast(ushort)(ns / 1_000_000);
+    uint usec() const => ns / 1_000;
+
+    Duration opBinary(string op)(TimeOfDay rhs) const if (op == "-")
+    {
+        long lhs_ns = (cast(long)hour*3600 + cast(long)minute*60 + cast(long)second) * 1_000_000_000 + ns;
+        long rhs_ns = (cast(long)rhs.hour*3600 + cast(long)rhs.minute*60 + cast(long)rhs.second) * 1_000_000_000 + rhs.ns;
+        return (lhs_ns - rhs_ns).nsecs;
+    }
+
+    TimeOfDay opBinary(string op)(Duration rhs) const if (op == "+" || op == "-")
+    {
+        long tod_ns = (cast(long)hour*3600 + cast(long)minute*60 + cast(long)second) * 1_000_000_000 + ns;
+        static if (op == "+")
+            tod_ns += rhs.as!"nsecs";
+        else
+            tod_ns -= rhs.as!"nsecs";
+        enum long day_ns = 86_400_000_000_000;
+        tod_ns = ((tod_ns % day_ns) + day_ns) % day_ns;
+        TimeOfDay r;
+        r.ns = cast(uint)(tod_ns % 1_000_000_000);
+        long sod = tod_ns / 1_000_000_000;
+        r.second = cast(ubyte)(sod % 60);
+        r.minute = cast(ubyte)((sod / 60) % 60);
+        r.hour = cast(ubyte)(sod / 3600);
+        return r;
+    }
+
+    void opOpAssign(string op)(Duration rhs) if (op == "+" || op == "-")
+    {
+        this = mixin("this " ~ op ~ " rhs;");
+    }
+
+    int opCmp(TimeOfDay tod) const
+    {
+        int r = hour - tod.hour;
+        if (r != 0) return r;
+        r = minute - tod.minute;
+        if (r != 0) return r;
+        r = second - tod.second;
+        if (r != 0) return r;
+        return cast(int)ns - cast(int)tod.ns;
+    }
+
+    import urt.string.format : FormatArg;
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
+    {
+        if (!buffer.ptr)
+        {
+            ptrdiff_t len = 8;
+            if (ns)
+            {
+                ++len;
+                uint nsecs = ns;
+                uint m = 0;
+                while (nsecs)
+                {
+                    ++len;
+                    uint digit = nsecs / digit_multipliers[m];
+                    nsecs -= digit * digit_multipliers[m++];
+                }
+            }
+            return len;
+        }
+
+        if (buffer.length < 8)
+            return -1;
+        size_t offset = 0;
+        buffer[offset++] = cast(char)('0' + (hour / 10));
+        buffer[offset++] = cast(char)('0' + (hour % 10));
+        buffer[offset++] = ':';
+        buffer[offset++] = cast(char)('0' + (minute / 10));
+        buffer[offset++] = cast(char)('0' + (minute % 10));
+        buffer[offset++] = ':';
+        buffer[offset++] = cast(char)('0' + (second / 10));
+        buffer[offset++] = cast(char)('0' + (second % 10));
+        if (ns)
+        {
+            if (offset == buffer.length)
+                return -1;
+            buffer[offset++] = '.';
+            uint nsecs = ns;
+            uint m = 0;
+            while (nsecs)
+            {
+                if (offset == buffer.length)
+                    return -1;
+                int digit = nsecs / digit_multipliers[m];
+                buffer[offset++] = cast(char)('0' + digit);
+                nsecs -= digit * digit_multipliers[m++];
+            }
+        }
+        return offset;
+    }
+
+    ptrdiff_t fromString(const(char)[] s)
+    {
+        import urt.conv : parse_int;
+        import urt.string.ascii : is_numeric;
+
+        hour = 0;
+        minute = 0;
+        second = 0;
+        ns = 0;
+
+        if (s.length == 0)
+            return -1;
+
+        size_t offset = 0;
+        size_t len;
+        long value = s[offset..$].parse_int(&len);
+        if (len != 2 || value < 0 || value > 23)
+            return -1;
+        hour = cast(ubyte)value;
+        offset += len;
+
+        if (offset == s.length || s[offset] != ':')
+            return offset;
+
+        value = s[++offset..$].parse_int(&len);
+        if (len != 2 || value < 0 || value > 59)
+            return -1;
+        minute = cast(ubyte)value;
+        offset += len;
+
+        if (offset == s.length || s[offset] != ':')
+            return offset;
+
+        value = s[++offset..$].parse_int(&len);
+        if (len != 2 || value < 0 || value > 59)
+            return -1;
+        second = cast(ubyte)value;
+        offset += len;
+
+        if (offset < s.length && s[offset] == '.')
+        {
+            ++offset;
+            uint multiplier = 100_000_000;
+            while (offset < s.length && multiplier > 0 && s[offset].is_numeric)
+            {
+                ns += (s[offset++] - '0') * multiplier;
+                multiplier /= 10;
+            }
+            if (multiplier == 100_000_000)
+                return offset-1;
+        }
+
+        return offset;
+    }
+
+    version (Windows)
+    auto __debugOverview() const
+    {
+        import urt.mem;
+        char[] b = debug_alloc!char(20);
+        ptrdiff_t len = toString(b, null, null);
+        return b[0..len];
+    }
+}
+
+TimeOfDay time_of_day(DateTime dt) pure
+{
+    TimeOfDay t;
+    t.hour = dt.hour;
+    t.minute = dt.minute;
+    t.second = dt.second;
+    t.ns = dt.ns;
+    return t;
+}
+
+TimeOfDay time_of_day(SysTime t) pure
+    => time_of_day(getDateTime(t));
+
+SysTime next_occurrence(SysTime now, TimeOfDay tod, ubyte weekday_mask = 0x7F) pure
+{
+    if ((weekday_mask & 0x7F) == 0)
+        weekday_mask = 0x7F;
+
+    ulong now_ns = unixTimeNs(now);
+    enum ulong day_ns = 86_400_000_000_000UL;
+    ulong day_start = now_ns - now_ns % day_ns;
+    ulong tod_ns = (cast(ulong)tod.hour*3600 + cast(ulong)tod.minute*60 + cast(ulong)tod.second) * 1_000_000_000UL + tod.ns;
+
+    DateTime dt = getDateTime(now);
+    ubyte wday = cast(ubyte)dt.wday;
+
+    foreach (_; 0 .. 7)
+    {
+        if (weekday_mask & (1 << wday))
+        {
+            ulong candidate = day_start + tod_ns;
+            if (candidate > now_ns)
+                return from_unix_time_ns(candidate);
+        }
+        day_start += day_ns;
+        wday = cast(ubyte)((wday + 1) % 7);
+    }
+
+    return from_unix_time_ns(day_start + tod_ns);
+}
+
+
 Duration dur(string base)(long value) pure
 {
     static if (base == "nsecs")
@@ -1064,6 +1275,44 @@ unittest
     assert(dt.fromString("2024-1-1 01:60:56") == -1);
     assert(dt.fromString("2024-1-1 01:01:60") == -1);
     assert(dt.fromString("10000-1-1 1:01:01") == -1);
+
+    // ---- TimeOfDay ----
+
+    TimeOfDay tod;
+    assert(tod.fromString("10:30") == 5 && tod.hour == 10 && tod.minute == 30 && tod.second == 0 && tod.ns == 0);
+    assert(tod.fromString("10:30:45") == 8 && tod.second == 45);
+    assert(tod.fromString("10:30:45.5") == 10 && tod.ns == 500_000_000);
+    assert(tod.fromString("23:59:59.999999999") == 18 && tod.ns == 999_999_999);
+    assert(tod.fromString("00:00:00") == 8);
+
+    assert(tod.fromString("24:00") == -1);
+    assert(tod.fromString("10:60") == -1);
+    assert(tod.fromString("10:30:60") == -1);
+    assert(tod.fromString("1:30") == -1);
+    assert(tod.fromString("") == -1);
+
+    tod = TimeOfDay(10, 30, 0, 0);
+    assert(tconcat(tod)[] == "10:30:00");
+    tod.ns = 123_000_000;
+    assert(tconcat(tod)[] == "10:30:00.123");
+
+    // arithmetic
+    tod = TimeOfDay(10, 30, 0, 0);
+    auto tod2 = tod + dur!"minutes"(45);
+    assert(tod2.hour == 11 && tod2.minute == 15 && tod2.second == 0);
+    auto tod3 = tod - dur!"hours"(11);
+    assert(tod3.hour == 23 && tod3.minute == 30); // wrap backwards
+    auto tod4 = tod + dur!"hours"(25);
+    assert(tod4.hour == 11 && tod4.minute == 30); // wrap forwards
+    Duration diff = TimeOfDay(11, 0, 0, 0) - TimeOfDay(10, 30, 0, 0);
+    assert(diff.as!"minutes" == 30);
+
+    // extract from DateTime / SysTime
+    dt = DateTime.init;
+    dt.year = 2025; dt.month = Month.June; dt.day = 15;
+    dt.hour = 8; dt.minute = 30; dt.second = 45; dt.ns = 123_456_789;
+    tod = time_of_day(dt);
+    assert(tod.hour == 8 && tod.minute == 30 && tod.second == 45 && tod.ns == 123_456_789);
 
     // ---- unix_ns_to_datetime / datetime_to_unix_ns ----
 

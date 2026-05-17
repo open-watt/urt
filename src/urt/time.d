@@ -863,8 +863,8 @@ version (Windows)
 {
     enum ulong unix_epoch_as_filetime = 116_444_736_000_000_000UL;
 
-    immutable uint ticks_per_second;
-    immutable uint nsec_multiplier;
+    enum uint ticks_per_second = 10_000_000; // QPC has been 10mHz for several decades. I don't think it can ever change...
+    enum uint nsec_multiplier = 100;
 }
 else version (Posix)
 {
@@ -891,8 +891,7 @@ package(urt) void init_clock()
 
         LARGE_INTEGER freq;
         QueryPerformanceFrequency(&freq);
-        cast()ticks_per_second = cast(uint)freq.QuadPart;
-        cast()nsec_multiplier = 1_000_000_000 / ticks_per_second;
+        assert(cast(uint)freq.QuadPart == ticks_per_second, "Unexpected QPC frequency! urt needs to be updated...");
 
         // we want the ftime for QPC 0; which should be the boot time
         // we'll repeat this 100 times and take the minimum, and we should be within probably nanoseconds of the correct value

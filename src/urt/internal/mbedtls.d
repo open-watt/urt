@@ -1,14 +1,32 @@
 // minimal D bindings for mbedtls - only what pki.d and tls.d need
 module urt.internal.mbedtls;
 
-version (Posix):
+version (MbedTLS):
 
-pragma(lib, "mbedtls");
-pragma(lib, "mbedx509");
-pragma(lib, "mbedcrypto");
+// Host posix builds link against system mbedtls. Embedded targets (esp%)
+// inherit mbedtls from their platform SDK -- no pragma(lib) needed.
+version (Posix)
+{
+    pragma(lib, "mbedtls");
+    pragma(lib, "mbedx509");
+    pragma(lib, "mbedcrypto");
+}
 
 nothrow @nogc:
 extern(C):
+
+
+// --- RNG (from urt/internal/mbedtls.c) ---
+//
+// Unified wrapper for the version-fragile entropy + CTR-DRBG / PSA dance.
+// 4.x: backed by psa_generate_random; <4: classic entropy + CTR-DRBG seeded
+// once and held module-static. Always idempotent and lazily initialised --
+// callers may invoke urt_rng_init() up front or simply call urt_rng_random()
+// which inits on demand.
+int urt_rng_init();
+int urt_rng_random(ubyte* output, size_t len);
+int urt_rng_callback(void* p_rng, ubyte* output, size_t len);  // f_rng-shaped, p_rng ignored
+
 
 // --- PK (public key abstraction) ---
 
@@ -20,51 +38,60 @@ struct mbedtls_pk_context
     void* pk_ctx;
 }
 
-// mbedtls_pk_type_t and mbedtls_md_type_t enum values changed between 2.x
-// and 3.x, so D must not hardcode them. All operations that need these enums
-// (pk_setup, pk_sign, etc.) are wrapped in urt/internal/mbedtls.c where the
-// correct header values are resolved at compile time.
-
 void mbedtls_pk_init(mbedtls_pk_context* ctx);
 void mbedtls_pk_free(mbedtls_pk_context* ctx);
 
-// --- wrappers from urt/internal/mbedtls.c ---
-// These handle operations whose signatures changed between mbedtls 2.x and 3.x,
-// as well as operations that access internal struct layouts.
 
-int urt_pk_gen_ec_p256_key(mbedtls_pk_context* pk, int function(void*, ubyte*, size_t) nothrow @nogc f_rng, void* p_rng);
-int urt_pk_export_pubkey_xy(mbedtls_pk_context* pk, ubyte* buf, size_t buflen, size_t* olen);
-int urt_pk_sign(mbedtls_pk_context* ctx, const(ubyte)* hash, size_t hash_len, ubyte* sig, size_t sig_size, size_t* sig_len, int function(void*, ubyte*, size_t) nothrow @nogc f_rng, void* p_rng);
-int urt_pk_import_ec_p256_key(mbedtls_pk_context* pk, const(ubyte)* d, size_t d_len, const(ubyte)* xy, size_t xy_len);
+// --- PK ECDSA P-256 helpers (from urt/internal/mbedtls.c) ---
+//
+// These wrap operations whose signatures or internal struct access patterns
+// shift across mbedtls 2.x/3.x/4.x. The shim absorbs the divergence and
+// drives RNG internally via urt_rng_*, so the D side never passes f_rng/p_rng.
+
+int urt_pk_gen_ec_p256_key(mbedtls_pk_context* pk);
+int urt_pk_sign(mbedtls_pk_context* ctx, const(ubyte)* hash, size_t hash_len,
+                ubyte* sig, size_t sig_size, size_t* sig_len);
+int urt_pk_import_ec_p256_key(mbedtls_pk_context* pk,
+                              const(ubyte)* d, size_t d_len,
+                              const(ubyte)* xy, size_t xy_len);
 int urt_pk_export_privkey_d(mbedtls_pk_context* pk, ubyte* buf, size_t buflen, size_t* olen);
+int urt_pk_export_pubkey_xy(mbedtls_pk_context* pk, ubyte* buf, size_t buflen, size_t* olen);
+
+
+// --- ECDH P-256 (from urt/internal/mbedtls.c) ---
+
+int urt_ecdh_p256_compute_shared(const(ubyte)* priv_d, size_t priv_len,
+                                  const(ubyte)* peer_xy, size_t peer_xy_len,
+                                  ubyte* shared_x_out);
+
+
+// --- AES-GCM one-shot (from urt/internal/mbedtls.c) ---
+
+int urt_gcm_encrypt(const(ubyte)* key, size_t key_len,
+                    const(ubyte)* iv, size_t iv_len,
+                    const(ubyte)* aad, size_t aad_len,
+                    const(ubyte)* plaintext, size_t pt_len,
+                    ubyte* ciphertext,
+                    ubyte* tag, size_t tag_len);
+
+int urt_gcm_decrypt(const(ubyte)* key, size_t key_len,
+                    const(ubyte)* iv, size_t iv_len,
+                    const(ubyte)* aad, size_t aad_len,
+                    const(ubyte)* ciphertext, size_t ct_len,
+                    const(ubyte)* tag, size_t tag_len,
+                    ubyte* plaintext);
 
 
 // --- X.509 certificate ---
 
 // mbedtls_x509_crt is complex (~200+ bytes). We only use it through pointers
-// allocated via urt/internal/mbedtls.c (urt_mbedtls_x509_crt_new/delete).
+// allocated via urt/internal/mbedtls.c (urt_x509_crt_new/delete).
 struct mbedtls_x509_crt;
 
 void mbedtls_x509_crt_init(mbedtls_x509_crt* crt);
 void mbedtls_x509_crt_free(mbedtls_x509_crt* crt);
 int mbedtls_x509_crt_parse_der(mbedtls_x509_crt* chain, const(ubyte)* buf, size_t buflen);
 int mbedtls_x509_crt_parse(mbedtls_x509_crt* chain, const(ubyte)* buf, size_t buflen);
-
-
-// --- Entropy & CTR-DRBG (random number generation) ---
-
-// These are large structs. Allocated via urt/internal/mbedtls.c (urt_mbedtls_entropy_new/delete, urt_mbedtls_ctr_drbg_new/delete).
-struct mbedtls_entropy_context;
-struct mbedtls_ctr_drbg_context;
-
-void mbedtls_entropy_init(mbedtls_entropy_context* ctx);
-void mbedtls_entropy_free(mbedtls_entropy_context* ctx);
-int mbedtls_entropy_func(void* data, ubyte* output, size_t len);
-
-void mbedtls_ctr_drbg_init(mbedtls_ctr_drbg_context* ctx);
-void mbedtls_ctr_drbg_free(mbedtls_ctr_drbg_context* ctx);
-int mbedtls_ctr_drbg_seed(mbedtls_ctr_drbg_context* ctx, int function(void*, ubyte*, size_t) nothrow @nogc f_entropy, void* p_entropy, const(ubyte)* custom, size_t len);
-int mbedtls_ctr_drbg_random(void* p_rng, ubyte* output, size_t output_len);
 
 
 // --- SSL/TLS ---
@@ -94,13 +121,17 @@ int mbedtls_ssl_set_hostname(mbedtls_ssl_context* ssl, const(char)* hostname);
 void mbedtls_ssl_config_init(mbedtls_ssl_config* conf);
 void mbedtls_ssl_config_free(mbedtls_ssl_config* conf);
 int mbedtls_ssl_config_defaults(mbedtls_ssl_config* conf, int endpoint, int transport, int preset);
-void mbedtls_ssl_conf_rng(mbedtls_ssl_config* conf, int function(void*, ubyte*, size_t) nothrow @nogc f_rng, void* p_rng);
 void mbedtls_ssl_conf_ca_chain(mbedtls_ssl_config* conf, mbedtls_x509_crt* ca_chain, void* ca_crl);
 int mbedtls_ssl_conf_own_cert(mbedtls_ssl_config* conf, mbedtls_x509_crt* own_cert, mbedtls_pk_context* pk_key);
 void mbedtls_ssl_conf_authmode(mbedtls_ssl_config* conf, int authmode);
 
 alias mbedtls_ssl_conf_sni_cb = int function(void* p_info, mbedtls_ssl_context* ssl, const(ubyte)* name, size_t name_len) nothrow @nogc;
 void mbedtls_ssl_conf_sni(mbedtls_ssl_config* conf, mbedtls_ssl_conf_sni_cb f_sni, void* p_sni);
+
+// Wires the configured RNG into an SSL config. No-op on 4.x (SSL pulls from
+// PSA internally); calls mbedtls_ssl_conf_rng with the module-static CTR-DRBG
+// on <4.
+void urt_ssl_attach_rng(mbedtls_ssl_config* conf);
 
 enum MBEDTLS_SSL_VERIFY_NONE = 0;
 enum MBEDTLS_SSL_VERIFY_OPTIONAL = 1;
@@ -109,47 +140,11 @@ enum MBEDTLS_SSL_VERIFY_REQUIRED = 2;
 
 // --- sizeof() from urt/internal/mbedtls.c (opaque types too complex to replicate) ---
 
-size_t urt_sizeof_entropy();
-size_t urt_sizeof_ctr_drbg();
 size_t urt_sizeof_x509_crt();
 size_t urt_sizeof_ssl_context();
 size_t urt_sizeof_ssl_config();
 
 import urt.mem.alloc;
-
-mbedtls_entropy_context* urt_entropy_new()
-{
-    auto ctx = cast(mbedtls_entropy_context*)alloc(urt_sizeof_entropy()).ptr;
-    if (ctx)
-        mbedtls_entropy_init(ctx);
-    return ctx;
-}
-
-void urt_entropy_delete(mbedtls_entropy_context* ctx)
-{
-    if (ctx)
-    {
-        mbedtls_entropy_free(ctx);
-        free((cast(void*)ctx)[0..urt_sizeof_entropy()]);
-    }
-}
-
-mbedtls_ctr_drbg_context* urt_ctr_drbg_new()
-{
-    auto ctx = cast(mbedtls_ctr_drbg_context*)alloc(urt_sizeof_ctr_drbg()).ptr;
-    if (ctx)
-        mbedtls_ctr_drbg_init(ctx);
-    return ctx;
-}
-
-void urt_ctr_drbg_delete(mbedtls_ctr_drbg_context* ctx)
-{
-    if (ctx)
-    {
-        mbedtls_ctr_drbg_free(ctx);
-        free((cast(void*)ctx)[0..urt_sizeof_ctr_drbg()]);
-    }
-}
 
 mbedtls_x509_crt* urt_x509_crt_new()
 {

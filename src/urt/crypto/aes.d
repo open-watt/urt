@@ -2,16 +2,7 @@ module urt.crypto.aes;
 
 import urt.result;
 
-version (Windows)
-{
-    import core.sys.windows.bcrypt;
-    import core.sys.windows.ntdef : NTSTATUS;
-    pragma(lib, "Bcrypt");
-
-    // STATUS_AUTH_TAG_MISMATCH — returned by BCryptDecrypt when GCM tag verification fails.
-    private enum NTSTATUS STATUS_AUTH_TAG_MISMATCH = cast(NTSTATUS)0xC000A002;
-}
-else version (Posix)
+version (MbedTLS)
 {
     extern (C) nothrow @nogc
     {
@@ -29,6 +20,15 @@ else version (Posix)
                             const(ubyte)* tag, size_t tag_len,
                             ubyte* plaintext);
     }
+}
+else version (Windows)
+{
+    import core.sys.windows.bcrypt;
+    import core.sys.windows.ntdef : NTSTATUS;
+    pragma(lib, "Bcrypt");
+
+    // STATUS_AUTH_TAG_MISMATCH — returned by BCryptDecrypt when GCM tag verification fails.
+    private enum NTSTATUS STATUS_AUTH_TAG_MISMATCH = cast(NTSTATUS)0xC000A002;
 }
 
 nothrow @nogc:
@@ -54,7 +54,18 @@ Result aes_gcm_encrypt(const(ubyte)[] key,
     if (iv.length == 0 || ciphertext.length != plaintext.length || tag.length < 4 || tag.length > 16)
         return InternalResult.invalid_parameter;
 
-    version (Windows)
+    version (MbedTLS)
+    {
+        int ret = urt_gcm_encrypt(
+            key.ptr, key.length,
+            iv.ptr, iv.length,
+            aad.length ? aad.ptr : null, aad.length,
+            plaintext.length ? plaintext.ptr : null, plaintext.length,
+            ciphertext.length ? ciphertext.ptr : null,
+            tag.ptr, tag.length);
+        return ret == 0 ? Result.success : Result(cast(uint)ret);
+    }
+    else version (Windows)
     {
         BCRYPT_ALG_HANDLE halg;
         NTSTATUS status = BCryptOpenAlgorithmProvider(&halg, BCRYPT_AES_ALGORITHM.ptr, null, 0);
@@ -94,17 +105,6 @@ Result aes_gcm_encrypt(const(ubyte)[] key,
             &result_len, 0);
         return status == 0 ? Result.success : Result(cast(uint)status);
     }
-    else version (Posix)
-    {
-        int ret = urt_gcm_encrypt(
-            key.ptr, key.length,
-            iv.ptr, iv.length,
-            aad.length ? aad.ptr : null, aad.length,
-            plaintext.length ? plaintext.ptr : null, plaintext.length,
-            ciphertext.length ? ciphertext.ptr : null,
-            tag.ptr, tag.length);
-        return ret == 0 ? Result.success : Result(cast(uint)ret);
-    }
     else
         return InternalResult.unsupported;
 }
@@ -125,7 +125,18 @@ Result aes_gcm_decrypt(const(ubyte)[] key,
     if (iv.length == 0 || plaintext.length != ciphertext.length || tag.length < 4 || tag.length > 16)
         return InternalResult.invalid_parameter;
 
-    version (Windows)
+    version (MbedTLS)
+    {
+        int ret = urt_gcm_decrypt(
+            key.ptr, key.length,
+            iv.ptr, iv.length,
+            aad.length ? aad.ptr : null, aad.length,
+            ciphertext.length ? ciphertext.ptr : null, ciphertext.length,
+            tag.ptr, tag.length,
+            plaintext.length ? plaintext.ptr : null);
+        return ret == 0 ? Result.success : Result(cast(uint)ret);
+    }
+    else version (Windows)
     {
         BCRYPT_ALG_HANDLE halg;
         NTSTATUS status = BCryptOpenAlgorithmProvider(&halg, BCRYPT_AES_ALGORITHM.ptr, null, 0);
@@ -164,17 +175,6 @@ Result aes_gcm_decrypt(const(ubyte)[] key,
             plaintext.length ? plaintext.ptr : null, cast(uint)plaintext.length,
             &result_len, 0);
         return status == 0 ? Result.success : Result(cast(uint)status);
-    }
-    else version (Posix)
-    {
-        int ret = urt_gcm_decrypt(
-            key.ptr, key.length,
-            iv.ptr, iv.length,
-            aad.length ? aad.ptr : null, aad.length,
-            ciphertext.length ? ciphertext.ptr : null, ciphertext.length,
-            tag.ptr, tag.length,
-            plaintext.length ? plaintext.ptr : null);
-        return ret == 0 ? Result.success : Result(cast(uint)ret);
     }
     else
         return InternalResult.unsupported;

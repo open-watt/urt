@@ -2,7 +2,9 @@ module urt.crypto.ecdh;
 
 import urt.result;
 
-version (Windows)
+version (MbedTLS)
+    import urt.internal.mbedtls : urt_ecdh_p256_compute_shared;
+else version (Windows)
 {
     import core.sys.windows.bcrypt;
     import core.sys.windows.ntdef : NTSTATUS;
@@ -11,20 +13,6 @@ version (Windows)
     // druntime gates this behind NTDDI_WINBLUE; declare directly so it's available
     // regardless of the target's NTDDI_VERSION (the KDF itself works on Win8.1+).
     private enum wstring BCRYPT_KDF_RAW_SECRET = "TRUNCATE"w;
-}
-else version (Posix)
-{
-    import urt.crypto.random : get_rng;
-    import urt.internal.mbedtls : mbedtls_ctr_drbg_random;
-
-    extern (C) nothrow @nogc
-    {
-        int urt_ecdh_p256_compute_shared(const(ubyte)* priv_d, size_t priv_len,
-                                          const(ubyte)* peer_xy, size_t peer_xy_len,
-                                          int function(void*, ubyte*, size_t) nothrow @nogc f_rng,
-                                          void* p_rng,
-                                          ubyte* shared_x_out);
-    }
 }
 
 nothrow @nogc:
@@ -47,7 +35,15 @@ Result ecdh_p256_compute_shared(const(ubyte)[] priv_d,
     if (priv_d.length != 32 || peer_xy.length != 64 || shared_x.length != 32)
         return InternalResult.invalid_parameter;
 
-    version (Windows)
+    version (MbedTLS)
+    {
+        int ret = urt_ecdh_p256_compute_shared(
+            priv_d.ptr, priv_d.length,
+            peer_xy.ptr, peer_xy.length,
+            shared_x.ptr);
+        return ret == 0 ? Result.success : Result(cast(uint)ret);
+    }
+    else version (Windows)
     {
         if (priv_xy.length != 64)
             return InternalResult.invalid_parameter;
@@ -111,15 +107,6 @@ Result ecdh_p256_compute_shared(const(ubyte)[] priv_d,
         foreach (i; 0 .. 32)
             shared_x[i] = tmp[31 - i];
         return Result.success;
-    }
-    else version (Posix)
-    {
-        int ret = urt_ecdh_p256_compute_shared(
-            priv_d.ptr, priv_d.length,
-            peer_xy.ptr, peer_xy.length,
-            &mbedtls_ctr_drbg_random, cast(void*)get_rng(),
-            shared_x.ptr);
-        return ret == 0 ? Result.success : Result(cast(uint)ret);
     }
     else
         return InternalResult.unsupported;

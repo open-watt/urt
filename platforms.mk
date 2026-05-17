@@ -336,9 +336,24 @@ URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(UR
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
 
-# mbedtls C glue needs host mbedtls headers -- exclude for embedded targets
+# mbedtls availability -- host posix builds get it from system libs,
+# ESP-IDF ships it for esp% targets (linked via IDF main component).
+# User can force via USE_MBEDTLS=1/0 on the command line.
+ifneq ($(filter linux ubuntu freebsd,$(OS)),)
+    USE_MBEDTLS ?= 1
+endif
+ifneq ($(filter esp%,$(PLATFORM)),)
+    USE_MBEDTLS ?= 1
+endif
+
+# mbedtls C glue: host posix builds compile it directly via URT_SOURCES.
+# Embedded targets must compile it via their platform's build system
+# (e.g. esp32 via IDF main component) so the cross-compiler picks up the
+# right mbedtls headers.
+ifeq ($(USE_MBEDTLS),1)
 ifeq ($(filter freertos baremetal,$(OS)),)
     URT_SOURCES := $(URT_SOURCES) $(URT_SRCDIR)/urt/internal/mbedtls.c
+endif
 endif
 
 ifeq ($(PLATFORM),bl808)
@@ -408,6 +423,13 @@ ifeq ($(PLATFORM),bl808)
 endif
 ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) -d-version=Tiny
+endif
+ifeq ($(USE_MBEDTLS),1)
+ifdef VERSIONS
+    VERSIONS := $(VERSIONS),MbedTLS
+else
+    VERSIONS := MbedTLS
+endif
 endif
 
 # Vendor/family versions consumed by URT's urt/driver/<x> code

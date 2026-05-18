@@ -81,8 +81,10 @@ bool ble_hw_scan_start(uint port, ref const BLEScanConfig cfg)
     ble_gap_disc_params params;
     params.itvl = cast(ushort)(cfg.interval_ms * 1000 / 625); // BLE units of 0.625ms
     params.window = cast(ushort)(cfg.window_ms * 1000 / 625);
-    params.filter_duplicates = cfg.filter_duplicates ? 1 : 0;
-    params.passive = cfg.active ? 0 : 1;
+    if (!cfg.active)
+        params.flags |= 0x02; // passive
+    if (cfg.filter_duplicates)
+        params.flags |= 0x04; // filter_duplicates
 
     if (ble_gap_disc(0, 0, &params, &gap_event_trampoline, null) != 0)
         return false;
@@ -795,9 +797,7 @@ struct ble_gap_disc_params
     ushort itvl;
     ushort window;
     ubyte filter_policy;
-    ubyte limited;
-    ubyte passive;
-    ubyte filter_duplicates;
+    ubyte flags;  // bit 0: limited, bit 1: passive, bit 2: filter_duplicates, bit 3: disable_observer_mode
 }
 
 struct ble_gap_conn_params
@@ -831,10 +831,10 @@ struct ble_gap_event
 
     struct ConnectData { int status; ushort conn_handle; }
     struct DisconnectData { int reason; ble_gap_conn_desc conn; }
-    struct DiscData { ubyte event_type; ubyte length_data; const(ubyte)* data; byte rssi;
-                      ble_addr_t addr; }
-    struct NotifyRxData { ushort conn_handle; ushort attr_handle; ubyte indication;
-                          os_mbuf* om; }
+    struct DiscData { ubyte event_type; ubyte length_data; ble_addr_t addr; byte rssi;
+                      const(ubyte)* data; ble_addr_t direct_addr; }
+    struct NotifyRxData { os_mbuf* om; ushort attr_handle; ushort conn_handle;
+                          ubyte indication; }
 
     union
     {
@@ -847,6 +847,7 @@ struct ble_gap_event
 
 struct ble_gap_conn_desc
 {
+    uint sec_state;
     ble_addr_t our_id_addr;
     ble_addr_t peer_id_addr;
     ble_addr_t our_ota_addr;
@@ -856,9 +857,7 @@ struct ble_gap_conn_desc
     ushort conn_latency;
     ushort supervision_timeout;
     ubyte role;
-    ubyte encrypted;
-    ubyte authenticated;
-    ubyte bonded;
+    ubyte master_clock_accuracy;
 }
 
 struct ble_gatt_error
@@ -909,7 +908,7 @@ struct ble_gatt_chr
 {
     ushort def_handle;
     ushort val_handle;
-    ushort properties;
+    ubyte properties;
     ble_uuid_any uuid;
 }
 
@@ -923,11 +922,12 @@ struct ble_gatt_attr
 // NimBLE mbuf
 struct os_mbuf
 {
-    os_mbuf* om_next;
     ubyte* om_data;
+    ubyte om_flags;
+    ubyte om_pkthdr_len;
     ushort om_len;
-    ushort om_flags;
-    // ... more fields follow but we only need these
+    void* om_omp;       // os_mbuf_pool* (opaque)
+    os_mbuf* om_next;   // SLIST_ENTRY(os_mbuf) — single ptr in practice
 }
 
 // GAP event types

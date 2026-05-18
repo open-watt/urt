@@ -18,7 +18,17 @@ import urt.driver.wifi;
 nothrow @nogc:
 
 
-enum uint num_wifi = 1;
+version (ESP32)         enum uint num_wifi = 1;
+else version (ESP32_S2) enum uint num_wifi = 1;
+else version (ESP32_S3) enum uint num_wifi = 1;
+else version (ESP32_C2) enum uint num_wifi = 1;
+else version (ESP32_C3) enum uint num_wifi = 1;
+else version (ESP32_C5) enum uint num_wifi = 1;
+else version (ESP32_C6) enum uint num_wifi = 1;
+else                    enum uint num_wifi = 0; // H2 (BT/802.15.4 only), P4 (needs external)
+
+
+static if (num_wifi > 0):
 
 
 bool wifi_hw_open(uint port, ref const WifiConfig cfg)
@@ -239,6 +249,16 @@ void wifi_hw_poll(uint port)
         _evt_ap_stopped = false;
         _event_cb(w, WifiEvent.ap_stopped, null);
     }
+    if (_evt_ap_sta_connected)
+    {
+        _evt_ap_sta_connected = false;
+        _event_cb(w, WifiEvent.ap_sta_connected, _evt_ap_sta_mac.ptr);
+    }
+    if (_evt_ap_sta_disconnected)
+    {
+        _evt_ap_sta_disconnected = false;
+        _event_cb(w, WifiEvent.ap_sta_disconnected, _evt_ap_sta_mac.ptr);
+    }
 }
 
 
@@ -269,6 +289,9 @@ __gshared bool _evt_sta_connected;
 __gshared bool _evt_sta_disconnected;
 __gshared bool _evt_ap_started;
 __gshared bool _evt_ap_stopped;
+__gshared bool _evt_ap_sta_connected;
+__gshared bool _evt_ap_sta_disconnected;
+__gshared ubyte[6] _evt_ap_sta_mac;
 
 // Event trampolines -- called from ESP event task via C shim
 extern(C) void sta_event_trampoline(int event_id, void*, int) nothrow @nogc
@@ -279,12 +302,22 @@ extern(C) void sta_event_trampoline(int event_id, void*, int) nothrow @nogc
         _evt_sta_disconnected = true;
 }
 
-extern(C) void ap_event_trampoline(int event_id, void*, int) nothrow @nogc
+extern(C) void ap_event_trampoline(int event_id, void* event_data, int) nothrow @nogc
 {
     if (event_id == WIFI_EVENT_AP_START)
         _evt_ap_started = true;
     else if (event_id == WIFI_EVENT_AP_STOP)
         _evt_ap_stopped = true;
+    else if (event_id == WIFI_EVENT_AP_STACONNECTED && event_data !is null)
+    {
+        _evt_ap_sta_mac[] = (cast(ubyte*)event_data)[0 .. 6];
+        _evt_ap_sta_connected = true;
+    }
+    else if (event_id == WIFI_EVENT_AP_STADISCONNECTED && event_data !is null)
+    {
+        _evt_ap_sta_mac[] = (cast(ubyte*)event_data)[0 .. 6];
+        _evt_ap_sta_disconnected = true;
+    }
 }
 
 // RX trampoline -- called from C shim's esp_wifi_internal_reg_rxcb handler.

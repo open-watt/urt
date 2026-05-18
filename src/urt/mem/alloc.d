@@ -9,11 +9,12 @@ enum MemFlags : ubyte
 {
     none     = 0,
 
-    fast     = 1,   // internal SRAM, lowest latency
-    slow     = 2,   // external PSRAM, bulk storage
-    fastest  = 3,   // TCM / tightly-coupled, single cycle
+    // Speed bits are placement *preferences*
+    fast     = 1,   // prefer internal SRAM
+    slow     = 2,   // prefer external PSRAM
+    fastest  = 3,   // prefer TCM (single-cycle), else internal SRAM
 
-    dma      = 0x4, // DMA-accessible
+    dma      = 0x4, // DMA-accessible (hard requirement)
 }
 
 MemFlags mem_speed(MemFlags flags) pure => cast(MemFlags)(flags & 3);

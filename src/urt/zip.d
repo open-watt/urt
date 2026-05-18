@@ -3,6 +3,7 @@ module urt.zip;
 import urt.crc;
 import urt.endian;
 import urt.hash;
+import urt.mem.alloc : MemFlags;
 import urt.mem.allocator;
 import urt.result;
 
@@ -258,8 +259,8 @@ ubyte[] zlib_compress(const void[] message, int quality)
     uint bitbuf=0;
     int i,j, bitcount=0;
     ubyte* out_ = null;
-    ubyte*** hash_table = cast(ubyte***) STBIW_MALLOC(stbiw__ZHASH * ubyte**.sizeof);
-    if (hash_table == null)
+    ubyte*** hash_table = cast(ubyte***) STBIW_MALLOC!(MemFlags.fast)(stbiw__ZHASH * (ubyte**).sizeof);
+    if (hash_table is null)
         return null;
     if (quality < 5)
         quality = 5;
@@ -322,7 +323,7 @@ ubyte[] zlib_compress(const void[] message, int quality)
             memmove(hash_table[h], hash_table[h]+quality, hash_table[h][0].sizeof*quality);
             stbiw__sbn(hash_table[h]) = quality;
         }
-        stbiw__sbpush(hash_table[h], data + i);
+        stbiw__sbpush!(MemFlags.fast)(hash_table[h], data + i);
 
         if (bestloc)
         {
@@ -438,19 +439,73 @@ unittest
 }
 
 
+ubyte[] gzip_compress(const void[] message, int quality)
+{
+    ubyte[] zlib_out = zlib_compress(message, quality);
+    if (zlib_out.length == 0)
+        return null;
+
+    // zlib_out layout: [2B CMF/FLG][raw deflate][4B adler32]
+    // gzip layout:     [10B header][raw deflate][4B crc32][4B isize]
+    size_t total = zlib_out.length;
+    assert(total >= 6);
+
+    size_t raw_len = total - 6;
+    size_t out_len = 10 + raw_len + 8;
+    ubyte[] result = cast(ubyte[])defaultAllocator().alloc(out_len);
+    if (result.ptr is null)
+    {
+        defaultAllocator().free(zlib_out);
+        return null;
+    }
+
+    static immutable ubyte[10] gzip_header = [0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0, 0xFF];
+    result[0 .. 10] = gzip_header[];
+    result[10 .. 10 + raw_len] = zlib_out[2 .. $ - 4];
+    storeLittleEndian!uint(cast(uint*)(result.ptr + 10 + raw_len), zlib_crc(message));
+    storeLittleEndian!uint(cast(uint*)(result.ptr + 10 + raw_len + 4), cast(uint)message.length);
+
+    defaultAllocator().free(zlib_out);
+    return result;
+}
+
+unittest
+{
+    enum src = "123456789012345678901234567890";
+    ubyte[] result = gzip_compress(src, 9);
+    assert(result.length >= 18);
+    assert(result[0] == 0x1F && result[1] == 0x8B && result[2] == 0x08);
+
+    ubyte[256] decompressBuffer = void;
+    size_t len;
+    gzip_uncompress(result, decompressBuffer, len);
+    assert(len == src.length);
+    assert(decompressBuffer[0 .. len] == src);
+
+    defaultAllocator().free(result);
+}
+
+
 private:
 
-enum stbiw__ZHASH = 16384;
+enum stbiw__ZHASH = 4096;
 
-void* STBIW_MALLOC(size_t size)
-    => defaultAllocator().alloc(size).ptr;
+void* STBIW_MALLOC(MemFlags flags = MemFlags.none)(size_t size)
+{
+    import urt.mem.alloc : alloc;
+    return alloc(size, size_t.sizeof, flags).ptr;
+}
 
-void* STBIW_REALLOC_SIZED(void* ptr, size_t old_size, size_t new_size)
-    => defaultAllocator().realloc(ptr[0..old_size], new_size).ptr;
+void* STBIW_REALLOC_SIZED(MemFlags flags = MemFlags.none)(void* ptr, size_t old_size, size_t new_size)
+{
+    import urt.mem.alloc : realloc;
+    return realloc(ptr[0..old_size], new_size, size_t.sizeof, flags).ptr;
+}
 
 void STBIW_FREE(void* ptr)
 {
-    defaultAllocator().free(ptr[0..0]);
+    import urt.mem.alloc : free;
+    free(ptr[0..0]);
 }
 
 ubyte STBIW_UCHAR(T)(T x)
@@ -461,14 +516,16 @@ int* stbiw__sbraw(T)(T* a)  => cast(int*)a - 2;
 ref int stbiw__sbm(T)(T* a) => (cast(int*)a - 2)[0];
 ref int stbiw__sbn(T)(T* a) => (cast(int*)a - 2)[1];
 
-bool stbiw__sbneedgrow(T)(T* a, int n)       => !a || (stbiw__sbn(a) + n >= stbiw__sbm(a));
-void* stbiw__sbmaybegrow(T)(ref T* a, int n) => stbiw__sbneedgrow(a,n) ? stbiw__sbgrow(a, n) : null;
-void* stbiw__sbgrow(T)(ref T* a, int n)      => stbiw__sbgrowf(cast(void**)&a, n, T.sizeof);
+bool stbiw__sbneedgrow(T)(T* a, int n) => !a || (stbiw__sbn(a) + n >= stbiw__sbm(a));
+void* stbiw__sbmaybegrow(MemFlags flags = MemFlags.none, T)(ref T* a, int n)
+    => stbiw__sbneedgrow(a, n) ? stbiw__sbgrow!flags(a, n) : null;
+void* stbiw__sbgrow(MemFlags flags = MemFlags.none, T)(ref T* a, int n)
+    => stbiw__sbgrowf!flags(cast(void**)&a, n, T.sizeof);
 
 auto stbiw__sbcount(T)(T* a)   => a ? stbiw__sbn(a) : 0;
-auto stbiw__sbpush(T)(ref T* a, T v)
+auto stbiw__sbpush(MemFlags flags = MemFlags.none, T)(ref T* a, T v)
 {
-    stbiw__sbmaybegrow(a, 1);
+    stbiw__sbmaybegrow!flags(a, 1);
     return (a[stbiw__sbn(a)++] = v);
 }
 void stbiw__sbfree(T)(auto ref T a)
@@ -477,10 +534,10 @@ void stbiw__sbfree(T)(auto ref T a)
         STBIW_FREE(cast(int*)a - 2);
 }
 
-void* stbiw__sbgrowf(void** arr, int increment, int itemsize)
+void* stbiw__sbgrowf(MemFlags flags = MemFlags.none)(void** arr, int increment, int itemsize)
 {
     int m = *arr ? 2*stbiw__sbm(*arr) + increment : increment + 1;
-    void* p = STBIW_REALLOC_SIZED(*arr ? stbiw__sbraw(*arr) : null, *arr ? int.sizeof*2 + stbiw__sbm(*arr)*itemsize : 0, int.sizeof*2 + itemsize*m);
+    void* p = STBIW_REALLOC_SIZED!flags(*arr ? stbiw__sbraw(*arr) : null, *arr ? int.sizeof*2 + stbiw__sbm(*arr)*itemsize : 0, int.sizeof*2 + itemsize*m);
     assert(p);
     if (p)
     {

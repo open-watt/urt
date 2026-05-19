@@ -358,8 +358,8 @@ struct DefInt(T)
     {
         static if (T.sizeof <= size_t.sizeof)
         {
-            T value = void;
-            *cast(size_t*)&value = cast(size_t)cast(void*)&this;
+            size_t bits = cast(size_t)cast(void*)&this;
+            ref T value = *cast(T*)&bits;
         }
 
         static if (T.max > ptrdiff_t.max)
@@ -388,8 +388,8 @@ template DefFormat(T)
         {
             static if (T.sizeof <= size_t.sizeof)
             {
-                T value = void;
-                *cast(size_t*)&value = cast(size_t)cast(void*)&this;
+                size_t bits = cast(size_t)cast(void*)&this;
+                ref T value = *cast(T*)&bits;
             }
 
             static if (is(T == U[N], U, size_t N))

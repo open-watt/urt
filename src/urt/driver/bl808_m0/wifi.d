@@ -404,26 +404,21 @@ enum SCANU_RESULT_IND  = ke_msg_id(TASK_SCANU, 4);  // 0x0804
 enum APM_STA_ADD_IND   = ke_msg_id(TASK_APM, 8);    // 0x1408
 enum APM_STA_DEL_IND   = ke_msg_id(TASK_APM, 9);    // 0x1409
 
-// ipc_e2a_msg.id is an int (ke_msg_id_t = enum -> int).
+// libwifi.a was compiled with -fshort-enums: ke_msg_id_t is uint16,
+// ke_task_id_t is uint8. Total header = 8 bytes (NOT 16). Our vendor C
+// compile now also passes -fshort-enums so the shared-mem layout matches.
+// History: with int-enums (16-byte header), the blob read dest at byte 2
+// (= our id's third byte = 0) for every host msg, so ME_CONFIG_REQ
+// (dest=ME=3) got routed to MM task (dest=0) and dropped.
 struct ipc_e2a_msg
 {
-    uint id;
-    ubyte dummy_dest_id;
-    ubyte _pad0;
-    ubyte _pad1;
-    ubyte _pad2;
-    ubyte dummy_src_id;
-    ubyte _pad3;
-    ubyte _pad4;
-    ubyte _pad5;
-    uint param_len;
-    // param[IPC_E2A_MSG_PARAM_SIZE] follows
-    uint[1] param;
+    ushort id;             // 0-1
+    ubyte dummy_dest_id;   // 2
+    ubyte dummy_src_id;    // 3
+    uint param_len;        // 4-7 (naturally aligned)
+    uint[1] param;         // 8+
     // uint pattern at the end of vendor struct -- we don't touch it
 }
-// Note: vendor C uses ke_task_id_t which is an enum -> 4 bytes. Our
-// padding above keeps the offsets correct for `id`, `param_len`,
-// `param[]`. We never inspect dummy_dest_id/src_id; only id matters.
 
 alias msg_cb_fct = extern (C) int function(bl_hw*, bl_cmd*, ipc_e2a_msg*) nothrow @nogc;
 

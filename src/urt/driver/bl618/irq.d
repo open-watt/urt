@@ -87,19 +87,20 @@ void wait_for_interrupt()
 
 // Enable a single CLIC IRQ. Returns previous state.
 //
-// The T-Head CLIC will NOT deliver an IRQ whose CLICINTCTL byte (priority)
-// is zero -- even with IE=1, SHV=1, IP=1, and mstatus.MIE set. Vendor's
+// The T-Head CLIC will NOT deliver an IRQ whose CLICINTCTL priority is
+// zero -- even with IE=1, SHV=1, IP=1, and mstatus.MIE set. Vendor's
 // CPU_Interrupt_Enable in bl_iot_sdk's interrupt.c clamps the same way.
-// We bump to the minimum-priority value (_clic_ctl_lsb), which on E907 is
-// 0x10 because CLICINFO.CLICINTCTLBITS reports 4 (only the top 4 bits of
-// CTL are RW; the bottom 4 are RAZ/WI). Writing 0x01 would store 0 and
-// the line would still never deliver.
+// We bump to the minimum-priority value (_clic_ctl_lsb); on E907 that's
+// 0x10 because CLICINFO.CLICINTCTLBITS reports 4 (top 4 bits are RW
+// priority, bottom 4 are RAO -- they read as 1 even after writing 0).
+// So a "no priority" CTL reads as 0x0F, not 0x00. The check is
+// `< _clic_ctl_lsb` (priority below minimum), not `== 0`.
 bool irq_set_enable(uint irq)
 {
     if (irq >= irq_max)
         return false;
     ubyte* ctl = clicint_byte(irq, ctl_offset);
-    if (volatileLoad(ctl) == 0)
+    if (volatileLoad(ctl) < _clic_ctl_lsb)
         volatileStore(ctl, _clic_ctl_lsb);
     ubyte* ie = clicint_byte(irq, ie_offset);
     bool prev = (volatileLoad(ie) & 0x1) != 0;
@@ -421,8 +422,13 @@ unittest // positive: IE=1, CTL>=lsb, MIE=1 -- handler runs, histogram increment
     // happen (T-Head CLIC quirk) and we'd report a misleading delivery
     // failure instead of "CTL bump is broken".
     ubyte ctl_after = volatileLoad(clicint_byte(test_vec, ctl_offset));
-    assert(ctl_after >= _clic_ctl_lsb,
-           "irq_set_enable failed to bump CLICINTCTL above zero");
+    if (ctl_after < _clic_ctl_lsb)
+    {
+        import urt.io : writef;
+        writef("[irq-test vec={0} ctl_after={1,02X} clic_ctl_lsb={2,02X}]",
+               test_vec, ctl_after, _clic_ctl_lsb);
+        assert(false, "irq_set_enable failed to bump CLICINTCTL above zero");
+    }
 
     volatileStore(clicint_byte(test_vec, ip_offset), ubyte(1));
     _spin_for_delivery();

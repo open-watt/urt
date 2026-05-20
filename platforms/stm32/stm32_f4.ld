@@ -92,6 +92,13 @@ SECTIONS
     __ram_data_start__ = _data_start;
     __ram_data_end__ = _data_end;
 
+    /* @fast_data maps to .data on F4 (no DTCM region), so there is no
+     * .dtcm_data section. Define the symbols the shared startup copies as an
+     * empty range so its copy loop is a no-op here. */
+    _dtcm_data_start = .;
+    _dtcm_data_end   = .;
+    _dtcm_data_load  = .;
+
     /* Thread-local initialized data -- LMA in FLASH, copied to RAM at startup */
     .tdata : ALIGN(4)
     {
@@ -127,6 +134,7 @@ SECTIONS
 
     /* Stack at top of RAM (4KB reserved) */
     _stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    _stack_low = ORIGIN(RAM);
     __StackTop = _stack_top;
 
     /DISCARD/ :

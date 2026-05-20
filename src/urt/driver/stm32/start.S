@@ -44,9 +44,11 @@ __vector_table:
     .word   PendSV_Handler      /* 14: PendSV */
     .word   SysTick_Handler     /* 15: SysTick */
 
-    /* IRQ 0-97 (98 entries covers both F4 82 and F7 98 IRQs) */
+    /* IRQ 0-97 (98 entries covers both F4 82 and F7 98 IRQs). Every
+     * peripheral vector routes to _nvic_dispatch, which recovers the IRQ from
+     * IPSR and calls the handler registered via irq_set_handler. */
     .rept 98
-    .word   Default_Handler
+    .word   _nvic_dispatch
     .endr
 
     .size __vector_table, . - __vector_table
@@ -86,6 +88,18 @@ Reset_Handler:
 .Ldata_check:
     cmp     r0, r2
     blo     .Ldata_copy
+
+    /* -- Copy .dtcm_data from flash to DTCM (F7; empty no-op on F4) -- */
+    ldr     r0, =_dtcm_data_start
+    ldr     r1, =_dtcm_data_load
+    ldr     r2, =_dtcm_data_end
+    b       .Ldtcm_check
+.Ldtcm_copy:
+    ldm     r1!, {r3}
+    stm     r0!, {r3}
+.Ldtcm_check:
+    cmp     r0, r2
+    blo     .Ldtcm_copy
 
     /* -- Zero .bss -- */
     ldr     r0, =_bss_start

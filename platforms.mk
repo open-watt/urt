@@ -682,7 +682,9 @@ ifeq ($(COMPILER),ldc)
     endif
 
     ifeq ($(CONFIG),release)
-      ifeq ($(ARCH),xtensa)
+      ifeq ($(TINY),1)
+        DFLAGS := $(DFLAGS) -release --enable-asserts -Oz -enable-inlining
+      else ifeq ($(ARCH),xtensa)
         DFLAGS := $(DFLAGS) -release --enable-asserts -Oz -enable-inlining
       else
         DFLAGS := $(DFLAGS) -release --enable-asserts -O3 -enable-inlining

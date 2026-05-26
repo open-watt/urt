@@ -1,4 +1,4 @@
-module urt.thread;
+module urt.sync.queue;
 
 import urt.atomic;
 import urt.util : is_power_of_2;
@@ -6,8 +6,8 @@ import urt.util : is_power_of_2;
 nothrow @nogc:
 
 
-// thread-safe FIFO for passing data between threads.
-// uses a spinlock to protect enqueue/dequeue.
+// Thread-safe FIFO for passing data between threads.
+// Uses a CAS spinlock to protect enqueue/dequeue.
 struct ThreadSafeQueue(uint capacity = 64, T = void*)
 {
 nothrow @nogc:

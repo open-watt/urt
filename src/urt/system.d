@@ -196,6 +196,45 @@ void set_system_idle_params(IdleParams params)
         static assert(0, "Not implemented");
 }
 
+void count_system_load(MonoTime reference)
+{
+    MonoTime now = getTime();
+
+    size_t a = cast(size_t)(reference - MonoTime()).as!"nsecs";
+    size_t b = cast(size_t)(now - MonoTime()).as!"nsecs";
+
+    import urt.util : log2;
+    enum shift = log2(cpu_bucket_len);
+    size_t full_intervals = (b >> shift) - (a >> shift);
+
+    if (full_intervals == 0)
+        g_cpu_time[g_bucket] += b - a;
+    else
+    {
+        enum mask = cpu_counter_buckets - 1;
+        enum cpu_bucket_mask = cpu_bucket_len - 1;
+
+        if (full_intervals > cpu_counter_buckets)
+            full_intervals = cpu_counter_buckets;
+
+        g_cpu_time[g_bucket++] += cpu_bucket_len - (a & cpu_bucket_mask);
+        for (uint i = 1; i < full_intervals; i++)
+            g_cpu_time[g_bucket++ & mask] = cpu_bucket_len;
+        g_bucket = g_bucket & mask;
+        g_cpu_time[g_bucket] = b & cpu_bucket_mask;
+    }
+}
+
+uint get_cpu_load()
+{
+    uint idle_time = 0;
+    for (uint i = 0; i < cpu_counter_buckets; i++)
+        if (i != g_bucket)
+            idle_time += g_cpu_time[i];
+    enum total_time = cpu_bucket_len*(cpu_counter_buckets - 1);
+    uint cpu_time = total_time - idle_time;
+    return cast(uint)(cpu_time*100 / total_time);
+}
 
 unittest
 {
@@ -227,6 +266,14 @@ unittest
 
 
 package:
+
+import urt.attribute : fast_data;
+
+enum uint cpu_bucket_len = 0x400_0000; // nanosecond buckets of ~67ms
+enum cpu_counter_buckets = 16;
+
+__gshared @fast_data uint[16] g_cpu_time;
+__gshared @fast_data ubyte g_bucket = 0;
 
 version (Bouffalo)
 {

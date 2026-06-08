@@ -50,10 +50,15 @@ Result zlib_uncompress(const(void)[] source, void[] dest, out size_t destLen)
     if (flg & 0x20)
         return InternalResult.data_error;
 
-    if (!uncompress((src + 2)[0 .. sourceLen - 6], dest, destLen))
+    size_t deflateLen;
+    if (!uncompress((src + 2)[0 .. sourceLen - 2], dest, destLen, &deflateLen))
         return InternalResult.data_error;
 
-    if (adler32(dest[0 .. destLen]) != loadBigEndian!uint(cast(uint*)&src[sourceLen - 4]))
+    const(ubyte)* footer = src + 2 + deflateLen;
+    if (footer + 4 > src + sourceLen)
+        return InternalResult.data_error;
+
+    if (adler32(dest[0 .. destLen]) != loadBigEndian!uint(cast(uint*)footer))
         return InternalResult.data_error;
 
     return InternalResult.success;
@@ -161,28 +166,25 @@ Result gzip_uncompress(const(void)[] source, void[] dest, out size_t destLen)
         start += 2;
     }
 
-    // get decompressed length
-    uint dlen = loadLittleEndian!uint(cast(uint*)(src + sourceLen - 4));
-    if (dlen > dest.length)
-        return InternalResult.buffer_too_small;
-
-    if ((src + sourceLen) - start < 8)
+    size_t deflateLen;
+    if (!uncompress(start[0 .. (src + sourceLen) - start], dest, destLen, &deflateLen))
         return InternalResult.data_error;
 
-    if (!uncompress(start[0 .. (src + sourceLen) - start - 8], dest, destLen))
+    const(ubyte)* footer = start + deflateLen;
+    if (footer + 8 > src + sourceLen)
         return InternalResult.data_error;
 
-    if (destLen != dlen)
+    if (zlib_crc(dest[0..destLen]) != loadLittleEndian!uint(cast(uint*)footer))
         return InternalResult.data_error;
 
-    // check CRC32 checksum
-    if (zlib_crc(dest[0..dlen]) != loadLittleEndian!uint(cast(uint*)(src + sourceLen - 8)))
+    uint isize = loadLittleEndian!uint(cast(uint*)(footer + 4));
+    if (isize != destLen)
         return InternalResult.data_error;
 
     return InternalResult.success;
 }
 
-Result uncompress(const(void)[] source, void[] dest, out size_t destLen)
+Result uncompress(const(void)[] source, void[] dest, out size_t destLen, size_t* srcConsumed = null)
 {
     data d;
 
@@ -234,6 +236,8 @@ Result uncompress(const(void)[] source, void[] dest, out size_t destLen)
         return InternalResult.data_error;
 
     destLen = d.dest - d.dest_start;
+    if (srcConsumed)
+        *srcConsumed = d.source - cast(const(ubyte)*)source.ptr;
 
     return InternalResult.success;
 }

@@ -38,6 +38,10 @@
 # =======================================================================
 
 URT_SRCDIR ?= src
+
+# URT checkout root (./ in-tree, <consumer>/third_party/urt/ downstream).
+# Used to locate vendor.mk and the vendored blob trees.
+URT_ROOT := $(dir $(URT_SRCDIR))
 CONFIG     ?= debug
 COMPILER   ?= dmd
 
@@ -374,6 +378,7 @@ ifeq ($(PLATFORM),bl808)
   else ifeq ($(PROCESSOR),e907)
     # BL808 M0 core -- E907 uses same peripheral drivers as BL618.
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808_m0" -type f -name '*.d')
   endif
 endif
@@ -674,6 +679,15 @@ ifeq ($(COMPILER),ldc)
         PICOLIBC_MULTIDIR := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-multi-directory 2>/dev/null)
         BAREMETAL_LIBC   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libc.a))
         BAREMETAL_LIBM   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        # Vendor C deps (tlsf, mbedtls shim) include hosted headers (assert.h,
+        # string.h). A bare cross-gcc (CI's gcc-<arch>) only finds those via
+        # picolibc's specs; a full newlib toolchain has them by default. Add
+        # the specs only when picolibc is present. Probe for the specs file
+        # itself, not libc.a -- on the bare CI gcc libc.a is unfindable without
+        # the specs (the very problem this solves), so a libc.a probe fails
+        # exactly where it must succeed; --print-file-name=picolibc.specs
+        # returns an absolute path iff the file is installed.
+        BAREMETAL_SPECS  := $(if $(filter /%,$(shell $(BAREMETAL_GCC) --print-file-name=picolibc.specs 2>/dev/null)),--specs=picolibc.specs)
         # Caller adds: -L-T<linker_script> + any vendor blob archives.
         # TODO: drop -L--allow-multiple-definition once we migrate intentional
         # blob-symbol overrides (currently bl_sleep_check) to -L--wrap=<sym>.
@@ -682,6 +696,7 @@ ifeq ($(COMPILER),ldc)
         # accidental shadows). Re-enable the strict link periodically by
         # commenting this out and running clean to catch new shadows.
         DFLAGS := $(DFLAGS) -L--gc-sections -L--allow-multiple-definition --link-internally -L-z -Lnorelro -L$(BAREMETAL_LIBC) -L$(BAREMETAL_LIBM) -L$(BAREMETAL_LIBGCC)
+
       else ifeq ($(ARCH),xtensa)
         # Xtensa: emit LLVM bitcode for two-stage codegen via Espressif's llc
         # (upstream LLVM Xtensa backend crashes on invoke+landingpad at -O1+).
@@ -743,3 +758,13 @@ ifdef VERSIONS
     space := $(empty) $(empty)
     DFLAGS := $(DFLAGS) $(addprefix $(VERSION_FLAG),$(subst $(comma),$(space),$(VERSIONS)))
 endif
+
+# Derived build dirs (BUILDNAME/CONFIG resolved above). Consumers inherit these
+# and own only TARGETNAME/TARGET. Defined before the vendor.mk import, whose
+# compile-rule targets need OBJDIR.
+OBJDIR    ?= obj/$(BUILDNAME)_$(CONFIG)
+TARGETDIR ?= bin/$(BUILDNAME)_$(CONFIG)
+
+# Bouffalo vendor C deps: paths, $(VENDOR_OBJS), compile rules and -L/-I.
+# Consumers just link $(VENDOR_OBJS); the per-blob lists stay private.
+include $(URT_ROOT)vendor.mk

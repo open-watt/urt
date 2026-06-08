@@ -243,10 +243,12 @@ private:
 
 private:
 
+// TODO: we shpuld really have some indicator if the machine is multi-core or not...
+//       this is doomed the moment we light up the esp32's second core!
 version (BareMetal)
 {
     @fast_data align(size_t.alignof) __gshared void[TempMemSize] tempMem;
-    __gshared ushort alloc_offset = 0;
+    @fast_data __gshared ushort alloc_offset = 0;
 }
 else
 {

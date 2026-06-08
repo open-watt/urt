@@ -6,7 +6,7 @@
 // overrides are identical across chips.
 //
 // Pool topologies (target end state):
-//   BL618:        DTCM (64K, fastest) + OCRAM (480K, fast/slow/dma)
+//   BL618:        OCRAM cached (256K, fast/slow) + OCRAM DMA (64K, non-cache)
 //   BL808 D0:     SRAM (64K, fastest/fast/dma) + PSRAM (61M, slow)
 //   BL808 M0:     DTCM (4K, fastest) + OCRAM (160K, fast/dma)
 //                                    + PSRAM (1M, slow)
@@ -282,46 +282,45 @@ else version (BL808)
 }
 else version (BL618)
 {
-    // BL618 topology:
-    //   DTCM  (64K)  fastest
-    //   OCRAM (480K) fast / slow / dma  (the only large pool)
-    enum size_t DtcmIdx  = 0;
-    enum size_t OcramIdx = 1;
+    // BL618 topology (no TCM; WRAM reserved for WiFi; PSRAM needs init):
+    //   OCRAM cached (256K) fast / fastest / slow
+    //   OCRAM DMA   (64K)   non-cache alias, DMA buffers
+    enum size_t OcramIdx = 0;
+    enum size_t DmaIdx   = 1;
 
     extern(C) extern __gshared
     {
-        pragma(mangle, "__dtcm_heap_start")  void* _dtcm_heap_start;
-        pragma(mangle, "__dtcm_heap_end")    void* _dtcm_heap_end;
         pragma(mangle, "__ocram_heap_start") void* _ocram_heap_start;
         pragma(mangle, "__ocram_heap_end")   void* _ocram_heap_end;
+        pragma(mangle, "__dma_heap_start")   void* _dma_heap_start;
+        pragma(mangle, "__dma_heap_end")     void* _dma_heap_end;
     }
 
     size_t pool_for(MemFlags flags) nothrow @nogc
     {
-        // BL618 has no PSRAM; OCRAM is the only large pool and is
-        // DMA-reachable. DTCM is reserved for the fastest pool (CPU-local,
-        // not DMA-reachable).
+        // DMA must come from the non-cache alias; everything else from cached
+        // OCRAM (PSRAM isn't a pool until bl_psram_init is wired).
         if (flags & MemFlags.dma)
-            return OcramIdx;
+            return DmaIdx;
 
         final switch (cast(MemFlags)(flags & 3))
         {
             case MemFlags.none:    return OcramIdx;
             case MemFlags.fast:    return OcramIdx;
+            case MemFlags.fastest: return OcramIdx;
             case MemFlags.slow:    return OcramIdx;
-            case MemFlags.fastest: return DtcmIdx;
             case MemFlags.dma:     assert(false);
         }
     }
 
     void map_pools() nothrow @nogc
     {
-        _pools[DtcmIdx].base  = cast(void*)&_dtcm_heap_start;
-        _pools[DtcmIdx].size  = cast(size_t)&_dtcm_heap_end  - cast(size_t)&_dtcm_heap_start;
-        _pools[DtcmIdx].name  = "TCM";
         _pools[OcramIdx].base = cast(void*)&_ocram_heap_start;
         _pools[OcramIdx].size = cast(size_t)&_ocram_heap_end - cast(size_t)&_ocram_heap_start;
         _pools[OcramIdx].name = "SRAM";
+        _pools[DmaIdx].base   = cast(void*)&_dma_heap_start;
+        _pools[DmaIdx].size   = cast(size_t)&_dma_heap_end  - cast(size_t)&_dma_heap_start;
+        _pools[DmaIdx].name   = "DMA";
     }
 }
 else

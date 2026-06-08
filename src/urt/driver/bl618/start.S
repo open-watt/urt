@@ -64,6 +64,18 @@ _start:
 
     /* -- 3. Section init ------------------------------------------- */
 
+    la      a0, _ramfunc_start
+    la      a1, _ramfunc_load
+    la      a2, _ramfunc_end
+    bgeu    a0, a2, .Lramfunc_done
+.Lramfunc_copy:
+    lw      t0, 0(a1)
+    sw      t0, 0(a0)
+    addi    a0, a0, 4
+    addi    a1, a1, 4
+    bltu    a0, a2, .Lramfunc_copy
+.Lramfunc_done:
+
     la      a0, _got_start
     la      a1, _got_load
     la      a2, _got_end
@@ -75,6 +87,18 @@ _start:
     addi    a1, a1, 4
     bltu    a0, a2, .Lgot_copy
 .Lgot_done:
+
+    la      a0, _sram_data_start
+    la      a1, _sram_data_load
+    la      a2, _sram_data_end
+    bgeu    a0, a2, .Lsram_data_done
+.Lsram_data_copy:
+    lw      t0, 0(a1)
+    sw      t0, 0(a0)
+    addi    a0, a0, 4
+    addi    a1, a1, 4
+    bltu    a0, a2, .Lsram_data_copy
+.Lsram_data_done:
 
     la      a0, _tdata_start
     la      a1, _tdata_load

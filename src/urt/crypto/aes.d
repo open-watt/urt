@@ -181,6 +181,71 @@ Result aes_gcm_decrypt(const(ubyte)[] key,
 }
 
 
+// Raw AES-ECB on a single 16-byte block (no padding, no IV). The building
+// block for RFC 3394 key wrap; not a general-purpose cipher mode. key is
+// 16/24/32 bytes. Returns unsupported when no AES backend is compiled in.
+Result aes_ecb_encrypt(const(ubyte)[] key, ref const ubyte[16] input, ref ubyte[16] output)
+{
+    if (key.length != 16 && key.length != 24 && key.length != 32)
+        return InternalResult.invalid_parameter;
+
+    version (MbedTLS)
+    {
+        import urt.internal.mbedtls : urt_aes_ecb_encrypt;
+        return urt_aes_ecb_encrypt(key.ptr, key.length, input.ptr, output.ptr) == 0 ? Result.success : InternalResult.failed;
+    }
+    else version (Windows)
+        return aes_ecb_block_win(key, input, output, false);
+    else
+        return InternalResult.unsupported;
+}
+
+Result aes_ecb_decrypt(const(ubyte)[] key, ref const ubyte[16] input, ref ubyte[16] output)
+{
+    if (key.length != 16 && key.length != 24 && key.length != 32)
+        return InternalResult.invalid_parameter;
+
+    version (MbedTLS)
+    {
+        import urt.internal.mbedtls : urt_aes_ecb_decrypt;
+        return urt_aes_ecb_decrypt(key.ptr, key.length, input.ptr, output.ptr) == 0 ? Result.success : InternalResult.failed;
+    }
+    else version (Windows)
+        return aes_ecb_block_win(key, input, output, true);
+    else
+        return InternalResult.unsupported;
+}
+
+version (Windows)
+private Result aes_ecb_block_win(const(ubyte)[] key, ref const ubyte[16] input, ref ubyte[16] output, bool decrypt)
+{
+    BCRYPT_ALG_HANDLE halg;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&halg, BCRYPT_AES_ALGORITHM.ptr, null, 0);
+    if (status != 0)
+        return Result(cast(uint)status);
+    scope(exit) BCryptCloseAlgorithmProvider(halg, 0);
+
+    status = BCryptSetProperty(halg, BCRYPT_CHAINING_MODE.ptr,
+        cast(ubyte*)BCRYPT_CHAIN_MODE_ECB.ptr,
+        cast(uint)(BCRYPT_CHAIN_MODE_ECB.length * wchar.sizeof), 0);
+    if (status != 0)
+        return Result(cast(uint)status);
+
+    BCRYPT_KEY_HANDLE hkey;
+    status = BCryptGenerateSymmetricKey(halg, &hkey, null, 0, cast(ubyte*)key.ptr, cast(uint)key.length, 0);
+    if (status != 0)
+        return Result(cast(uint)status);
+    scope(exit) BCryptDestroyKey(hkey);
+
+    uint result_len;
+    if (decrypt)
+        status = BCryptDecrypt(hkey, cast(ubyte*)input.ptr, 16, null, null, 0, output.ptr, 16, &result_len, 0);
+    else
+        status = BCryptEncrypt(hkey, cast(ubyte*)input.ptr, 16, null, null, 0, output.ptr, 16, &result_len, 0);
+    return status == 0 ? Result.success : Result(cast(uint)status);
+}
+
+
 unittest
 {
     // McGrew/Viega AES-GCM test vectors (FIPS 800-38D Annex B examples)

@@ -22,9 +22,9 @@ EXTERN(getaddrinfo freeaddrinfo)
 MEMORY
 {
     /* D0 firmware is loaded by M0 to PSRAM at this address */
-    CODE  (rx)  : ORIGIN = 0x50100000, LENGTH = 2M
-    /* Writable data starts after the 2MB firmware region */
-    DATA  (rwx) : ORIGIN = 0x50300000, LENGTH = 61M
+    CODE  (rx)  : ORIGIN = 0x50100000, LENGTH = 3M
+    /* Writable data starts after the 3MB firmware region */
+    DATA  (rwx) : ORIGIN = 0x50400000, LENGTH = 60M
     SRAM  (rwx) : ORIGIN = 0x3eff8000, LENGTH = 64K
     /* HBN RAM: 4KB, survives hibernate if VBAT maintained */
     HBNRAM (rw) : ORIGIN = 0x20010000, LENGTH = 4K

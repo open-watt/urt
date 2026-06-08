@@ -52,9 +52,11 @@ __vector_table:
     .word   PendSV_Handler      /* 14: PendSV */
     .word   SysTick_Handler     /* 15: SysTick */
 
-    /* IRQ 0-51 (RP2350 has 52 peripheral interrupts) */
+    /* IRQ 0-51 (RP2350 has 52 peripheral interrupts). Every peripheral
+     * vector routes to _nvic_dispatch, which recovers the IRQ from IPSR and
+     * calls the handler registered via irq_set_handler. */
     .rept 52
-    .word   Default_Handler
+    .word   _nvic_dispatch
     .endr
 
     .size __vector_table, . - __vector_table

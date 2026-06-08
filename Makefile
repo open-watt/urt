@@ -16,8 +16,7 @@ include platforms.mk
 #   ESP             -> always .bc, no link possible without ESP-IDF
 # =======================================================================
 
-OBJDIR    := obj/$(BUILDNAME)_$(CONFIG)
-TARGETDIR := bin/$(BUILDNAME)_$(CONFIG)
+# OBJDIR/TARGETDIR and the vendor.mk import come from platforms.mk.
 
 # Linker script selection for cross-target unittest builds (ESP excluded --
 # no ESP-IDF on build slave). platforms.mk falls back to compile-only when
@@ -107,14 +106,16 @@ $(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.c
 	$(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) -c -o $@ $<
 endif
 
+# Vendor C deps ($(BL_*_OBJS) / $(MBEDTLS_OBJS)) come from vendor.mk.
+
 # =======================================================================
 # Build rule
 # =======================================================================
 
-$(TARGET): $(BAREMETAL_OBJS)
+$(TARGET): $(BAREMETAL_OBJS) $(VENDOR_OBJS)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
-	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(URT_SOURCES)
+	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(VENDOR_OBJS) $(URT_SOURCES)
 else ifeq ($(COMPILER),dmd)
 ifeq ($(BUILD_MODE),lib)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(OBJDIR)/$(notdir $(TARGET)) -od$(OBJDIR) -makedeps $(URT_SOURCES) > $(DEPFILE)

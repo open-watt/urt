@@ -1,33 +1,39 @@
-/* BL618 (T-Head E907 RV32IMAFC) linker script
+/* BL616/BL618 (T-Head E907 RV32IMAFC) linker script -- Sipeed M0P Dock.
  *
- * Single-core Bouffalo BL616/BL618 — no M0/D0 split.
- * Code executes from flash via XIP or from OCRAM.
+ * Memory map from the BL616/BL618 datasheet and the vendor bouffalo_sdk
+ * bl616dk linker template. Cacheability is address-based: bit 30 set = cached
+ * (0x62.. / 0x63..), clear = non-cache (0x22.. / 0x23..) -- same physical RAM,
+ * two windows. Code and data run from the cached windows; only DMA buffers use
+ * the non-cache alias. There is NO TCM on this part (vendor MEMORY{} has none;
+ * .tcm_* sections fold into main RAM).
  *
- * Memory layout:
- *   FLASH XIP:  0xA0000000, 8MB   (execute-in-place, read-only)
- *   OCRAM:      0x62020000, 480KB (on-chip RAM, uncached)
- *   OCRAM$:     0x22020000, 480KB (same RAM, cached alias)
- *   DTCM:       0x20000000, 64KB  (tightly-coupled data memory)
+ *   FLASH : 0xA0000000  8M    XIP, I-cached -- .text/.rodata
+ *   OCRAM : 0x62FC0000  320K  cached; top 64K aliased non-cache for DMA
+ *   WRAM  : 0x23010000  160K  reserved (non-cache) for WiFi DMA
+ *   PSRAM : 0xA8000000  4M    M0P pseudo-SRAM (needs bl_psram_init before use)
+ *   HBN   : 0x20010000  4K    @persist, survives hibernate
  *
- * TODO: Verify memory map against actual BL618 hardware.
- *       The addresses below are from the BL616 reference manual
- *       and may need adjustment for the Sipeed M0P board.
+ * D-cache is still disabled in start.S (see its TODO); until it's enabled the
+ * cached windows are simply accessed uncached. The split below keeps the DMA
+ * region in separate physical RAM from the cached region, so it stays coherent
+ * once D-cache is turned on.
  */
 
 ENTRY(_start)
 
-/* Force-link newlib syscall stubs and D runtime symbols */
 EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
 {
-    /* Flash XIP — code and read-only data */
-    FLASH (rx)  : ORIGIN = 0xA0000000, LENGTH = 8M
-    /* DTCM — fast tightly-coupled memory for stack and small data */
-    DTCM  (rwx) : ORIGIN = 0x20000000, LENGTH = 64K
-    /* OCRAM — main writable RAM (cached alias for performance) */
-    RAM   (rwx) : ORIGIN = 0x22020000, LENGTH = 480K
+    FLASH    (rx)  : ORIGIN = 0xA0000000, LENGTH = 8M
+    /* OCRAM is 320K physical. Top 64K is reserved for DMA via the non-cache
+     * alias (OCRAM_DMA below); the cached window covers the lower 256K. */
+    OCRAM    (rwx) : ORIGIN = 0x62FC0000, LENGTH = 256K
+    OCRAM_DMA(rw)  : ORIGIN = 0x23000000, LENGTH = 64K
+    WRAM     (rwx) : ORIGIN = 0x23010000, LENGTH = 160K
+    PSRAM    (rwx) : ORIGIN = 0xA8000000, LENGTH = 4M
+    HBNRAM   (rw)  : ORIGIN = 0x20010000, LENGTH = 4K
 }
 
 SECTIONS
@@ -63,8 +69,16 @@ SECTIONS
         __init_array_end = .;
     } > FLASH
 
-    /* GOT and small data in DTCM for fast access.
-     * LMA in FLASH, start.S copies to DTCM at boot. */
+    /* @critical -- code that runs from RAM (no ITCM; OCRAM). */
+    .ramfunc : ALIGN(4)
+    {
+        *(.ramfunc .ramfunc.*)
+    } > OCRAM AT > FLASH
+
+    _ramfunc_load  = LOADADDR(.ramfunc);
+    _ramfunc_start = ADDR(.ramfunc);
+    _ramfunc_end   = _ramfunc_start + SIZEOF(.ramfunc);
+
     .got : ALIGN(4)
     {
         PROVIDE(__global_pointer$ = . + 0x800);
@@ -72,16 +86,30 @@ SECTIONS
         *(.got.plt)
         *(.sdata .sdata.*)
         *(.srodata .srodata.*)
-    } > DTCM AT > FLASH
+    } > OCRAM AT > FLASH
 
     _got_load  = LOADADDR(.got);
     _got_start = ADDR(.got);
     _got_end   = _got_start + SIZEOF(.got);
 
+    /* @fast_data. */
+    .sram_data : ALIGN(4)
+    {
+        *(.sram_data .sram_data.*)
+    } > OCRAM AT > FLASH
+
+    _sram_data_load  = LOADADDR(.sram_data);
+    _sram_data_start = ADDR(.sram_data);
+    _sram_data_end   = _sram_data_start + SIZEOF(.sram_data);
+
+    /* .data + @bulk_data in cached OCRAM. @bulk_data stays here (not PSRAM)
+     * until bl_psram_init is wired into boot -- copying into uninitialised
+     * PSRAM would hang. */
     .data : ALIGN(4)
     {
         *(.data .data.*)
-    } > RAM AT > FLASH
+        *(.psram_data .psram_data.*)
+    } > OCRAM AT > FLASH
 
     _data_load = LOADADDR(.data);
     _data_start = ADDR(.data);
@@ -99,13 +127,12 @@ SECTIONS
         *(COMMON)
         _bss_end = .;
         __bss_end__ = .;
-    } > RAM
+    } > OCRAM
 
-    /* Thread-local data/BSS in DTCM */
     .tdata : ALIGN(4)
     {
         *(.tdata .tdata.*)
-    } > DTCM AT > FLASH
+    } > OCRAM AT > FLASH
 
     _tdata_load  = LOADADDR(.tdata);
     _tdata_start = ADDR(.tdata);
@@ -116,15 +143,42 @@ SECTIONS
         _tbss_start = .;
         *(.tbss .tbss.*)
         _tbss_end = .;
-    } > DTCM
+    } > OCRAM
 
-    /* Heap in OCRAM after BSS */
-    __heap_start = _bss_end;
-    __heap_end   = ORIGIN(RAM) + LENGTH(RAM);
+    /* @persist -- survives hibernate when VBAT is held. NOLOAD by design. */
+    .hbn_ram (NOLOAD) : ALIGN(4)
+    {
+        *(.hbn_ram .hbn_ram.*)
+    } > HBNRAM
 
-    /* Stack in DTCM (fast access) */
-    _stack_top = ORIGIN(DTCM) + LENGTH(DTCM);
+    /* Stack at top of cached OCRAM, 16K. */
+    _stack_top = ORIGIN(OCRAM) + LENGTH(OCRAM);
+    _stack_low = _stack_top - 16K;
     __StackTop = _stack_top;
+
+    /* OCRAM heap (cached, fast): between TLS and the stack. */
+    __ocram_heap_start = _tbss_end;
+    __ocram_heap_end   = _stack_low;
+
+    /* DMA heap (non-cache): the full reserved alias region. */
+    __dma_heap_start = ORIGIN(OCRAM_DMA);
+    __dma_heap_end   = ORIGIN(OCRAM_DMA) + LENGTH(OCRAM_DMA);
+
+    /* WRAM reserved for inevitable WiFi use (non-cache, like the M0's WIFIRAM).
+     * No sections placed; exported for the future WiFi port. */
+    __wifi_ram_start = ORIGIN(WRAM);
+    __wifi_ram_end   = ORIGIN(WRAM) + LENGTH(WRAM);
+
+    /* PSRAM reserved (4M). Not an allocator pool yet -- it needs bl_psram_init
+     * at boot, which the bl618 build doesn't wire. Exported for when it does. */
+    __psram_start = ORIGIN(PSRAM);
+    __psram_end   = ORIGIN(PSRAM) + LENGTH(PSRAM);
+
+    ASSERT(__ocram_heap_start <= __ocram_heap_end, "OCRAM overflow: code/data + heap + stack don't fit in cached 256K")
+
+    /* get_sysinfo / dead _sbrk aliases. */
+    __heap_start = __ocram_heap_start;
+    __heap_end   = __ocram_heap_end;
 
     /DISCARD/ :
     {

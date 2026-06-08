@@ -94,6 +94,19 @@ SECTIONS
     __ram_data_start__ = _data_start;
     __ram_data_end__ = _data_end;
 
+    /* @fast_data lands here on F7 -- DTCM for zero-wait access, LMA in FLASH,
+     * copied to DTCM at startup. Without an explicit home this is an orphan
+     * with LMA in RAM, which makes objcopy span flash..RAM and emit a
+     * multi-hundred-MB .bin. */
+    .dtcm_data : ALIGN(4)
+    {
+        _dtcm_data_start = .;
+        *(.dtcm_data .dtcm_data.*)
+        _dtcm_data_end = .;
+    } > DTCM AT > FLASH
+
+    _dtcm_data_load = LOADADDR(.dtcm_data);
+
     /* Thread-local initialized data in DTCM -- LMA in FLASH */
     .tdata : ALIGN(4)
     {
@@ -129,6 +142,7 @@ SECTIONS
 
     /* Stack at top of DTCM (fast access) */
     _stack_top = ORIGIN(DTCM) + LENGTH(DTCM);
+    _stack_low = ORIGIN(DTCM);
     __StackTop = _stack_top;
 
     /DISCARD/ :

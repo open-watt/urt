@@ -8,10 +8,12 @@ module urt.driver.stm32.irq;
 
 enum bool has_plic = false;
 enum bool has_nvic = true;
+enum bool has_clic = false;
 enum bool has_per_irq_control = true;
 enum bool has_irq_priority = true;
 enum bool has_wait_for_interrupt = false;
 enum bool has_irq_diagnostics = false;
+enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 
 version (STM32F7)
@@ -28,28 +30,56 @@ private enum ulong NVIC_ISPR0 = 0xE000E200;
 private enum ulong NVIC_ICPR0 = 0xE000E280;
 private enum ulong NVIC_IPR0  = 0xE000E400;
 
-void irq_disable()
+// Cortex-M PRIMASK: bit 0 set means interrupts masked. Read it before
+// mutating so callers (including IrqGuard) can restore prior state.
+bool irq_disable()
 {
-    asm @nogc nothrow { "cpsid i"; }
+    uint primask;
+    asm @nogc nothrow
+    {
+        `
+        mrs   %0, primask
+        cpsid i
+        `
+        : "=r" (primask);
+    }
+    return (primask & 1) == 0;
 }
 
-void irq_enable()
+bool irq_enable()
 {
-    asm @nogc nothrow { "cpsie i"; }
+    uint primask;
+    asm @nogc nothrow
+    {
+        `
+        mrs   %0, primask
+        cpsie i
+        `
+        : "=r" (primask);
+    }
+    return (primask & 1) == 0;
 }
 
-void irq_set_enable(uint irq_num)
+bool irq_set_enable(uint irq_num)
 {
     immutable reg = irq_num / 32;
     immutable bit = irq_num % 32;
-    volatileStore(cast(uint*)(NVIC_ISER0 + reg * 4), 1u << bit);
+    auto iser = cast(uint*)(NVIC_ISER0 + reg * 4);
+    bool prev = (volatileLoad(iser) & (1u << bit)) != 0;
+    volatileStore(iser, 1u << bit);
+    return prev;
 }
 
-void irq_clear_enable(uint irq_num)
+bool irq_clear_enable(uint irq_num)
 {
     immutable reg = irq_num / 32;
     immutable bit = irq_num % 32;
+    // NVIC mirrors enable state in ISER; reading ISER tells us prior bit
+    // regardless of which window (ISER vs ICER) we use to mutate it.
+    auto iser = cast(uint*)(NVIC_ISER0 + reg * 4);
+    bool prev = (volatileLoad(iser) & (1u << bit)) != 0;
     volatileStore(cast(uint*)(NVIC_ICER0 + reg * 4), 1u << bit);
+    return prev;
 }
 
 // Set priority for a peripheral IRQ (0 = highest, 255 = lowest)
@@ -57,4 +87,41 @@ void irq_clear_enable(uint irq_num)
 void irq_set_priority(uint irq_num, ubyte priority)
 {
     volatileStore(cast(ubyte*)(NVIC_IPR0 + irq_num), priority);
+}
+
+
+// Handler registration
+
+alias IrqHandler = void function(uint irq) @nogc nothrow;
+
+__gshared IrqHandler[irq_max] _handlers;
+
+// Install a handler for a peripheral IRQ (0..irq_max-1). Returns the previous.
+// The flash vector table routes every peripheral vector at _nvic_dispatch,
+// which recovers the active IRQ from IPSR and calls the registered handler.
+IrqHandler irq_set_handler(uint irq, IrqHandler handler)
+{
+    if (irq >= irq_max)
+        return null;
+    IrqHandler prev = _handlers[irq];
+    _handlers[irq] = handler;
+    return prev;
+}
+
+// Common entry for every peripheral vector. A plain AAPCS function is a valid
+// Cortex-M exception handler: on entry the core has stacked the caller context
+// and set lr to EXC_RETURN, so the normal function return triggers exception
+// return. IPSR holds the active exception number; peripheral IRQ n is exception
+// n + 16.
+extern(C) void _nvic_dispatch()
+{
+    uint ipsr;
+    asm @nogc nothrow { "mrs %0, ipsr" : "=r" (ipsr); }
+    uint irq = ipsr - 16;
+    if (irq < irq_max)
+    {
+        IrqHandler h = _handlers[irq];
+        if (h !is null)
+            h(irq);
+    }
 }

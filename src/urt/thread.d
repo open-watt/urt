@@ -1,4 +1,4 @@
-module urt.sync.thread;
+module urt.thread;
 
 import urt.mem.allocator : defaultAllocator;
 

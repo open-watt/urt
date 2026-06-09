@@ -1,4 +1,4 @@
-/* HBN RAM persistent storage — placed in .hbn_ram section by linker.
+/* HBN RAM persistent storage - placed in .hbn_ram section by linker.
  * Survives hibernate if VBAT is maintained. */
 
 #include <stdint.h>

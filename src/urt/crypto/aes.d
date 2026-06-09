@@ -27,7 +27,7 @@ else version (Windows)
     import core.sys.windows.ntdef : NTSTATUS;
     pragma(lib, "Bcrypt");
 
-    // STATUS_AUTH_TAG_MISMATCH — returned by BCryptDecrypt when GCM tag verification fails.
+    // STATUS_AUTH_TAG_MISMATCH - returned by BCryptDecrypt when GCM tag verification fails.
     private enum NTSTATUS STATUS_AUTH_TAG_MISMATCH = cast(NTSTATUS)0xC000A002;
 }
 
@@ -40,7 +40,7 @@ nothrow @nogc:
 // key: 16, 24, or 32 bytes (AES-128/192/256).
 // iv:  any non-zero length; 12 bytes is the GCM-native size and the only one
 //      that doesn't trigger the GHASH-based IV reduction.
-// aad: associated data — authenticated but not encrypted; may be empty.
+// aad: associated data - authenticated but not encrypted; may be empty.
 // tag: 4..16 bytes (16 is standard).
 Result aes_gcm_encrypt(const(ubyte)[] key,
                        const(ubyte)[] iv,

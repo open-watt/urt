@@ -26,7 +26,7 @@ nothrow @nogc:
 //           scalar alone; the mbedtls backend ignores it. Callers tracking a
 //           P-256 keypair already have both halves available.
 // peer_xy:  64-byte peer public key (X || Y, no leading 0x04).
-// shared_x: 32-byte output — big-endian X coordinate of (priv_d * peer_point).
+// shared_x: 32-byte output - big-endian X coordinate of (priv_d * peer_point).
 Result ecdh_p256_compute_shared(const(ubyte)[] priv_d,
                                  const(ubyte)[] priv_xy,
                                  const(ubyte)[] peer_xy,
@@ -96,7 +96,7 @@ Result ecdh_p256_compute_shared(const(ubyte)[] priv_d,
         scope(exit) BCryptDestroySecret(hsecret);
 
         // BCRYPT_KDF_RAW_SECRET returns the X coord in LITTLE-endian byte order.
-        // Everyone else (mbedtls, Tesla, NIST vectors) expects big-endian — reverse.
+        // Everyone else (mbedtls, Tesla, NIST vectors) expects big-endian - reverse.
         ubyte[32] tmp = void;
         uint result_len;
         status = BCryptDeriveKey(hsecret, BCRYPT_KDF_RAW_SECRET.ptr, null,

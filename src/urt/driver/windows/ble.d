@@ -42,6 +42,9 @@ bool ble_hw_open(uint port, ref const BLEConfig cfg)
         return false;
     }
 
+    if (_completed_handler is null)
+        _completed_handler = defaultAllocator().allocT!AsyncCompletedHandler;
+
     _opened = true;
     return true;
 }
@@ -71,6 +74,7 @@ void ble_hw_close(uint port)
     _read_cb = null;
     _write_cb = null;
     _notify_cb = null;
+    _wake_cb = null;
 }
 
 // --- Scanning ---
@@ -228,6 +232,7 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
         return false;
     }
 
+    register_completion(async_op);
     _pending_connect.async_op = async_op;
     _pending_connect.peer_addr = peer_addr;
     return true;
@@ -262,6 +267,7 @@ bool ble_hw_gatt_discover(uint port, BLEConn conn)
     if (gatt_op is null)
         return false;
 
+    register_completion(gatt_op);
     _pending_discover.async_op = gatt_op;
     _pending_discover.conn_id = conn.id;
     _pending_discover.phase = DiscoverPhase.services;
@@ -290,6 +296,7 @@ bool ble_hw_gatt_read(uint port, BLEConn conn, ushort handle)
     if (async_op is null)
         return false;
 
+    register_completion(async_op);
     _pending_gatt[_num_pending_gatt++] = PendingGattOp(
         async_op, conn.id, handle, GattOpType.read);
     return true;
@@ -334,6 +341,7 @@ bool ble_hw_gatt_write(uint port, BLEConn conn, ushort handle, const(ubyte)[] da
         return false;
     }
 
+    register_completion(async_op);
     _pending_gatt[_num_pending_gatt++] = PendingGattOp(
         async_op, conn.id, handle,
         with_response ? GattOpType.write : GattOpType.write_no_response);
@@ -428,6 +436,7 @@ void ble_hw_set_discover_callback(uint port, BLEDiscoverCallback cb) { _discover
 void ble_hw_set_read_callback(uint port, BLEReadCallback cb)       { _read_cb = cb; }
 void ble_hw_set_write_callback(uint port, BLEWriteCallback cb)     { _write_cb = cb; }
 void ble_hw_set_notify_callback(uint port, BLENotifyCallback cb)   { _notify_cb = cb; }
+void ble_hw_set_wake_callback(uint port, BLEWakeCallback cb)       { _wake_cb = cb; }
 
 // --- Poll ---
 
@@ -575,6 +584,22 @@ __gshared BLEDiscoverCallback _discover_cb;
 __gshared BLEReadCallback _read_cb;
 __gshared BLEWriteCallback _write_cb;
 __gshared BLENotifyCallback _notify_cb;
+__gshared BLEWakeCallback _wake_cb;
+__gshared AsyncCompletedHandler _completed_handler;
+
+void signal_wake()
+{
+    if (_wake_cb !is null)
+        _wake_cb();
+}
+
+void register_completion(IInspectable async_op)
+{
+    if (async_op is null || _completed_handler is null)
+        return;
+    auto a = cast(IAsyncOperation_BluetoothLEDevice)cast(void*)async_op;
+    a.put_Completed(cast(IUnknown)_completed_handler);
+}
 
 // scanner
 __gshared IBluetoothLEAdvertisementWatcher _watcher;
@@ -968,6 +993,7 @@ bool discover_next_service()
             continue;
         }
 
+        register_completion(chars_op);
         _pending_discover.async_op = chars_op;
         return true;
     }
@@ -1112,6 +1138,7 @@ void on_advertisement_received(ubyte[6] addr, byte rssi, bool connectable, bool 
     if (len > 0)
         report.data_buf[0 .. len] = cast(const(ubyte)[])ad_payload[0 .. len];
     _scan_ring.enqueue(report);
+    signal_wake();
 }
 
 void on_gatt_notification(ubyte conn_id, ushort attr_handle, const(ubyte)[] data)
@@ -1124,12 +1151,16 @@ void on_gatt_notification(ubyte conn_id, ushort attr_handle, const(ubyte)[] data
     if (len > 0)
         evt.data[0 .. len] = cast(const(ubyte)[])data[0 .. len];
     _notify_ring.enqueue(evt);
+    signal_wake();
 }
 
 void on_connection_status_changed(ubyte conn_id, int status)
 {
     if (status == 0) // Disconnected
+    {
         _disconn_ring.enqueue(conn_id);
+        signal_wake();
+    }
 }
 
 
@@ -1371,6 +1402,13 @@ static immutable IID_TypedEventHandler_Watcher_Received          = GUID(0x90EB4E
 static immutable IID_TypedEventHandler_Gatt_ValueChanged         = GUID(0xC1F420F6, 0x6292, 0x5760, [0xA2,0xC9,0x9D,0xDF,0x98,0x68,0x3C,0xFC]);
 static immutable IID_TypedEventHandler_Device_ConnectionStatus   = GUID(0x24A901AD, 0x910F, 0x5C29, [0xB2,0x36,0x80,0x3C,0xC0,0x30,0x60,0xFE]);
 static immutable IID_TypedEventHandler_Watcher_Stopped           = GUID(0x9936A4DB, 0xDC99, 0x55C3, [0x9E,0x9B,0xBF,0x48,0x54,0xBD,0x9F,0x0B]);
+
+// IAsyncOperationCompletedHandler<T> - one IID per T, from the Windows SDK headers
+static immutable IID_AsyncCompleted_BluetoothLEDevice            = GUID(0x9156b79f, 0xc54a, 0x5277, [0x8f,0x8b,0xd2,0xcc,0x43,0xc7,0xe0,0x04]);
+static immutable IID_AsyncCompleted_GattDeviceServicesResult     = GUID(0x74ab0892, 0xa631, 0x5d6c, [0xb1,0xb4,0xbd,0x2e,0x1a,0x74,0x1a,0x9b]);
+static immutable IID_AsyncCompleted_GattCharacteristicsResult    = GUID(0xd6a15475, 0x1e72, 0x5c56, [0x98,0xe8,0x88,0xf4,0xbc,0x3e,0x03,0x13]);
+static immutable IID_AsyncCompleted_GattReadResult               = GUID(0xd8992aa0, 0xeac2, 0x55b7, [0x92,0xc5,0x89,0x48,0x86,0xbe,0xb0,0xca]);
+static immutable IID_AsyncCompleted_GattCommunicationStatus      = GUID(0x2154117a, 0x978d, 0x59db, [0x99,0xcf,0x6b,0x69,0x0c,0xb3,0x38,0x9b]);
 
 
 // --- COM interfaces ---
@@ -1649,6 +1687,7 @@ nothrow @nogc:
 }
 
 // Handler interfaces
+interface IAsyncCompletedHandler : IUnknown { nothrow @nogc: HRESULT Invoke(IInspectable asyncInfo, AsyncStatus status); }
 interface IAdvertisementReceivedHandler : IUnknown { nothrow @nogc: HRESULT Invoke(IInspectable sender, IInspectable args); }
 interface IGattValueChangedHandler : IUnknown { nothrow @nogc: HRESULT Invoke(IInspectable sender, IInspectable args); }
 interface IConnectionStatusHandler : IUnknown { nothrow @nogc: HRESULT Invoke(IInspectable sender, IInspectable args); }
@@ -1896,6 +1935,33 @@ nothrow @nogc:
     {
         if (flag !is null)
             atomicStore(*flag, 1u);
+        signal_wake();
+        return 0;
+    }
+}
+
+
+class AsyncCompletedHandler : ComObject, IAsyncCompletedHandler
+{
+nothrow @nogc:
+    override HRESULT QueryInterface(const(GUID)* riid, void** ppv)
+    {
+        if (*riid == IID_AsyncCompleted_BluetoothLEDevice ||
+            *riid == IID_AsyncCompleted_GattDeviceServicesResult ||
+            *riid == IID_AsyncCompleted_GattCharacteristicsResult ||
+            *riid == IID_AsyncCompleted_GattReadResult ||
+            *riid == IID_AsyncCompleted_GattCommunicationStatus)
+        {
+            *ppv = cast(void*)cast(IAsyncCompletedHandler)this;
+            AddRef();
+            return 0;
+        }
+        return super.QueryInterface(riid, ppv);
+    }
+
+    HRESULT Invoke(IInspectable asyncInfo, AsyncStatus status)
+    {
+        signal_wake();
         return 0;
     }
 }

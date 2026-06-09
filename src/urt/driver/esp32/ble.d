@@ -71,6 +71,7 @@ void ble_hw_close(uint port)
     _read_cb = null;
     _write_cb = null;
     _notify_cb = null;
+    _wake_cb = null;
     _num_sessions = 0;
 }
 
@@ -279,6 +280,7 @@ void ble_hw_set_discover_callback(uint port, BLEDiscoverCallback cb) { _discover
 void ble_hw_set_read_callback(uint port, BLEReadCallback cb)    { _read_cb = cb; }
 void ble_hw_set_write_callback(uint port, BLEWriteCallback cb)  { _write_cb = cb; }
 void ble_hw_set_notify_callback(uint port, BLENotifyCallback cb) { _notify_cb = cb; }
+void ble_hw_set_wake_callback(uint port, BLEWakeCallback cb)    { _wake_cb = cb; }
 
 // --- Poll ---
 
@@ -299,54 +301,51 @@ void ble_hw_poll(uint port)
         _scan_queue.count--;
     }
 
-    // connection events
-    if (_evt_connected)
+    // control events (connect / disconnect / discovery)
+    while (_control_queue.count > 0)
     {
-        _evt_connected = false;
-        if (_conn_cb !is null)
-            _conn_cb(ble, BLEConn(_evt_conn_id), true, BLEError.none);
-    }
-    if (_evt_connect_failed)
-    {
-        _evt_connect_failed = false;
-        if (_conn_cb !is null)
-            _conn_cb(ble, BLEConn(_evt_conn_id), false, BLEError.timeout);
-    }
-    if (_evt_disconnected)
-    {
-        _evt_disconnected = false;
-        if (_conn_cb !is null)
-            _conn_cb(ble, BLEConn(_evt_disconn_id), false, BLEError.none);
-        remove_session(_evt_disconn_id);
-    }
-
-    // discovery complete
-    if (_evt_discover_done)
-    {
-        _evt_discover_done = false;
-        if (_discover_cb !is null)
+        auto e = &_control_queue.buf[_control_queue.tail];
+        final switch (e.kind)
         {
-            auto s = find_session(_evt_discover_conn);
-            if (s !is null)
-            {
-                BLEGattChar[max_chars_per_session] chars = void;
-                foreach (i; 0 .. s.num_chars)
+            case ControlEventKind.connected:
+                if (_conn_cb !is null)
+                    _conn_cb(ble, BLEConn(e.conn_id), true, BLEError.none);
+                break;
+            case ControlEventKind.connect_failed:
+                if (_conn_cb !is null)
+                    _conn_cb(ble, BLEConn(e.conn_id), false, BLEError.timeout);
+                break;
+            case ControlEventKind.disconnected:
+                if (_conn_cb !is null)
+                    _conn_cb(ble, BLEConn(e.conn_id), false, BLEError.none);
+                remove_session(e.conn_id);
+                break;
+            case ControlEventKind.discover_done:
+                if (_discover_cb !is null)
                 {
-                    chars[i].handle = s.chars[i].handle;
-                    chars[i].cccd_handle = s.chars[i].cccd_handle;
-                    chars[i].service_uuid = s.chars[i].service_uuid;
-                    chars[i].char_uuid = s.chars[i].char_uuid;
-                    chars[i].properties = cast(GattCharProps)s.chars[i].properties;
+                    auto s = find_session(e.conn_id);
+                    if (s !is null)
+                    {
+                        BLEGattChar[max_chars_per_session] chars = void;
+                        foreach (i; 0 .. s.num_chars)
+                        {
+                            chars[i].handle = s.chars[i].handle;
+                            chars[i].cccd_handle = s.chars[i].cccd_handle;
+                            chars[i].service_uuid = s.chars[i].service_uuid;
+                            chars[i].char_uuid = s.chars[i].char_uuid;
+                            chars[i].properties = cast(GattCharProps)s.chars[i].properties;
+                        }
+                        _discover_cb(ble, BLEConn(e.conn_id), chars[0 .. s.num_chars], BLEError.none);
+                    }
                 }
-                _discover_cb(ble, BLEConn(_evt_discover_conn), chars[0 .. s.num_chars], BLEError.none);
-            }
+                break;
+            case ControlEventKind.discover_failed:
+                if (_discover_cb !is null)
+                    _discover_cb(ble, BLEConn(e.conn_id), null, BLEError.protocol);
+                break;
         }
-    }
-    if (_evt_discover_failed)
-    {
-        _evt_discover_failed = false;
-        if (_discover_cb !is null)
-            _discover_cb(ble, BLEConn(_evt_discover_conn), null, BLEError.protocol);
+        _control_queue.tail = (_control_queue.tail + 1) % _control_queue.buf.length;
+        _control_queue.count--;
     }
 
     // GATT read/write completions
@@ -482,6 +481,14 @@ struct NotifyEvent
     ubyte[247] data;
 }
 
+enum ControlEventKind : ubyte { connected, connect_failed, disconnected, discover_done, discover_failed }
+
+struct ControlEvent
+{
+    ControlEventKind kind;
+    ubyte conn_id;
+}
+
 // --- Module state ---
 
 __gshared bool _opened;
@@ -497,6 +504,13 @@ __gshared BLEDiscoverCallback _discover_cb;
 __gshared BLEReadCallback _read_cb;
 __gshared BLEWriteCallback _write_cb;
 __gshared BLENotifyCallback _notify_cb;
+__gshared BLEWakeCallback _wake_cb;
+
+void signal_wake()
+{
+    if (_wake_cb !is null)
+        _wake_cb();
+}
 
 // scan result ring buffer (set from NimBLE task, drained from main loop)
 __gshared RingBuffer!(BLEAdvReport, 16) _scan_queue;
@@ -507,20 +521,18 @@ __gshared RingBuffer!(GattCompletionEvent, 16) _gatt_queue;
 // notification ring buffer
 __gshared RingBuffer!(NotifyEvent, 16) _notify_queue;
 
-// connection event flags (set from NimBLE task)
-__gshared bool _evt_connected;
-__gshared bool _evt_connect_failed;
-__gshared bool _evt_disconnected;
-__gshared ubyte _evt_conn_id;
-__gshared ubyte _evt_disconn_id;
+// control events (connect / disconnect / discovery), set from NimBLE task
+__gshared RingBuffer!(ControlEvent, 8) _control_queue;
 
-// discovery state
+void push_control(ControlEventKind kind, ubyte conn_id)
+{
+    if (auto e = _control_queue.push())
+        *e = ControlEvent(kind, conn_id);
+}
+
 enum DiscoverPhase : ubyte { idle, services, chars }
 __gshared DiscoverPhase _discover_phase;
 __gshared ubyte _discovering_conn;
-__gshared bool _evt_discover_done;
-__gshared bool _evt_discover_failed;
-__gshared ubyte _evt_discover_conn;
 
 // service discovery iteration state (used from NimBLE task callbacks)
 __gshared ble_gatt_svc[16] _discovered_svcs;
@@ -558,6 +570,7 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
 
                 report.adv_type = disc.event_type == 0 ? BLEAdvType.connectable : BLEAdvType.nonconnectable;
             }
+            signal_wake();
             return 0;
 
         case BLE_GAP_EVENT_CONNECT:
@@ -566,26 +579,21 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
             {
                 auto s = alloc_session(event.connect.conn_handle);
                 if (s !is null)
-                {
-                    _evt_conn_id = s.id;
-                    _evt_connected = true;
-                }
+                    push_control(ControlEventKind.connected, s.id);
             }
             else
-            {
-                _evt_conn_id = ubyte.max;
-                _evt_connect_failed = true;
-            }
+                push_control(ControlEventKind.connect_failed, ubyte.max);
+            signal_wake();
             return 0;
 
         case BLE_GAP_EVENT_DISCONNECT:
             auto s = find_session_by_nimble(event.disconnect.conn.conn_handle);
             if (s !is null)
             {
-                _evt_disconn_id = s.id;
-                _evt_disconnected = true;
+                push_control(ControlEventKind.disconnected, s.id);
                 s.active = false;
             }
+            signal_wake();
             return 0;
 
         case BLE_GAP_EVENT_NOTIFY_RX:
@@ -611,6 +619,7 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                     }
                 }
             }
+            signal_wake();
             return 0;
 
         default:
@@ -620,8 +629,7 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
 
 // --- GATT service discovery callback (NimBLE task) ---
 
-extern(C) int svc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error,
-    const(ble_gatt_svc)* service, void*) nothrow @nogc
+extern(C) int svc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, const(ble_gatt_svc)* service, void*) nothrow @nogc
 {
     if (error !is null && error.status == 0 && service !is null)
     {
@@ -634,9 +642,9 @@ extern(C) int svc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error,
     // discovery complete (error.status != 0 means end of list or actual error)
     if (_num_discovered_svcs == 0)
     {
-        _evt_discover_conn = _discovering_conn;
-        _evt_discover_done = true;
+        push_control(ControlEventKind.discover_done, _discovering_conn);
         _discover_phase = DiscoverPhase.idle;
+        signal_wake();
         return 0;
     }
 
@@ -661,17 +669,16 @@ int discover_next_svc_chars(ushort conn_handle) nothrow @nogc
     }
 
     // all services done
-    _evt_discover_conn = _discovering_conn;
-    _evt_discover_done = true;
+    push_control(ControlEventKind.discover_done, _discovering_conn);
     _discover_phase = DiscoverPhase.idle;
     _num_discovered_svcs = 0;
+    signal_wake();
     return 0;
 }
 
 // --- GATT characteristic discovery callback (NimBLE task) ---
 
-extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error,
-    const(ble_gatt_chr)* chr, void*) nothrow @nogc
+extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, const(ble_gatt_chr)* chr, void*) nothrow @nogc
 {
     if (error !is null && error.status == 0 && chr !is null)
     {
@@ -695,8 +702,7 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error,
 
 // --- GATT read callback (NimBLE task) ---
 
-extern(C) int gatt_read_cb(ushort conn_handle, const(ble_gatt_error)* error,
-    ble_gatt_attr* attr, void* cb_arg) nothrow @nogc
+extern(C) int gatt_read_cb(ushort conn_handle, const(ble_gatt_error)* error, ble_gatt_attr* attr, void* cb_arg) nothrow @nogc
 {
     ubyte conn_id = cast(ubyte)cast(size_t)cb_arg;
     auto evt = _gatt_queue.push();
@@ -729,13 +735,13 @@ extern(C) int gatt_read_cb(ushort conn_handle, const(ble_gatt_error)* error,
         evt.error = BLEError.protocol;
         evt.data_len = 0;
     }
+    signal_wake();
     return 0;
 }
 
 // --- GATT write callback (NimBLE task) ---
 
-extern(C) int gatt_write_cb(ushort conn_handle, const(ble_gatt_error)* error,
-    ble_gatt_attr* attr, void* cb_arg) nothrow @nogc
+extern(C) int gatt_write_cb(ushort conn_handle, const(ble_gatt_error)* error, ble_gatt_attr* attr, void* cb_arg) nothrow @nogc
 {
     ubyte conn_id = cast(ubyte)cast(size_t)cb_arg;
     auto evt = _gatt_queue.push();
@@ -747,6 +753,7 @@ extern(C) int gatt_write_cb(ushort conn_handle, const(ble_gatt_error)* error,
     evt.is_read = false;
     evt.data_len = 0;
     evt.error = (error !is null && error.status == 0) ? BLEError.none : BLEError.protocol;
+    signal_wake();
     return 0;
 }
 
@@ -831,10 +838,8 @@ struct ble_gap_event
 
     struct ConnectData { int status; ushort conn_handle; }
     struct DisconnectData { int reason; ble_gap_conn_desc conn; }
-    struct DiscData { ubyte event_type; ubyte length_data; ble_addr_t addr; byte rssi;
-                      const(ubyte)* data; ble_addr_t direct_addr; }
-    struct NotifyRxData { os_mbuf* om; ushort attr_handle; ushort conn_handle;
-                          ubyte indication; }
+    struct DiscData { ubyte event_type; ubyte length_data; ble_addr_t addr; byte rssi; const(ubyte)* data; ble_addr_t direct_addr; }
+    struct NotifyRxData { os_mbuf* om; ushort attr_handle; ushort conn_handle; ubyte indication; }
 
     union
     {
@@ -927,7 +932,7 @@ struct os_mbuf
     ubyte om_pkthdr_len;
     ushort om_len;
     void* om_omp;       // os_mbuf_pool* (opaque)
-    os_mbuf* om_next;   // SLIST_ENTRY(os_mbuf) — single ptr in practice
+    os_mbuf* om_next;   // SLIST_ENTRY(os_mbuf) - single ptr in practice
 }
 
 // GAP event types
@@ -950,29 +955,22 @@ extern(C) nothrow @nogc
 // Direct NimBLE calls
 extern(C) nothrow @nogc
 {
-    int ble_gap_disc(ubyte own_addr_type, int duration_ms, const(ble_gap_disc_params)* params,
-        int function(ble_gap_event*, void*) cb, void* cb_arg);
+    int ble_gap_disc(ubyte own_addr_type, int duration_ms, const(ble_gap_disc_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_disc_cancel();
-    int ble_gap_connect(ubyte own_addr_type, const(ble_addr_t)* peer_addr, int duration_ms,
-        const(ble_gap_conn_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
+    int ble_gap_connect(ubyte own_addr_type, const(ble_addr_t)* peer_addr, int duration_ms, const(ble_gap_conn_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_conn_cancel();
     int ble_gap_terminate(ushort conn_handle, ubyte hci_reason);
     int ble_gap_conn_rssi(ushort conn_handle, byte* rssi);
 
     int ble_gap_adv_set_data(const(ubyte)* data, int data_len);
     int ble_gap_adv_rsp_set_data(const(ubyte)* data, int data_len);
-    int ble_gap_adv_start(ubyte own_addr_type, const(ble_addr_t)* direct_addr, int duration_ms,
-        const(ble_gap_adv_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
+    int ble_gap_adv_start(ubyte own_addr_type, const(ble_addr_t)* direct_addr, int duration_ms, const(ble_gap_adv_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_adv_stop();
 
-    int ble_gattc_disc_all_svcs(ushort conn_handle,
-        int function(ushort, const(ble_gatt_error)*, const(ble_gatt_svc)*, void*) cb, void* cb_arg);
-    int ble_gattc_disc_all_chrs(ushort conn_handle, ushort start_handle, ushort end_handle,
-        int function(ushort, const(ble_gatt_error)*, const(ble_gatt_chr)*, void*) cb, void* cb_arg);
-    int ble_gattc_read(ushort conn_handle, ushort attr_handle,
-        int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
-    int ble_gattc_write_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len,
-        int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
+    int ble_gattc_disc_all_svcs(ushort conn_handle, int function(ushort, const(ble_gatt_error)*, const(ble_gatt_svc)*, void*) cb, void* cb_arg);
+    int ble_gattc_disc_all_chrs(ushort conn_handle, ushort start_handle, ushort end_handle, int function(ushort, const(ble_gatt_error)*, const(ble_gatt_chr)*, void*) cb, void* cb_arg);
+    int ble_gattc_read(ushort conn_handle, ushort attr_handle, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
+    int ble_gattc_write_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_no_rsp_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len);
 
     int ble_hs_id_infer_auto(int privacy, ubyte* out_addr_type);

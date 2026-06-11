@@ -509,8 +509,16 @@ else ifeq ($(PLATFORM),esp32-p4)
     DFLAGS := $(DFLAGS) -d-version=ESP32_P4
 endif
 
-# IP stack: URT internal stack may override vendor stacks
-USE_INTERNAL_IP_STACK ?=
+# IP stack: windows/linux drive the host kernel's network stack by default;
+# every other target has no host stack and falls back to URT's in-tree stack.
+# Override either default on the command line (e.g. USE_INTERNAL_IP_STACK=1).
+ifeq ($(USE_INTERNAL_IP_STACK),)
+  ifeq ($(filter windows linux,$(OS)),)
+    USE_INTERNAL_IP_STACK := 1
+  else
+    USE_INTERNAL_IP_STACK := 0
+  endif
+endif
 ifeq ($(USE_INTERNAL_IP_STACK),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseInternalIPStack
 else ifeq ($(USE_LWIP),1)

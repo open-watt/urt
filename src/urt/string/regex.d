@@ -376,7 +376,7 @@ Regex regex_compile(const(char)[] pattern, NoGCAllocator allocator = defaultAllo
                 // Each | inserts a split before its preceding alternative that
                 // points forward to the next one.
                 {
-                    // Find where the current alternative started — it's right after
+                    // Find where the current alternative started - it's right after
                     // the previous split (or after group_open for the first alt).
                     ushort split_pos;
                     if (!gf.has_alt)
@@ -730,7 +730,7 @@ unittest
 
     // alternation with shared prefix/suffix
     assert(regex_match("foobar", "(foo|foobar)", m));
-    // greedy: tries foo first, succeeds — but we're not anchored, so full match is "foo"
+    // greedy: tries foo first, succeeds - but we're not anchored, so full match is "foo"
     assert(m.captures[0] == "foo");
 
     // alternation with surrounding literal
@@ -745,7 +745,7 @@ unittest
 
     // -- Greedy quantifiers: *, +, ? --
 
-    // * — zero or more
+    // * - zero or more
     assert(regex_match("aaa", "a*", m));
     assert(m.full == "aaa");
 
@@ -755,7 +755,7 @@ unittest
     assert(regex_match("", "a*", m)); // empty string, zero-length match
     assert(m.full == "");
 
-    // + — one or more
+    // + - one or more
     assert(regex_match("aaa", "a+", m));
     assert(m.full == "aaa");
 
@@ -764,7 +764,7 @@ unittest
     assert(regex_match("baaab", "a+", m));
     assert(m.full == "aaa");
 
-    // ? — zero or one
+    // ? - zero or one
     assert(regex_match("colour", "colou?r", m));
     assert(m.full == "colour");
 
@@ -777,15 +777,15 @@ unittest
 
     // -- Lazy quantifiers: *?, +?, ?? --
 
-    // lazy * — shortest match
+    // lazy * - shortest match
     assert(regex_match("<b>bold</b>", "<.*?>", m));
     assert(m.full == "<b>");
 
-    // lazy + — at least one, but shortest
+    // lazy + - at least one, but shortest
     assert(regex_match("aaa", "a+?", m));
     assert(m.full == "a");
 
-    // lazy ? — prefer zero
+    // lazy ? - prefer zero
     assert(regex_match("ab", "a??b", m));
     assert(m.full == "ab"); // a?? tries empty first but needs 'b', backtracks to 'a'
 
@@ -923,7 +923,7 @@ unittest
     assert(regex_match("", "^$", m));
     assert(!regex_match("x", "^$", m));
 
-    // .* at start — heavy backtracking but should work
+    // .* at start - heavy backtracking but should work
     assert(regex_match("the end", ".*end", m));
     assert(m.full == "the end");
 

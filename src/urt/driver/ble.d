@@ -194,6 +194,8 @@ alias BLEWriteCallback = void function(BLE ble, BLEConn conn, ushort handle, BLE
 // data is only valid during callback.
 alias BLENotifyCallback = void function(BLE ble, BLEConn conn, ushort handle, const(ubyte)[] data) nothrow @nogc;
 
+alias BLEWakeCallback = void function() nothrow @nogc;
+
 
 // ====================================================================
 // Error type
@@ -479,6 +481,14 @@ void ble_set_notify_callback(ref BLE ble, BLENotifyCallback cb)
         assert(false, "no BLE on this platform");
     else
         ble_hw_set_notify_callback(ble.port, cb);
+}
+
+void ble_set_wake_callback(ref BLE ble, BLEWakeCallback cb)
+{
+    static if (num_ble == 0)
+        assert(false, "no BLE on this platform");
+    else
+        ble_hw_set_wake_callback(ble.port, cb);
 }
 
 // --- Poll ---

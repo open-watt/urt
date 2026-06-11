@@ -506,9 +506,9 @@ template DefFormat(T)
             else static if (is(T : const(U)*, U))
             {
                 static assert(size_t.sizeof == 4 || size_t.sizeof == 8);
-                enum Fmt = "0" ~ (size_t.sizeof == 4 ? "8" : "16") ~ "X";
+                enum ptr_fmt = size_t.sizeof == 4 ? "08X" : "016X";
                 size_t p = cast(size_t)value;
-                return p.defToString(buffer, Fmt, null);
+                return p.defToString(buffer, ptr_fmt, null);
             }
             else static if (is(T == char[]))
             {

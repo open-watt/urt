@@ -218,18 +218,18 @@ version (Tiny)
 {
     void print_trace(const(void*)[] addrs) @trusted
     {
-        import urt.io : writef_to, WriteTarget;
+        import urt.io : writeln_err;
 
         enum addr_fmt = size_t.sizeof == 4 ? "08x" : "016x";
         foreach (addr; addrs)
-            writef_to!(WriteTarget.stderr, true)("    0x{0:" ~ addr_fmt ~ "}", cast(size_t) addr);
+            writeln_err("    0x", addr);
     }
 }
 else
 {
     void print_trace(const(void*)[] addrs) @trusted
     {
-        import urt.io : write_err, writef_to, WriteTarget;
+        import urt.io : write_err, writeln_err, writef_to, WriteTarget;
         import urt.string : endsWith;
 
         if (addrs.length == 0)
@@ -245,7 +245,7 @@ else
         if (!have_symbols)
         {
             foreach (addr; addrs[0 .. n])
-                writef_to!(WriteTarget.stderr, true)("    0x{0:" ~ addr_fmt ~ "}", cast(size_t) addr);
+                writeln_err("    0x", addr);
             return;
         }
 
@@ -266,7 +266,7 @@ else
 
             if (!have_any)
             {
-                writef_to!(WriteTarget.stderr, true)("    0x{0:" ~ addr_fmt ~ "}", cast(size_t) addr);
+                writeln_err("    0x", addr);
                 continue;
             }
 
@@ -279,7 +279,7 @@ else
                     writef_to!(WriteTarget.stderr, false)("    {0}{1}{2}:{3}", r.dir, sep, r.file, r.line);
                 }
                 else
-                    writef_to!(WriteTarget.stderr, false)("    {0}:{1}", r.file, r.line);
+                    write_err("    ", r.file, ':', r.line);
             }
             else
                 write_err("    ??:?");
@@ -289,10 +289,10 @@ else
             {
                 char[512] dbuf = void;
                 auto dname = demangle_symbol(r.name, dbuf);
-                writef_to!(WriteTarget.stderr, false)(" {0}+0x{1:x}", dname, r.offset);
+                writef_to!(WriteTarget.stderr, false)(" {0}+0x{1,x}", dname, r.offset);
             }
 
-            writef_to!(WriteTarget.stderr, true)(" [0x{0:" ~ addr_fmt ~ "}]", cast(size_t) addr);
+            writeln_err(" [0x", addr, ']');
 
             // Stop at program entry - hides C runtime tail noise.
             if (r.name == "_Dmain" || r.name == "main")

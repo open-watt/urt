@@ -210,7 +210,7 @@ void alloc_print_live(scope Sink sink)
 
 private void print_candidates(uint min_serial, Duration min_age, string kind, scope Sink sink)
 {
-    import urt.mem.temp : tformat;
+    import urt.mem.temp : tconcat, tformat;
 
     struct Site
     {
@@ -316,9 +316,9 @@ private void print_candidates(uint min_serial, Duration min_age, string kind, sc
         if (r.file.length > 0 && r.line > 0)
             sink(tformat("    {0}({1}): {2}", r.file, r.line, r.name));
         else if (r.name.length > 0)
-            sink(tformat("    {0}", r.name));
+            sink(tconcat("    ", r.name));
         else
-            sink(tformat("    0x{0:016x}", cast(size_t) s.pc));
+            sink(tconcat("    0x", s.pc));
     }
 
     if (overflow.count > 0)

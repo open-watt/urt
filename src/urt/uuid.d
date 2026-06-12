@@ -5,7 +5,7 @@ import urt.string.format : FormatArg;
 
 nothrow @nogc:
 
-enum GUID UUID(string s) = () { UUID g; ptrdiff_t n = g.fromString(s); assert(n == s.length, "Not a valid GUID/UUID"); return g; }();
+enum GUID UUID(string s) = () { GUID g; ptrdiff_t n = g.fromString(s); assert(n == s.length, "Not a valid GUID/UUID"); return g; }();
 
 struct GUID
 {

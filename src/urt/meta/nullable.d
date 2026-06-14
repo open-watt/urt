@@ -228,6 +228,7 @@ template Nullable(T)
                 moveEmplace(v, value);
             else
                 value = v;
+            is_value = true;
         }
 
         ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const nothrow @nogc
@@ -284,4 +285,18 @@ template Nullable(T)
                 return formatValue(value, buffer, format, formatArgs);
         }
     }
+}
+
+
+unittest
+{
+    static struct S { int x; }
+
+    Nullable!S s;
+    assert(!s);
+    s = S(42);
+    assert(s);
+    assert(s.value.x == 42);
+    s = null;
+    assert(!s);
 }

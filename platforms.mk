@@ -403,6 +403,10 @@ ifeq ($(OS),windows)
 endif
 ifneq ($(filter linux ubuntu freebsd,$(OS)),)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/posix" -type f -name '*.d')
+    # Native WPA STA supplicant + 4-way handshake (and its EAPOL/802.1X codec),
+    # driven by the nl80211 backend in src/driver/linux instead of wpa_supplicant.
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/dot1x" -type f -name '*.d')
 endif
 ifeq ($(OS),freertos)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/freertos" -type f -name '*.d')

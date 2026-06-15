@@ -189,19 +189,17 @@ size_t wifi_hw_ap_get_clients(uint port, WifiStaInfo[] buf)
 
 bool wifi_hw_scan_start(uint port, ref const WifiScanConfig cfg)
 {
-    // TODO: esp_wifi_scan_start
-    return false;
+    assert(false, "TODO: esp_wifi_scan_start");
 }
 
 void wifi_hw_scan_stop(uint port)
 {
-    // TODO: esp_wifi_scan_stop
+    assert(false, "TODO: esp_wifi_scan_stop");
 }
 
 size_t wifi_hw_scan_get_results(uint port, WifiScanResult[] buf)
 {
-    // TODO: esp_wifi_scan_get_ap_records
-    return 0;
+    assert(false, "TODO: esp_wifi_scan_get_ap_records");
 }
 
 // Frame TX/RX

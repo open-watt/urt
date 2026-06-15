@@ -388,19 +388,21 @@ bool wifi_hw_ap_configure(ubyte port, ref const WifiApConfig cfg)
     _ap_ssid_buf[0 .. cfg.ssid.length] = cast(ubyte[])cfg.ssid;
     _ap_ssid_buf[cfg.ssid.length] = 0;
     bool ap_open = cfg.auth == WifiAuth.open || cfg.password.length == 0;
-    if (!ap_open && cfg.max_clients > 1)
-        return false;
     if (ap_open)
+    {
         _ap_pw_buf[0] = 0;
+        ap_auth_reset();
+    }
     else
     {
         _ap_pw_buf[0 .. cfg.password.length] = cast(ubyte[])cfg.password;
         _ap_pw_buf[cfg.password.length] = 0;
+        if (!ap_auth_configure())
+            return false;
     }
-    ap_auth_reset();
 
     apm_start_cfm cfm;
-    ubyte ap_max_clients = ap_open ? cfg.max_clients : 1;
+    ubyte ap_max_clients = cfg.max_clients;
     if (ap_max_clients != 0 && !wifi_hw_ap_set_max_clients(port, ap_max_clients))
         return false;
 
@@ -426,8 +428,6 @@ bool wifi_hw_ap_configure(ubyte port, ref const WifiApConfig cfg)
 bool wifi_hw_ap_set_max_clients(ubyte port, ubyte max_clients)
 {
     if (port != 0 || !_bl_hw.is_up)
-        return false;
-    if (_ap_pw_buf[0] != 0 && max_clients > 1)
         return false;
 
     ubyte max_sta = max_clients == 0 || max_clients > NX_REMOTE_STA_MAX

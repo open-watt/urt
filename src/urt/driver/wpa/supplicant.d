@@ -225,8 +225,6 @@ WpaKeyMgmt infer_key_mgmt(ref const WifiStaConfig cfg)
     if (cfg.password.length == 0)
         return WpaKeyMgmt.none;
 
-    // The current WifiStaConfig does not expose scan-selected AKM yet. For the
-    // first BL808 target, a passphrase means WPA2-PSK unless a later scan/RSN
-    // parser upgrades it to SAE or enterprise.
+    // WPA2-PSK is the only AKM implemented, so a passphrase means WPA2-PSK.
     return WpaKeyMgmt.wpa2_psk;
 }

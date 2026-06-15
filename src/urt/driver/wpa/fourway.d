@@ -11,11 +11,9 @@
 // version 3 (AES-CMAC, used for PMF) is planned but not yet implemented.
 module urt.driver.wpa.fourway;
 
-import urt.crypto.aes_keywrap : aes_unwrap;
+import urt.crypto.aes_keywrap : aes_unwrap, aes_wrap;
 import urt.crypto.random : crypto_random_bytes;
 import urt.driver.wpa.crypto;
-import urt.digest.hmac;
-import urt.digest.sha;
 import urt.result : Result, InternalResult;
 
 import urt.driver.wpa.eapol;
@@ -53,6 +51,7 @@ enum WpaHandshakeReason : ushort
     pairwise_install_failed,
     group_install_failed,
     pmf_required_unsupported,
+    timeout,
 }
 
 struct FourwayHooks
@@ -206,7 +205,7 @@ private:
         }
 
         ubyte[eapol_key_mic_len] mic;
-        compute_mic(kck, out_buf[0 .. out_len], mic);
+        eapol_key_compute_mic(kck, out_buf[0 .. out_len], mic);
         patch_mic(out_buf[0 .. out_len], mic);
 
         if (!hooks.send_eapol(out_buf[0 .. out_len]))
@@ -242,11 +241,11 @@ private:
 
         // Replay: must be > last (we treat == as a retransmit and just
         // re-send the prior msg 2; not implemented yet, just drop).
-        if (compare_replay(f.replay_counter, last_replay) <= 0)
+        if (eapol_key_replay_compare(f.replay_counter, last_replay) <= 0)
             return true;
 
         // Verify MIC: compute over frame with the MIC field zeroed.
-        if (!verify_mic(kck, frame, f.key_mic))
+        if (!eapol_key_verify_mic(kck, frame, f.key_mic))
         {
             reset(WpaHandshakeReason.mic_failed);
             return true;
@@ -318,7 +317,7 @@ private:
         }
 
         ubyte[eapol_key_mic_len] mic;
-        compute_mic(kck, out_buf[0 .. out_len], mic);
+        eapol_key_compute_mic(kck, out_buf[0 .. out_len], mic);
         patch_mic(out_buf[0 .. out_len], mic);
         last_msg4[0 .. out_len] = out_buf[0 .. out_len];
         last_msg4_len = out_len;
@@ -367,104 +366,454 @@ const(char)[] wpa_handshake_reason_message(ushort reason) pure nothrow @nogc
         case WpaHandshakeReason.pairwise_install_failed: return "WPA handshake failed: pairwise key install failed";
         case WpaHandshakeReason.group_install_failed:    return "WPA handshake failed: group key install failed";
         case WpaHandshakeReason.pmf_required_unsupported:return "WPA PMF-required networks are not supported yet";
+        case WpaHandshakeReason.timeout:                 return "WPA handshake failed: timed out waiting for peer";
         default:                                        return "WPA handshake failed";
     }
 }
 
 
-private void compute_mic(const(ubyte)[] kck,
-                         const(ubyte)[] frame,
-                         ref ubyte[eapol_key_mic_len] out_mic)
+// =====================================================================
+// AP / authenticator side of the 4-way -- the mirror of FourwayContext:
+//   1/4: send ANonce to the STA (no MIC)
+//   2/4: receive SNonce + RSN IE + MIC -> derive PTK, verify MIC
+//   3/4: send GTK (AES-key-wrapped with KEK) + RSN IE + MIC, install bit set
+//   4/4: receive final MIC -> install pairwise TK + group GTK, authorize port
+// FourwayAuthContext holds one station's handshake; WpaApAuthenticator (in
+// urt.driver.wpa.authenticator) pools these per BSS.
+// =====================================================================
+
+private enum ulong retx_interval_us = 500_000;
+private enum uint  retx_max         = 3;
+
+
+enum FourwayAuthState : ubyte
 {
-    // HMAC-SHA1(KCK, frame_with_zero_mic). We feed the bytes around the MIC
-    // field; the caller passes a frame already zero-filled at off_mic..+16.
-    HMACContext!SHA1Context h;
-    hmac_init(h, kck);
-    hmac_update(h, frame);
-    ubyte[SHA1Context.DigestLen] digest = hmac_finalise(h);
-    out_mic[] = digest[0 .. eapol_key_mic_len];
+    idle,
+    awaiting_msg2,       // sent msg 1, waiting for the STA's SNonce
+    awaiting_msg4,       // sent msg 3, waiting for the STA's confirm
+    completed,
+    failed,
 }
 
 
-private bool verify_mic(const(ubyte)[] kck,
-                        const(ubyte)[] frame,
-                        const(ubyte)[eapol_key_mic_len] expected_mic)
+// Driver-side hooks the authenticator calls during the handshake. Each carries
+// the STA MAC so a single hook set serves every station in the BSS. The driver
+// prepends the ethernet header (dst=sta, src=ap, ethertype 0x888E) on send.
+struct FourwayAuthHooks
 {
-    if (frame.length < off_mic + eapol_key_mic_len)
-        return false;
-
-    // HMAC over frame with the MIC field zeroed. Copy frame into a scratch
-    // buffer so we don't mutate the caller's slice.
-    ubyte[wpa_max_eapol_len] scratch = void;
-    if (frame.length > scratch.length)
-        return false;
-    scratch[0 .. frame.length] = frame[];
-    scratch[off_mic .. off_mic + eapol_key_mic_len] = 0;
-
-    ubyte[eapol_key_mic_len] computed;
-    compute_mic(kck, scratch[0 .. frame.length], computed);
-
-    // Constant-time compare to avoid leaking timing info on the MIC.
-    ubyte diff = 0;
-    foreach (i; 0 .. eapol_key_mic_len)
-        diff |= computed[i] ^ expected_mic[i];
-    return diff == 0;
+    bool delegate(const(ubyte)[6] sta, const(ubyte)[] eapol_payload) nothrow @nogc send_eapol;
+    bool delegate(const(ubyte)[6] sta, const(ubyte)[] tk) nothrow @nogc install_pairwise_key;
+    bool delegate(const(ubyte)[6] sta, ubyte key_idx, const(ubyte)[] gtk, const(ubyte)[] rsc) nothrow @nogc install_group_key;
+    void delegate(const(ubyte)[6] sta, bool success, ushort reason) nothrow @nogc handshake_complete;
 }
 
 
-// Compare two 8-byte replay counters (big-endian). Returns -1 / 0 / 1.
-private int compare_replay(const(ubyte)[eapol_key_replay_len] a,
-                           const(ubyte)[eapol_key_replay_len] b)
+struct FourwayAuthContext
 {
-    foreach (i; 0 .. eapol_key_replay_len)
+    FourwayAuthHooks hooks;
+
+    // Configured material (set by configure)
+    ubyte[wpa_pmk_len] pmk;
+    ubyte[6] ap_mac;
+    ubyte[6] sta_mac;
+    // The RSN IE the AP advertises in its beacon -- echoed in msg 3 key_data.
+    // Live slice; the owner keeps the backing storage valid for the handshake.
+    const(ubyte)[] ap_rsn_ie;
+    ubyte[wpa_gtk_max_len] gtk;
+    size_t gtk_len;
+    ubyte gtk_key_id;
+    ubyte[eapol_key_rsc_len] gtk_rsc;
+
+    // Per-handshake state
+    ubyte[wpa_nonce_len] anonce;
+    ubyte[wpa_nonce_len] snonce;
+    ubyte[wpa_ptk_len_ccmp] ptk;
+    ubyte[eapol_key_replay_len] replay;
+    FourwayAuthState state;
+
+    // Retransmit: last AP-originated frame (msg 1 until msg 2, msg 3 until 4).
+    ubyte[wpa_max_eapol_len] last_tx;
+    size_t last_tx_len;
+    uint retx_count;
+    ulong next_retx_us;
+
+nothrow @nogc:
+
+    void configure(const(ubyte)[wpa_pmk_len] pmk_,
+                   const(ubyte)[6] ap_mac_,
+                   const(ubyte)[6] sta_mac_,
+                   const(ubyte)[] ap_rsn_ie_,
+                   const(ubyte)[] gtk_, ubyte gtk_key_id_,
+                   const(ubyte)[eapol_key_rsc_len] gtk_rsc_)
     {
-        if (a[i] < b[i]) return -1;
-        if (a[i] > b[i]) return 1;
+        pmk = pmk_;
+        ap_mac = ap_mac_;
+        sta_mac = sta_mac_;
+        ap_rsn_ie = ap_rsn_ie_;
+        gtk_len = gtk_.length <= gtk.length ? gtk_.length : gtk.length;
+        gtk[0 .. gtk_len] = gtk_[0 .. gtk_len];
+        gtk_key_id = gtk_key_id_;
+        gtk_rsc = gtk_rsc_;
+        state = FourwayAuthState.idle;
+        replay[] = 0;
+        last_tx_len = 0;
+        retx_count = 0;
+        next_retx_us = 0;
     }
-    return 0;
-}
 
+    @property const(ubyte)[] kck() const => ptk[0 .. wpa_kck_len];
+    @property const(ubyte)[] kek() const => ptk[wpa_kck_len .. wpa_kck_len + wpa_kek_len];
+    @property const(ubyte)[] tk()  const => ptk[wpa_kck_len + wpa_kek_len .. $];
 
-// Walk a buffer of EAPOL key-data IEs looking for the GTK KDE
-// (id=0xDD, OUI=00:0F:AC, kde_type=0x01). Returns true on success and
-// fills out_gtk + out_len + out_key_id.
-private bool parse_gtk_kde(const(ubyte)[] data,
-                           ubyte[] out_gtk,
-                           ref size_t out_len,
-                           ref ubyte out_key_id)
-{
-    size_t off = 0;
-    while (off + 2 <= data.length)
+    // Start the handshake: generate ANonce, send msg 1.
+    bool begin()
     {
-        ubyte id  = data[off];
-        ubyte len = data[off + 1];
-        if (off + 2 + len > data.length)
+        if (!crypto_random_bytes(anonce[]).succeeded)
+        {
+            fail(WpaHandshakeReason.random_failed);
+            return false;
+        }
+        replay[] = 0;
+        inc_replay();                       // replay = 1 for msg 1
+        state = FourwayAuthState.awaiting_msg2;
+        if (!send_msg1())
+        {
+            fail(WpaHandshakeReason.tx_failed);
+            return false;
+        }
+        return true;
+    }
+
+    // Process an incoming EAPOL-Key frame (802.1X payload, ethernet header
+    // already stripped). Returns true if consumed by this handshake.
+    bool handle_eapol(const(ubyte)[] frame)
+    {
+        EapolKeyFrame f;
+        if (!decode_eapol_key(frame, f))
+            return false;
+        if (f.descriptor_type != key_desc_type_rsn)
+            return false;
+        if (f.version_bits != key_info_ver_hmac_sha1_aes)
+            return false;
+        if (!f.pairwise)
+            return false;
+        if (f.key_ack)              // STA->AP frames never carry the ACK bit
+            return false;
+        if (!f.key_mic_set)         // msg 2 and msg 4 always carry a MIC
             return false;
 
-        if (id == 0xDD && len >= 6)
+        // The MIC covers exactly the 802.1X header + body; trim any trailing
+        // bytes (Ethernet padding etc.) so verification matches the sender.
+        size_t pdu = eapol_hdr_len + f.body_length;
+        if (pdu <= frame.length)
+            frame = frame[0 .. pdu];
+
+        if (!f.secure)
+            return handle_msg2(frame, f);
+        else
+            return handle_msg4(frame, f);
+    }
+
+    // Periodic tick (monotonic microseconds). Retransmits the outstanding
+    // AP-originated frame, failing the handshake after retx_max attempts.
+    void tick(ulong now_us)
+    {
+        if (state != FourwayAuthState.awaiting_msg2 && state != FourwayAuthState.awaiting_msg4)
+            return;
+        if (last_tx_len == 0)
+            return;
+        if (next_retx_us == 0)              // arm on the first tick after a send
         {
-            // Vendor-specific IE: OUI(3) + KDE type(1) + payload
-            if (data[off + 2] == 0x00 && data[off + 3] == 0x0F && data[off + 4] == 0xAC
-                && data[off + 5] == 0x01)
-            {
-                // GTK KDE payload: key_id/tx/reserved(1), reserved(1), GTK(N).
-                size_t body_off = off + 6;
-                size_t body_end = off + 2 + len;
-                if (body_end - body_off < 2)
-                    return false;
-                out_key_id = data[body_off] & 0x03;
-                size_t gtk_len = body_end - body_off - 2;
-                if (gtk_len > out_gtk.length)
-                    return false;
-                out_gtk[0 .. gtk_len] = data[body_off + 2 .. body_end];
-                out_len = gtk_len;
-                return true;
-            }
+            next_retx_us = now_us + retx_interval_us;
+            return;
+        }
+        if (now_us < next_retx_us)
+            return;
+        if (retx_count >= retx_max)
+        {
+            fail(WpaHandshakeReason.timeout);
+            return;
+        }
+        if (hooks.send_eapol)
+            hooks.send_eapol(sta_mac, last_tx[0 .. last_tx_len]);
+        ++retx_count;
+        next_retx_us = now_us + retx_interval_us;
+    }
+
+    void reset()
+    {
+        state = FourwayAuthState.idle;
+        last_tx_len = 0;
+        next_retx_us = 0;
+    }
+
+private:
+
+    bool send_msg1()
+    {
+        ushort key_info = key_info_type_pairwise | key_info_key_ack | key_info_ver_hmac_sha1_aes;
+        ubyte[eapol_key_rsc_len] zero_rsc = 0;
+
+        ubyte[wpa_max_eapol_len] buf = void;
+        size_t len = encode_eapol_key(buf[],
+            eapol_version_2004, key_desc_type_rsn,
+            key_info, wpa_tk_len_ccmp,
+            replay, anonce, zero_rsc,
+            null);
+        if (len == 0)
+            return false;
+        // msg 1 carries no MIC.
+        return tx(buf[0 .. len]);
+    }
+
+    bool handle_msg2(const(ubyte)[] frame, ref const EapolKeyFrame f)
+    {
+        if (state != FourwayAuthState.awaiting_msg2)
+            return false;
+        if (eapol_key_replay_compare(f.replay_counter, replay) != 0)
+            return true;        // not the reply to our outstanding msg 1
+
+        snonce = f.key_nonce;
+        if (!wpa2_pmk_to_ptk(pmk, ap_mac, sta_mac, anonce, snonce, ptk[]).succeeded)
+        {
+            fail(WpaHandshakeReason.ptk_failed);
+            return true;
+        }
+        if (!eapol_key_verify_mic(kck, frame, f.key_mic))
+        {
+            fail(WpaHandshakeReason.mic_failed);
+            return true;
         }
 
-        off += 2 + len;
-        if (id == 0xDD)
-            continue;
+        state = FourwayAuthState.awaiting_msg4;
+        if (!send_msg3())
+        {
+            fail(WpaHandshakeReason.encode_failed);
+            return true;
+        }
+        return true;
     }
-    return false;
+
+    bool send_msg3()
+    {
+        // key_data = AP RSN IE || GTK KDE, padded to a multiple of 8, then
+        // AES-key-wrapped with the KEK.
+        ubyte[wpa_max_eapol_len] plain = void;
+        if (ap_rsn_ie.length + 8 + gtk_len + 8 > plain.length)
+            return false;
+        size_t plen = ap_rsn_ie.length;
+        plain[0 .. plen] = ap_rsn_ie[];
+        size_t kde = encode_gtk_kde(plain[plen .. $], gtk_key_id, gtk[0 .. gtk_len]);
+        if (kde == 0)
+            return false;
+        plen += kde;
+        if ((plen & 7) != 0)
+        {
+            plain[plen++] = 0xDD;           // pad KDE
+            while ((plen & 7) != 0)
+                plain[plen++] = 0x00;
+        }
+
+        ubyte[wpa_max_eapol_len] wrapped = void;
+        size_t wlen = plen + 8;
+        if (wlen > wrapped.length)
+            return false;
+        if (!aes_wrap(kek, plain[0 .. plen], wrapped[0 .. wlen]).succeeded)
+            return false;
+
+        inc_replay();                       // replay = 2 for msg 3
+        ushort key_info = key_info_type_pairwise | key_info_install | key_info_key_ack |
+            key_info_key_mic | key_info_secure | key_info_encr_key_data | key_info_ver_hmac_sha1_aes;
+
+        ubyte[wpa_max_eapol_len] buf = void;
+        size_t len = encode_eapol_key(buf[],
+            eapol_version_2004, key_desc_type_rsn,
+            key_info, wpa_tk_len_ccmp,
+            replay, anonce, gtk_rsc,
+            wrapped[0 .. wlen]);
+        if (len == 0)
+            return false;
+
+        ubyte[eapol_key_mic_len] mic;
+        eapol_key_compute_mic(kck, buf[0 .. len], mic);
+        patch_mic(buf[0 .. len], mic);
+        return tx(buf[0 .. len]);
+    }
+
+    bool handle_msg4(const(ubyte)[] frame, ref const EapolKeyFrame f)
+    {
+        if (state != FourwayAuthState.awaiting_msg4)
+            return false;
+        if (eapol_key_replay_compare(f.replay_counter, replay) != 0)
+            return true;
+        if (!eapol_key_verify_mic(kck, frame, f.key_mic))
+        {
+            fail(WpaHandshakeReason.mic_failed);
+            return true;
+        }
+
+        if (hooks.install_pairwise_key && !hooks.install_pairwise_key(sta_mac, tk))
+        {
+            fail(WpaHandshakeReason.pairwise_install_failed);
+            return true;
+        }
+        if (hooks.install_group_key &&
+            !hooks.install_group_key(sta_mac, gtk_key_id, gtk[0 .. gtk_len], gtk_rsc[]))
+        {
+            fail(WpaHandshakeReason.group_install_failed);
+            return true;
+        }
+
+        last_tx_len = 0;
+        state = FourwayAuthState.completed;
+        if (hooks.handshake_complete)
+            hooks.handshake_complete(sta_mac, true, 0);
+        return true;
+    }
+
+    bool tx(const(ubyte)[] eapol)
+    {
+        if (eapol.length <= last_tx.length)
+        {
+            last_tx[0 .. eapol.length] = eapol[];
+            last_tx_len = eapol.length;
+        }
+        retx_count = 0;
+        next_retx_us = 0;                   // tick() re-arms the deadline
+        if (hooks.send_eapol is null)
+            return false;
+        return hooks.send_eapol(sta_mac, eapol);
+    }
+
+    void inc_replay()
+    {
+        foreach_reverse (i; 0 .. replay.length)
+        {
+            if (++replay[i] != 0)
+                break;
+        }
+    }
+
+    void fail(WpaHandshakeReason reason)
+    {
+        state = FourwayAuthState.failed;
+        last_tx_len = 0;
+        if (hooks.handshake_complete)
+            hooks.handshake_complete(sta_mac, false, cast(ushort)reason);
+    }
+}
+
+
+// Drives the supplicant-side FourwayContext against the authenticator-side
+// FourwayAuthContext through a non-reentrant frame mailbox, and asserts both
+// sides complete with a matching pairwise key and the GTK delivered intact.
+// Harness state lives in a struct so the hook delegates are bound method
+// pointers (no GC closure) -- the module is @nogc.
+unittest
+{
+    import urt.crypto.pbkdf2 : wpa2_psk_to_pmk;
+
+    static immutable ubyte[22] rsn_ie = [
+        0x30, 0x14,
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x04,
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x04,
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x02,
+        0x00, 0x00,
+    ];
+    static immutable ubyte[16] test_gtk = [
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
+        0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF,
+    ];
+
+    static struct Harness
+    {
+        enum ubyte to_sta = 1, to_ap = 2;
+
+        FourwayContext sta;
+        FourwayAuthContext ap;
+
+        // Non-reentrant ping-pong mailbox: hooks enqueue, run() delivers.
+        ubyte[256][8] qbuf;
+        size_t[8] qlen;
+        ubyte[8] qtag;
+        size_t qhead, qtail;
+
+        bool sta_done, sta_ok, ap_done, ap_ok;
+        ubyte[wpa_tk_len_ccmp] sta_tk, ap_tk;
+        ubyte[wpa_gtk_max_len] sta_gtk;
+        size_t sta_gtk_len;
+
+    nothrow @nogc:
+
+        void push(ubyte tag, const(ubyte)[] p)
+        {
+            assert(qtail < qbuf.length && p.length <= qbuf[0].length);
+            qtag[qtail] = tag;
+            qbuf[qtail][0 .. p.length] = p[];
+            qlen[qtail] = p.length;
+            ++qtail;
+        }
+
+        bool sta_send(const(ubyte)[] p) { push(to_ap, p); return true; }
+        bool sta_pair(const(ubyte)[] t) { sta_tk[] = t[0 .. wpa_tk_len_ccmp]; return true; }
+        bool sta_grp(ubyte idx, const(ubyte)[] g, const(ubyte)[] rsc)
+        { sta_gtk_len = g.length; sta_gtk[0 .. g.length] = g[]; return true; }
+        void sta_complete(bool ok, ushort r) { sta_done = true; sta_ok = ok; }
+
+        bool ap_send(const(ubyte)[6] s, const(ubyte)[] p) { push(to_sta, p); return true; }
+        bool ap_pair(const(ubyte)[6] s, const(ubyte)[] t) { ap_tk[] = t[0 .. wpa_tk_len_ccmp]; return true; }
+        bool ap_grp(const(ubyte)[6] s, ubyte idx, const(ubyte)[] g, const(ubyte)[] rsc) { return true; }
+        void ap_complete(const(ubyte)[6] s, bool ok, ushort r) { ap_done = true; ap_ok = ok; }
+
+        void run()
+        {
+            uint guard = 0;
+            while (qhead < qtail)
+            {
+                ubyte tag = qtag[qhead];
+                const(ubyte)[] frame = qbuf[qhead][0 .. qlen[qhead]];
+                ++qhead;
+                if (tag == to_sta)
+                    sta.handle_eapol(frame);
+                else
+                    ap.handle_eapol(frame);
+                assert(++guard < 32);
+            }
+        }
+    }
+
+    ubyte[6] ap_mac  = [0x02, 0x00, 0x00, 0x00, 0x00, 0xAA];
+    ubyte[6] sta_mac = [0x02, 0x00, 0x00, 0x00, 0x00, 0xBB];
+
+    ubyte[wpa_pmk_len] pmk;
+    assert(wpa2_psk_to_pmk("password123", "testnet", pmk).succeeded);
+
+    Harness h;
+
+    h.sta.configure(pmk, sta_mac, ap_mac, rsn_ie[]);
+    h.sta.hooks.send_eapol = &h.sta_send;
+    h.sta.hooks.install_pairwise_key = &h.sta_pair;
+    h.sta.hooks.install_group_key = &h.sta_grp;
+    h.sta.hooks.handshake_complete = &h.sta_complete;
+    h.sta.begin_association();
+
+    ubyte[eapol_key_rsc_len] gtk_rsc = 0;
+    h.ap.configure(pmk, ap_mac, sta_mac, rsn_ie[], test_gtk[], 1, gtk_rsc);
+    h.ap.hooks.send_eapol = &h.ap_send;
+    h.ap.hooks.install_pairwise_key = &h.ap_pair;
+    h.ap.hooks.install_group_key = &h.ap_grp;
+    h.ap.hooks.handshake_complete = &h.ap_complete;
+
+    assert(h.ap.begin());
+    h.run();
+
+    assert(h.sta_done && h.sta_ok);
+    assert(h.ap_done && h.ap_ok);
+    assert(h.sta.state == FourwayState.completed);
+    assert(h.ap.state == FourwayAuthState.completed);
+    assert(h.sta_tk == h.ap_tk);                            // both derived the same PTK
+    assert(h.sta_gtk_len == 16 && h.sta_gtk[0 .. 16] == test_gtk[]);  // GTK delivered
 }

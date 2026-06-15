@@ -6,6 +6,7 @@ import urt.driver.bl808_m0.wifi;
 import urt.driver.bl808_m0.wifi_lmac;
 import urt.driver.wifi;
 import urt.driver.wpa.eapol;
+import urt.driver.wpa.authenticator;
 
 nothrow @nogc:
 package:
@@ -39,251 +40,150 @@ nothrow @nogc:
 extern(C) int bl_wifi_register_wpa_cb_internal(const(wpa_funcs)* cb);
 extern(C) bool bl_wifi_auth_done_internal(ubyte sta_idx, ushort reason_code);
 private __gshared ubyte _ap_hapd_sentinel;
-private __gshared ubyte _ap_sm_sentinel;
-private __gshared ubyte[6] _ap_auth_sta_mac;
-private __gshared ubyte[6] _ap_auth_ap_mac;
-private __gshared ubyte _ap_auth_sta_idx = ubyte.max;
-private __gshared ubyte[32] _ap_auth_anonce;
-private __gshared ubyte[8] _ap_auth_replay;
-private __gshared ubyte[32] _ap_auth_pmk;
-private __gshared ubyte[48] _ap_auth_ptk;
-private __gshared ubyte[16] _ap_auth_gtk;
-private __gshared ubyte[8] _ap_auth_group_rsc;
-private __gshared bool _ap_auth_have_pmk;
-private __gshared uint _ap_auth_msg1_count;
-private __gshared uint _ap_auth_msg2_count;
-private __gshared uint _ap_auth_msg3_count;
-private __gshared uint _ap_auth_msg4_count;
-private __gshared ubyte[14 + 160] _ap_auth_last_msg3;
-private __gshared size_t _ap_auth_last_msg3_len;
-private __gshared uint _ap_auth_msg3_retx;
-private __gshared ulong _ap_auth_msg3_next_retx_us;
+private __gshared WpaApAuthenticator _ap_auth;
+
+// Per-STA handle round-tripped through the firmware's wpa_funcs callbacks: we
+// return &_ap_slots[i] as the `sm` from _wpa_ap_join and the firmware hands it
+// back on associate / rx-eapol / remove. Carries the STA's firmware sta_idx so
+// the key-install and auth-done primitives can be addressed by MAC.
+private struct ApStaSlot
+{
+    ubyte[6] mac;
+    ubyte sta_idx;
+    bool in_use;
+}
+private __gshared ApStaSlot[WpaApAuthenticator.max_stations] _ap_slots;
+
+// AP RSN IE advertised in the beacon and echoed in EAPOL-Key msg 3: WPA2-PSK,
+// CCMP pairwise + group, PSK AKM. Must outlive the authenticator -> immutable.
+private static immutable ubyte[22] _ap_rsn_ie = [
+    0x30, 0x14,
+    0x01, 0x00,
+    0x00, 0x0f, 0xac, 0x04,
+    0x01, 0x00,
+    0x00, 0x0f, 0xac, 0x04,
+    0x01, 0x00,
+    0x00, 0x0f, 0xac, 0x02,
+    0x00, 0x00,
+];
 
 void ap_auth_reset()
 {
-    _ap_auth_sta_idx = ubyte.max;
-    _ap_auth_have_pmk = false;
-    _ap_auth_msg1_count = 0;
-    _ap_auth_msg2_count = 0;
-    _ap_auth_msg3_count = 0;
-    _ap_auth_msg4_count = 0;
-    _ap_auth_last_msg3_len = 0;
-    _ap_auth_msg3_retx = 0;
-    _ap_auth_msg3_next_retx_us = 0;
-    _ap_auth_group_rsc[] = 0;
-    _ap_auth_ap_mac[] = 0;
-    _ap_auth_sta_mac[] = 0;
+    _ap_auth = WpaApAuthenticator.init;
+    foreach (ref s; _ap_slots)
+        s = ApStaSlot.init;
 }
 
-private bool ap_install_keys()
+bool ap_auth_has_pmk()
+    => _ap_auth.have_pmk;
+
+void ap_auth_tick()
 {
-    int pair_ret = bl_wifi_set_sta_key_internal(
-        cast(ubyte)_bl_hw.vif_index_ap, _ap_auth_sta_idx,
-        wpa_alg_ccmp, 0, 1,
-        null, 0, _ap_auth_ptk.ptr + 32, 16,
-        true);
-
-    int group_ret = -1;
-    if (_bl_hw.ap_bcmc_idx >= 0)
-        group_ret = bl_wifi_set_sta_key_internal(
-            cast(ubyte)_bl_hw.vif_index_ap, cast(ubyte)_bl_hw.ap_bcmc_idx,
-            wpa_alg_ccmp, 1, 1,
-            _ap_auth_group_rsc.ptr, _ap_auth_group_rsc.length,
-            _ap_auth_gtk.ptr, _ap_auth_gtk.length,
-            false);
-
-    return pair_ret == 0 && group_ret == 0;
+    import urt.driver.bl618.timer : mtime_read;
+    _ap_auth.tick(mtime_read());
 }
 
-private bool ap_compute_pmk()
+// Compute the PMK + GTK and bind the driver hooks for a secured BSS. Called at
+// AP bring-up; open APs never configure an authenticator.
+bool ap_auth_configure()
 {
-    import urt.crypto.pbkdf2 : wpa2_psk_to_pmk;
-
     size_t ssid_len;
     while (ssid_len < _ap_ssid_buf.length && _ap_ssid_buf[ssid_len] != 0) ++ssid_len;
     size_t pass_len;
     while (pass_len < _ap_pw_buf.length && _ap_pw_buf[pass_len] != 0) ++pass_len;
     if (ssid_len == 0 || pass_len < 8)
         return false;
+
+    ap_auth_reset();
+    _ap_auth.hooks.send_eapol = &ap_hook_send_eapol;
+    _ap_auth.hooks.install_pairwise_key = &ap_hook_install_pairwise;
+    _ap_auth.hooks.install_group_key = &ap_hook_install_group;
+    _ap_auth.hooks.handshake_complete = &ap_hook_complete;
+
     auto ssid = cast(const(char)[])_ap_ssid_buf[0 .. ssid_len];
     auto pass = cast(const(char)[])_ap_pw_buf[0 .. pass_len];
-    _ap_auth_have_pmk = wpa2_psk_to_pmk(pass, ssid, _ap_auth_pmk).succeeded;
-    return _ap_auth_have_pmk;
+    return _ap_auth.configure(pass, ssid, _vif_mac_ap, _ap_rsn_ie[]).succeeded;
 }
 
-bool ap_auth_has_pmk()
+private ApStaSlot* ap_slot_alloc(const(ubyte)[6] mac)
 {
-    return _ap_auth_have_pmk;
+    foreach (ref s; _ap_slots)
+        if (s.in_use && s.mac[] == mac[])
+            return &s;
+    foreach (ref s; _ap_slots)
+        if (!s.in_use)
+        {
+            s = ApStaSlot.init;
+            s.mac[] = mac[];
+            s.in_use = true;
+            return &s;
+        }
+    return null;
 }
 
-private void ap_mic(const(ubyte)[] kck, const(ubyte)[] frame, ref ubyte[16] out_mic)
+private void ap_slot_free(ApStaSlot* s)
 {
-    import urt.digest.hmac : HMACContext, hmac_init, hmac_update, hmac_finalise;
-    import urt.digest.sha : SHA1Context;
-
-    HMACContext!SHA1Context h;
-    hmac_init(h, kck);
-    hmac_update(h, frame);
-    ubyte[SHA1Context.DigestLen] digest = hmac_finalise(h);
-    out_mic[] = digest[0 .. 16];
+    if (s !is null)
+        *s = ApStaSlot.init;
 }
 
-private bool ap_verify_mic(const(ubyte)[] kck, const(ubyte)[] frame, const(ubyte)[16] expected)
+private bool ap_slot_idx(const(ubyte)[6] mac, out ubyte sta_idx)
 {
-    import urt.driver.wpa.eapol : off_mic, eapol_key_mic_len;
-
-    ubyte[256] scratch = void;
-    if (frame.length > scratch.length || frame.length < off_mic + eapol_key_mic_len)
-        return false;
-    scratch[0 .. frame.length] = frame[];
-    scratch[off_mic .. off_mic + eapol_key_mic_len] = 0;
-    ubyte[16] computed;
-    ap_mic(kck, scratch[0 .. frame.length], computed);
-    ubyte diff;
-    foreach (i; 0 .. 16)
-        diff |= computed[i] ^ expected[i];
-    return diff == 0;
+    foreach (ref s; _ap_slots)
+        if (s.in_use && s.mac[] == mac[])
+        {
+            sta_idx = s.sta_idx;
+            return true;
+        }
+    return false;
 }
 
-private void ap_inc_replay()
+private bool ap_hook_send_eapol(const(ubyte)[6] sta, const(ubyte)[] eapol)
 {
-    foreach_reverse (i; 0 .. _ap_auth_replay.length)
-    {
-        _ap_auth_replay[i]++;
-        if (_ap_auth_replay[i] != 0)
-            break;
-    }
-}
-
-private bool ap_send_msg1()
-{
-    import urt.crypto.random : crypto_random_bytes;
-
-    if (_ap_auth_sta_idx == ubyte.max)
+    ubyte[14 + 256] frame = void;
+    if (eapol.length > frame.length - 14)
         return false;
-    if (!crypto_random_bytes(_ap_auth_anonce[]).succeeded)
-        return false;
-    if (!_ap_auth_have_pmk && !ap_compute_pmk())
-        return false;
-    _ap_auth_ap_mac[] = _vif_mac_ap[];
-
-    _ap_auth_replay[] = 0;
-    _ap_auth_replay[eapol_key_replay_len - 1] = cast(ubyte)(_ap_auth_msg1_count + 1);
-
-    ubyte[8] zero_rsc = 0;
-    ubyte[128] eapol = void;
-    ushort key_info = key_info_type_pairwise | key_info_key_ack | key_info_ver_hmac_sha1_aes;
-    size_t eapol_len = encode_eapol_key(eapol[],
-        eapol_version_2004, key_desc_type_rsn,
-        key_info, 16,
-        _ap_auth_replay, _ap_auth_anonce, zero_rsc,
-        null);
-    if (eapol_len == 0)
-        return false;
-
-    ubyte[14 + 128] frame = void;
-    frame[0 .. 6] = _ap_auth_sta_mac[];
-    frame[6 .. 12] = _ap_auth_ap_mac[];
+    frame[0 .. 6] = sta[];
+    frame[6 .. 12] = _vif_mac_ap[];
     frame[12] = 0x88;
     frame[13] = 0x8e;
-    frame[14 .. 14 + eapol_len] = eapol[0 .. eapol_len];
-
-    bool ok = wifi_hw_tx(0, WifiVif.ap, frame[0 .. 14 + eapol_len]);
-    _ap_auth_msg1_count++;
-    return ok;
+    frame[14 .. 14 + eapol.length] = eapol[];
+    return wifi_hw_tx(0, WifiVif.ap, frame[0 .. 14 + eapol.length]);
 }
 
-private bool ap_send_msg3(const(ubyte)[] msg2_frame, ref const EapolKeyFrame msg2)
+private bool ap_hook_install_pairwise(const(ubyte)[6] sta, const(ubyte)[] tk)
 {
-    import urt.crypto.aes_keywrap : aes_wrap;
-    import urt.crypto.random : crypto_random_bytes;
-    import urt.driver.wpa.crypto : wpa2_pmk_to_ptk;
-
-    if (_ap_auth_sta_idx == ubyte.max || !_ap_auth_have_pmk)
+    ubyte sta_idx;
+    if (!ap_slot_idx(sta, sta_idx))
         return false;
+    return bl_wifi_set_sta_key_internal(
+        cast(ubyte)_bl_hw.vif_index_ap, sta_idx,
+        wpa_alg_ccmp, 0, 1,
+        null, 0, tk.ptr, tk.length,
+        true) == 0;
+}
 
-    if (!wpa2_pmk_to_ptk(_ap_auth_pmk, _ap_auth_ap_mac, _ap_auth_sta_mac,
-                         _ap_auth_anonce, msg2.key_nonce, _ap_auth_ptk[]).succeeded)
+private bool ap_hook_install_group(const(ubyte)[6] sta, ubyte key_idx, const(ubyte)[] gtk, const(ubyte)[] rsc)
+{
+    if (_bl_hw.ap_bcmc_idx < 0)
         return false;
+    return bl_wifi_set_sta_key_internal(
+        cast(ubyte)_bl_hw.vif_index_ap, cast(ubyte)_bl_hw.ap_bcmc_idx,
+        wpa_alg_ccmp, key_idx, 1,
+        rsc.ptr, rsc.length, gtk.ptr, gtk.length,
+        false) == 0;
+}
 
-    if (!ap_verify_mic(_ap_auth_ptk[0 .. 16], msg2_frame, msg2.key_mic))
-        return false;
-
-    if (_ap_auth_msg3_count == 0)
-    {
-        if (!crypto_random_bytes(_ap_auth_gtk[]).succeeded)
-            return false;
-    }
-
-    static immutable ubyte[22] rsn_ie = [
-        0x30, 0x14,
-        0x01, 0x00,
-        0x00, 0x0f, 0xac, 0x04,
-        0x01, 0x00,
-        0x00, 0x0f, 0xac, 0x04,
-        0x01, 0x00,
-        0x00, 0x0f, 0xac, 0x02,
-        0x00, 0x00,
-    ];
-    ubyte[56] key_plain = void;
-    size_t key_plain_len;
-    key_plain[key_plain_len .. key_plain_len + rsn_ie.length] = rsn_ie[];
-    key_plain_len += rsn_ie.length;
-    key_plain[key_plain_len + 0] = 0xdd;
-    key_plain[key_plain_len + 1] = 0x16;
-    key_plain[key_plain_len + 2] = 0x00;
-    key_plain[key_plain_len + 3] = 0x0f;
-    key_plain[key_plain_len + 4] = 0xac;
-    key_plain[key_plain_len + 5] = 0x01;
-    key_plain[key_plain_len + 6] = 0x01;
-    key_plain[key_plain_len + 7] = 0x00;
-    key_plain[key_plain_len + 8 .. key_plain_len + 24] = _ap_auth_gtk[];
-    key_plain_len += 24;
-    if ((key_plain_len & 7) != 0)
-    {
-        key_plain[key_plain_len++] = 0xdd;
-        while ((key_plain_len & 7) != 0)
-            key_plain[key_plain_len++] = 0;
-    }
-
-    ubyte[64] wrapped = void;
-    auto wrapped_len = key_plain_len + 8;
-    if (!aes_wrap(_ap_auth_ptk[16 .. 32], key_plain[0 .. key_plain_len], wrapped[0 .. wrapped_len]).succeeded)
-        return false;
-
-    ap_inc_replay();
-    ushort key_info = key_info_type_pairwise | key_info_install | key_info_key_ack |
-        key_info_key_mic | key_info_secure | key_info_encr_key_data | key_info_ver_hmac_sha1_aes;
-
-    ubyte[160] eapol = void;
-    size_t eapol_len = encode_eapol_key(eapol[],
-        eapol_version_2004, key_desc_type_rsn,
-        key_info, 16,
-        _ap_auth_replay, _ap_auth_anonce, _ap_auth_group_rsc,
-        wrapped[0 .. wrapped_len]);
-    if (eapol_len == 0)
-        return false;
-
-    ubyte[16] mic;
-    ap_mic(_ap_auth_ptk[0 .. 16], eapol[0 .. eapol_len], mic);
-    patch_mic(eapol[0 .. eapol_len], mic);
-
-    ubyte[14 + 160] frame = void;
-    frame[0 .. 6] = _ap_auth_sta_mac[];
-    frame[6 .. 12] = _ap_auth_ap_mac[];
-    frame[12] = 0x88;
-    frame[13] = 0x8e;
-    frame[14 .. 14 + eapol_len] = eapol[0 .. eapol_len];
-    bool ok = wifi_hw_tx(0, WifiVif.ap, frame[0 .. 14 + eapol_len]);
-    _ap_auth_last_msg3[0 .. 14 + eapol_len] = frame[0 .. 14 + eapol_len];
-    _ap_auth_last_msg3_len = 14 + eapol_len;
-    _ap_auth_msg3_retx = 0;
-    {
-        import urt.driver.bl618.timer : mtime_read;
-        _ap_auth_msg3_next_retx_us = mtime_read() + 500_000;
-    }
-    _ap_auth_msg3_count++;
-    return ok;
+private void ap_hook_complete(const(ubyte)[6] sta, bool success, ushort reason)
+{
+    ubyte sta_idx;
+    if (!ap_slot_idx(sta, sta_idx))
+        return;
+    enum ushort reason_mic_failure = 14;
+    enum ushort reason_4way_timeout = 15;
+    ushort code = success ? 0
+        : (reason == cast(ushort)WpaHandshakeReason.mic_failed ? reason_mic_failure : reason_4way_timeout);
+    bl_wifi_auth_done_internal(sta_idx, code);
 }
 
 extern(C) void* _wpa_ap_init(void* parm)
@@ -295,69 +195,46 @@ extern(C) bool _wpa_ap_deinit(void*)
 extern(C) bool _wpa_ap_join(void** sm, ubyte* mac, ubyte* wpa_ie, ubyte wpa_ie_len)
 {
     bool encrypted = wpa_ie !is null && wpa_ie_len > 0;
-    bool busy = encrypted && _ap_auth_sta_mac[] != typeof(_ap_auth_sta_mac).init
-                && (mac is null || _ap_auth_sta_mac[] != mac[0 .. 6]);
-    if (busy)
+    if (!encrypted || mac is null)
     {
         if (sm) *sm = null;
-        return false;
+        return !encrypted;          // open station accepted; encrypted-without-MAC rejected
     }
-
-    if (mac)
-        _ap_auth_sta_mac[] = mac[0 .. 6];
-    _ap_auth_sta_idx = ubyte.max;
-    if (sm && !encrypted)
-        *sm = null;
-    else if (sm)
-        *sm = &_ap_sm_sentinel;
+    ApStaSlot* slot = ap_slot_alloc(mac[0 .. 6]);
+    if (slot is null)
+    {
+        if (sm) *sm = null;
+        return false;               // station table full
+    }
+    if (sm) *sm = slot;
     return true;
 }
 
 extern(C) void _wpa_ap_sta_associated(void* sm, ubyte sta_idx)
 {
-    _ap_auth_sta_idx = sta_idx;
-    if (sm !is null)
-        ap_send_msg1();
+    auto slot = cast(ApStaSlot*)sm;
+    if (slot is null)
+        return;
+    slot.sta_idx = sta_idx;
+    _ap_auth.station_join(slot.mac);    // derive ANonce, send msg 1
 }
 
 extern(C) bool _wpa_ap_remove(void* sm)
 {
-    if (sm !is null)
-        ap_auth_reset();
-    return sm !is null;
+    auto slot = cast(ApStaSlot*)sm;
+    if (slot is null)
+        return false;
+    _ap_auth.station_leave(slot.mac);
+    ap_slot_free(slot);
+    return true;
 }
 
-extern(C) bool _wpa_ap_rx_eapol(void*, void* sa, ubyte* data, size_t len)
+extern(C) bool _wpa_ap_rx_eapol(void*, void* sm, ubyte* data, size_t len)
 {
-    enum ushort reason_mic_failure = 14;
-    enum ushort reason_4way_timeout = 15;
-
-    EapolKeyFrame key;
-    bool decoded = data !is null && decode_eapol_key(data[0 .. len], key);
-    bool is_msg2 = decoded && (key.key_info & key_info_key_mic) != 0 &&
-        (key.key_info & key_info_key_ack) == 0 &&
-        (key.key_info & key_info_secure) == 0;
-    bool is_msg4 = decoded && (key.key_info & key_info_key_mic) != 0 &&
-        (key.key_info & key_info_key_ack) == 0 &&
-        (key.key_info & key_info_secure) != 0;
-    if (is_msg2)
-    {
-        _ap_auth_msg2_count++;
-        if (!ap_send_msg3(data[0 .. len], key) && _ap_auth_sta_idx != ubyte.max)
-            bl_wifi_auth_done_internal(_ap_auth_sta_idx, reason_4way_timeout);
-    }
-    else if (is_msg4)
-    {
-        _ap_auth_msg4_count++;
-        bool mic_ok = ap_verify_mic(_ap_auth_ptk[0 .. 16], data[0 .. len], key.key_mic);
-        bool keys_ok = mic_ok && ap_install_keys();
-        bool auth_ok = keys_ok && bl_wifi_auth_done_internal(_ap_auth_sta_idx, 0);
-        if (auth_ok)
-            _ap_auth_last_msg3_len = 0;
-        else if (_ap_auth_sta_idx != ubyte.max)
-            bl_wifi_auth_done_internal(_ap_auth_sta_idx,
-                mic_ok ? reason_4way_timeout : reason_mic_failure);
-    }
+    auto slot = cast(ApStaSlot*)sm;
+    if (slot is null || data is null)
+        return true;
+    _ap_auth.handle_eapol(slot.mac, data[0 .. len]);
     return true;
 }
 extern(C) int _wpa_parse_wpa_ie(const(ubyte)* ie, size_t len, void* data)
@@ -470,8 +347,8 @@ extern(C) int bl_wifi_set_appie_internal(ubyte vif_idx, ubyte appie_type,
 extern(C) bool bl_wifi_sta_is_ap_notify_completed_rsne_internal();
 extern(C) int bl_wifi_set_sta_key_internal(ubyte vif_idx, ubyte sta_idx,
                                             int alg, int key_idx, int set_tx,
-                                            ubyte* seq, size_t seq_len,
-                                            ubyte* key, size_t key_len,
+                                            const(ubyte)* seq, size_t seq_len,
+                                            const(ubyte)* key, size_t key_len,
                                             bool pairwise);
 
 
@@ -748,20 +625,6 @@ void sta_flush_pending_auth()
         queue_event(WifiEvent.sta_connected, null);
     }
 }
-
-void ap_auth_tick()
-{
-    import urt.driver.bl618.timer : mtime_read;
-    ulong now = mtime_read();
-    if (_ap_auth_last_msg3_len != 0 && _ap_auth_msg4_count == 0 &&
-        _ap_auth_msg3_retx < 3 && now >= _ap_auth_msg3_next_retx_us)
-    {
-        wifi_hw_tx(0, WifiVif.ap, _ap_auth_last_msg3[0 .. _ap_auth_last_msg3_len]);
-        _ap_auth_msg3_retx++;
-        _ap_auth_msg3_next_retx_us = now + 500_000;
-    }
-}
-
 
 __gshared wpa_funcs _wpa_stub_table = wpa_funcs(
     &_wpa_sta_init_real, &_wpa_sta_deinit_real,

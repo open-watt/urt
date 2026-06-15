@@ -22,6 +22,9 @@ module urt.driver.wpa.eapol;
 
 public import urt.driver.dot1x.eapol;
 
+import urt.digest.hmac : HMACContext, hmac_init, hmac_update, hmac_finalise;
+import urt.digest.sha : SHA1Context;
+
 nothrow @nogc:
 
 
@@ -58,6 +61,7 @@ enum size_t eapol_key_mic_len      = 16;
 enum size_t eapol_key_replay_len   = 8;
 enum size_t eapol_key_rsc_len      = 8;
 enum size_t eapol_key_iv_len       = 16;
+enum size_t eapol_key_max_len      = 256;  // scratch bound for MIC verify
 
 // Offsets within an EAPOL-Key frame, measured from the start of the 802.1X
 // header (so the byte that holds the version is at offset 0).
@@ -202,4 +206,94 @@ void patch_mic(ubyte[] frame, const(ubyte)[eapol_key_mic_len] mic)
     if (frame.length < off_mic + eapol_key_mic_len)
         return;
     frame[off_mic .. off_mic + eapol_key_mic_len] = mic[];
+}
+
+
+void eapol_key_compute_mic(const(ubyte)[] kck, const(ubyte)[] frame, ref ubyte[eapol_key_mic_len] out_mic)
+{
+    HMACContext!SHA1Context h;
+    hmac_init(h, kck);
+    hmac_update(h, frame);
+    ubyte[SHA1Context.DigestLen] digest = hmac_finalise(h);
+    out_mic[] = digest[0 .. eapol_key_mic_len];
+}
+
+
+bool eapol_key_verify_mic(const(ubyte)[] kck, const(ubyte)[] frame, const(ubyte)[eapol_key_mic_len] expected)
+{
+    if (frame.length < off_mic + eapol_key_mic_len || frame.length > eapol_key_max_len)
+        return false;
+
+    ubyte[eapol_key_max_len] scratch = void;
+    scratch[0 .. frame.length] = frame[];
+    scratch[off_mic .. off_mic + eapol_key_mic_len] = 0;
+
+    ubyte[eapol_key_mic_len] computed;
+    eapol_key_compute_mic(kck, scratch[0 .. frame.length], computed);
+
+    ubyte diff = 0;
+    foreach (i; 0 .. eapol_key_mic_len)
+        diff |= computed[i] ^ expected[i];
+    return diff == 0;
+}
+
+
+int eapol_key_replay_compare(const(ubyte)[eapol_key_replay_len] a, const(ubyte)[eapol_key_replay_len] b)
+{
+    foreach (i; 0 .. eapol_key_replay_len)
+        if (int d = a[i] - b[i])
+            return d;
+    return 0;
+}
+
+
+bool parse_gtk_kde(const(ubyte)[] data, ubyte[] out_gtk, ref size_t out_len, ref ubyte out_key_id)
+{
+    size_t off = 0;
+    while (off + 2 <= data.length)
+    {
+        ubyte id  = data[off];
+        ubyte len = data[off + 1];
+        if (off + 2 + len > data.length)
+            return false;
+
+        if (id == 0xDD && len >= 6)
+        {
+            // Vendor-specific IE: OUI(3) + KDE type(1) + payload
+            if (data[off + 2] == 0x00 && data[off + 3] == 0x0F && data[off + 4] == 0xAC
+                && data[off + 5] == 0x01)
+            {
+                // GTK KDE payload: key_id/tx/reserved(1), reserved(1), GTK(N).
+                size_t body_off = off + 6;
+                size_t body_end = off + 2 + len;
+                if (body_end - body_off < 2)
+                    return false;
+                out_key_id = data[body_off] & 0x03;
+                size_t gtk_len = body_end - body_off - 2;
+                if (gtk_len > out_gtk.length)
+                    return false;
+                out_gtk[0 .. gtk_len] = data[body_off + 2 .. body_end];
+                out_len = gtk_len;
+                return true;
+            }
+        }
+
+        off += 2 + len;
+    }
+    return false;
+}
+
+
+size_t encode_gtk_kde(ubyte[] dst, ubyte key_id, const(ubyte)[] gtk)
+{
+    size_t total = 8 + gtk.length;
+    if (dst.length < total || gtk.length + 6 > 0xFF)
+        return 0;
+    dst[0] = 0xDD;
+    dst[1] = cast(ubyte)(6 + gtk.length);
+    dst[2] = 0x00; dst[3] = 0x0F; dst[4] = 0xAC; dst[5] = 0x01;
+    dst[6] = key_id & 0x03;
+    dst[7] = 0x00;
+    dst[8 .. total] = gtk[];
+    return total;
 }

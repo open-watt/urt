@@ -21,7 +21,7 @@ module urt.mem.tracking;
 
 version (AllocTracking):
 
-import urt.time : MonoTime, getTime, Duration;
+import urt.time : MonoTime, get_time, Duration;
 import urt.internal.exception : capture_trace, resolve_address, resolve_batch, Resolved;
 
 nothrow @nogc:
@@ -94,7 +94,7 @@ void track_alloc(void* ptr, size_t size)
     _table[slot].ptr = ptr;
     _table[slot].size = cast(uint) size;
     _table[slot].serial = ++_serial_counter;
-    _table[slot].time = getTime();
+    _table[slot].time = get_time();
     _table[slot].pcs[] = null;
     capture_trace(_table[slot].pcs[]);
 
@@ -227,7 +227,7 @@ private void print_candidates(uint min_serial, Duration min_age, string kind, sc
     overflow.count = 0;
     overflow.bytes = 0;
 
-    MonoTime now = getTime();
+    MonoTime now = get_time();
 
     uint total_count = 0;
     ulong total_bytes = 0;

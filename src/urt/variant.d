@@ -950,7 +950,7 @@ nothrow @nogc:
             if (isUser!SysTime)
                 return *cast(inout(SysTime)*)embed.ptr;
             if (isUser!DateTime)
-                return getSysTime(*cast(DateTime*)embed.ptr);
+                return get_sys_time(*cast(DateTime*)embed.ptr);
             assert(false, "Variant is not a timestamp");
         }
         else static if (is(T == DateTime))
@@ -959,7 +959,7 @@ nothrow @nogc:
             if (isUser!DateTime)
                 return *cast(inout(DateTime)*)embed.ptr;
             if (isUser!SysTime)
-                return getDateTime(*cast(SysTime*)embed.ptr);
+                return get_date_time(*cast(SysTime*)embed.ptr);
             assert(false, "Variant is not a timestamp");
         }
         else

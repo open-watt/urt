@@ -4,7 +4,7 @@
 ///
 /// 1. mtime (RISC-V standard) - 1 MHz monotonic counter.
 ///    Read via rdtime. Survives WFI/clock scaling, resets on system reset.
-///    Used for monotonic timekeeping (getTime / Duration / Timer).
+///    Used for monotonic timekeeping (get_time / Duration / Timer).
 ///
 /// 2. HBN RTC - 32,768 Hz counter in the Hibernate block.
 ///    40-bit, survives deep sleep (HBN) if VBAT is maintained.

@@ -20,6 +20,15 @@ else version (Embedded)
 
 nothrow @nogc:
 
+
+// TODO: DELETEME! legacy camelCase aliases; migrate callers to snake_case
+alias getTime = get_time;
+alias getSysTime = get_sys_time;
+alias getDateTime = get_date_time;
+alias getAppTime = get_app_time;
+alias unixTimeNs = unix_time_ns;
+
+
 enum Day : ubyte
 {
     Sunday,
@@ -103,13 +112,13 @@ nothrow @nogc:
     {
         static if (clock == Clock.Monotonic)
         {
-            long ns = (ticks != 0 ? appTime(this) : Duration()).as!"nsecs";
+            long ns = (ticks != 0 ? app_time(this) : Duration()).as!"nsecs";
             if (!buffer.ptr)
-                return 2 + timeToString(ns, null);
+                return 2 + time_to_string(ns, null);
             if (buffer.length < 2)
                 return -1;
             buffer[0..2] = "T+";
-            ptrdiff_t len = timeToString(ns, buffer[2..$]);
+            ptrdiff_t len = time_to_string(ns, buffer[2..$]);
             return len < 0 ? len : 2 + len;
         }
         else
@@ -119,7 +128,7 @@ nothrow @nogc:
             else
                 size_t suffix = tz_offset_len(g_current_timezone);
 
-            DateTime dt = getDateTime(SysTime(ticks));
+            DateTime dt = get_date_time(SysTime(ticks));
             if (!buffer.ptr)
                 return dt.toString(null, format, formatArgs) + suffix;
             ptrdiff_t len = dt.toString(buffer, format, formatArgs);
@@ -146,7 +155,7 @@ nothrow @nogc:
             DateTime dt;
             ptrdiff_t len = dt.fromString(s);
             if (len >= 0)
-                this = getSysTime(dt);
+                this = get_sys_time(dt);
             return len;
         }
         else
@@ -155,7 +164,7 @@ nothrow @nogc:
             bool has_tz;
             ptrdiff_t len = dt.from_string(s, has_tz);
             if (len >= 0)
-                this = has_tz ? cast(LocalTime)getSysTime(dt) : get_local_time(dt);
+                this = has_tz ? cast(LocalTime)get_sys_time(dt) : get_local_time(dt);
             return len;
         }
     }
@@ -229,7 +238,7 @@ pure nothrow @nogc:
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
-        return timeToString(as!"nsecs", buffer);
+        return time_to_string(as!"nsecs", buffer);
     }
 
     ptrdiff_t fromString(const(char)[] s)
@@ -353,12 +362,12 @@ nothrow @nogc:
         }
     }
 
-    void reset(MonoTime now = getTime()) pure
+    void reset(MonoTime now = get_time()) pure
     {
         startTime = now;
     }
 
-    bool expired(MonoTime now = getTime()) const pure
+    bool expired(MonoTime now = get_time()) const pure
     {
         static if (milliseconds != 0)
             return now - startTime >= milliseconds.msecs;
@@ -366,10 +375,10 @@ nothrow @nogc:
             return now - startTime >= timeout;
     }
 
-    Duration elapsed(MonoTime now = getTime()) const pure
+    Duration elapsed(MonoTime now = get_time()) const pure
         => now - startTime;
 
-    Duration remaining(MonoTime now = getTime()) const pure
+    Duration remaining(MonoTime now = get_time()) const pure
     {
         static if (milliseconds != 0)
             return milliseconds.msecs - (now - startTime);
@@ -377,7 +386,7 @@ nothrow @nogc:
             return timeout - (now - startTime);
     }
 
-    Duration expiredDuration(MonoTime now = getTime()) const pure
+    Duration expiredDuration(MonoTime now = get_time()) const pure
         => -remaining(now);
 }
 
@@ -883,19 +892,19 @@ TimeOfDay time_of_day(DateTime dt) pure
 }
 
 TimeOfDay time_of_day(SysTime t) pure
-    => time_of_day(getDateTime(t));
+    => time_of_day(get_date_time(t));
 
 SysTime next_occurrence(SysTime now, TimeOfDay tod, ubyte weekday_mask = 0x7F) pure
 {
     if ((weekday_mask & 0x7F) == 0)
         weekday_mask = 0x7F;
 
-    ulong now_ns = unixTimeNs(now);
+    ulong now_ns = unix_time_ns(now);
     enum ulong day_ns = 86_400_000_000_000UL;
     ulong day_start = now_ns - now_ns % day_ns;
     ulong tod_ns = (cast(ulong)tod.hour*3600 + cast(ulong)tod.minute*60 + cast(ulong)tod.second) * 1_000_000_000UL + tod.ns;
 
-    DateTime dt = getDateTime(now);
+    DateTime dt = get_date_time(now);
     ubyte wday = cast(ubyte)dt.wday;
 
     foreach (_; 0 .. 7)
@@ -941,7 +950,7 @@ alias usecs   = dur!"usecs";
 alias msecs   = dur!"msecs";
 alias seconds = dur!"seconds";
 
-MonoTime getTime()
+MonoTime get_time()
 {
     version (Windows)
     {
@@ -960,7 +969,7 @@ MonoTime getTime()
         static if (has_mtime)
             return MonoTime(mtime_read());
         else
-            static assert(false, "getTime: no monotonic timer for this platform");
+            static assert(false, "get_time: no monotonic timer for this platform");
     }
     else
     {
@@ -968,7 +977,7 @@ MonoTime getTime()
     }
 }
 
-SysTime getSysTime()
+SysTime get_sys_time()
 {
     version (Windows)
     {
@@ -987,7 +996,7 @@ SysTime getSysTime()
         static if (has_mtime)
             return SysTime(mtime_read() + sys_time_offset);
         else
-            static assert(false, "getSysTime: no monotonic timer for this platform");
+            static assert(false, "get_sys_time: no monotonic timer for this platform");
     }
     else
     {
@@ -995,39 +1004,39 @@ SysTime getSysTime()
     }
 }
 
-SysTime getSysTime(DateTime time) pure
+SysTime get_sys_time(DateTime time) pure
 {
     return from_unix_time_ns(datetime_to_unix_ns(time));
 }
 
 LocalTime get_local_time()
-    => cast(LocalTime)getSysTime();
+    => cast(LocalTime)get_sys_time();
 
 LocalTime get_local_time(DateTime time) pure
-    => LocalTime(getSysTime(time).ticks);
+    => LocalTime(get_sys_time(time).ticks);
 
-DateTime getDateTime()
+DateTime get_date_time()
 {
-    return getDateTime(getSysTime());
+    return get_date_time(get_sys_time());
 }
 
-DateTime getDateTime(SysTime time) pure
+DateTime get_date_time(SysTime time) pure
 {
-    return unix_ns_to_datetime(unixTimeNs(time));
+    return unix_ns_to_datetime(unix_time_ns(time));
 }
 
 DateTime get_date_time(LocalTime time) pure
-    => getDateTime(SysTime(time.ticks));
+    => get_date_time(SysTime(time.ticks));
 
-Duration getAppTime()
-    => getTime() - startTime;
+Duration get_app_time()
+    => get_time() - startTime;
 
-Duration appTime(MonoTime t) pure
+Duration app_time(MonoTime t) pure
     => t - startTime;
-Duration appTime(SysTime t) pure
+Duration app_time(SysTime t) pure
     => cast(MonoTime)t - startTime;
 
-ulong unixTimeNs(SysTime t) pure
+ulong unix_time_ns(SysTime t) pure
 {
     version (Windows)
         return (t.ticks - unix_epoch_as_filetime) * 100UL;
@@ -1062,7 +1071,7 @@ bool wall_time_set()
 void set_utc_time(ulong unix_ns)
 {
     long old_offset = cast(long)sys_time_offset;
-    cast()sys_time_offset = unix_ns / nsec_multiplier - getTime().ticks;
+    cast()sys_time_offset = unix_ns / nsec_multiplier - get_time().ticks;
     long delta_ns = has_wall_time ? (cast(long)sys_time_offset - old_offset) * nsec_multiplier : 0;
     has_wall_time = true;
 
@@ -1075,7 +1084,7 @@ void adjust_utc_time(long delta_ns)
     cast()sys_time_offset = cast(ulong)(cast(long)sys_time_offset + delta_ns / nsec_multiplier);
     has_wall_time = true;
 
-    apply_os_clock(unixTimeNs(getSysTime()));
+    apply_os_clock(unix_time_ns(get_sys_time()));
     notify_clock_change(delta_ns);
 }
 
@@ -1217,7 +1226,7 @@ size_t format_tz_offset(Duration offset, char[] buffer) pure
 
 package(urt) void init_clock()
 {
-    cast()startTime = getTime();
+    cast()startTime = get_time();
 
     version (Windows)
     {
@@ -1275,7 +1284,7 @@ package(urt) void init_clock()
         static assert(false, "TODO");
 }
 
-ptrdiff_t timeToString(long ns, char[] buffer) pure
+ptrdiff_t time_to_string(long ns, char[] buffer) pure
 {
     import urt.conv : format_int;
 
@@ -1342,7 +1351,7 @@ unittest
     assert(tconcat(msecs(3_600_000*-123))[] == "-123:00:00");
     assert(tconcat(usecs(3_600_000_000*-123 + 1))[] == "-122:59:59.999999");
     assert(MonoTime().toString(null, null, null) == 10);
-    assert(tconcat(getTime())[0..2] == "T+");
+    assert(tconcat(get_time())[0..2] == "T+");
 
     // Test Duration.fromString with compound formats
     Duration d;
@@ -1514,7 +1523,7 @@ unittest
     LocalTime local = cast(LocalTime)utc;
 
     // local wall-clock reads 10 hours ahead of UTC...
-    assert(unixTimeNs(SysTime(local.ticks)) == unixTimeNs(utc) + 10UL*3_600 * 1_000_000_000);
+    assert(unix_time_ns(SysTime(local.ticks)) == unix_time_ns(utc) + 10UL*3_600 * 1_000_000_000);
     // ...but names the same instant, so it round-trips and differences are zero
     assert(cast(SysTime)local == utc);
     assert((local - utc).ticks == 0);
@@ -1522,17 +1531,17 @@ unittest
     // negative, non-whole-hour offset
     set_timezone(-dur!"hours"(5) - dur!"minutes"(30));
     local = cast(LocalTime)utc;
-    assert(unixTimeNs(SysTime(local.ticks)) == unixTimeNs(utc) - (5UL*3_600 + 30*60) * 1_000_000_000);
+    assert(unix_time_ns(SysTime(local.ticks)) == unix_time_ns(utc) - (5UL*3_600 + 30*60) * 1_000_000_000);
     assert(cast(SysTime)local == utc);
 
     // LocalTime parses / formats as local wall-clock, with an explicit offset suffix
     set_timezone(dur!"hours"(10));
-    SysTime noon = getSysTime(DateTime(2025, Month.June, Day.Sunday, 15, 12, 0, 0));
+    SysTime noon = get_sys_time(DateTime(2025, Month.June, Day.Sunday, 15, 12, 0, 0));
 
     LocalTime parsed;
     assert(parsed.fromString("2025-06-15T12:00:00") == 19);            // bare -> local
     assert(tconcat(parsed)[] == "2025-06-15T12:00:00+10");             // whole hour: no :MM
-    assert(cast(SysTime)parsed == getSysTime(DateTime(2025, Month.June, Day.Sunday, 15, 2, 0, 0)));
+    assert(cast(SysTime)parsed == get_sys_time(DateTime(2025, Month.June, Day.Sunday, 15, 2, 0, 0)));
 
     // an explicit offset names an absolute instant
     assert(parsed.fromString("2025-06-15T12:00:00+00:00") == 25);      // 12:00 UTC -> 22:00 local
@@ -1552,12 +1561,12 @@ unittest
 
     // naive DateTime <-> Time conversions: the converter supplies the zone
     set_timezone(dur!"hours"(10));
-    DateTime wall = getDateTime(noon);   // 2025-06-15 12:00:00, canonical (correct wday)
+    DateTime wall = get_date_time(noon);   // 2025-06-15 12:00:00, canonical (correct wday)
     // same numerals, two instants 10h apart
-    assert(getSysTime(wall) == noon);                                    // numerals as UTC
+    assert(get_sys_time(wall) == noon);                                    // numerals as UTC
     assert(cast(SysTime)get_local_time(wall) == noon - dur!"hours"(10)); // numerals as local
     // breakdown is symmetric: each Time -> its own wall-clock numerals
-    assert(getDateTime(getSysTime(wall)) == wall);
+    assert(get_date_time(get_sys_time(wall)) == wall);
     assert(get_date_time(get_local_time(wall)) == wall);
 
     set_timezone(Duration.zero);

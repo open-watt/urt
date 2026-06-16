@@ -237,10 +237,10 @@ nothrow @nogc:
             }
             else
             {
-                MonoTime deadline = getTime() + timeout;
+                MonoTime deadline = get_time() + timeout;
                 while (!try_wait())
                 {
-                    if (getTime() >= deadline)
+                    if (get_time() >= deadline)
                         return false;
                 }
                 return true;

@@ -261,9 +261,9 @@ private Result create_self_signed_portable(ref KeyPair key, out CertRef cert, co
     if (!r)
         return r;
 
-    auto now = getSysTime();
-    auto not_before = getDateTime(now);
-    auto not_after = getDateTime(now + dur!"days"(validity_days));
+    auto now = get_sys_time();
+    auto not_before = get_date_time(now);
+    auto not_after = get_date_time(now + dur!"days"(validity_days));
 
     // compute TBSCertificate field sizes
     ptrdiff_t ver_inner = der_integer_small(null, 2);

@@ -58,6 +58,6 @@ private:
     package void init_rand()
     {
         import urt.time;
-        srand(getTime().ticks, cast(size_t)&globalRand);
+        srand(get_time().ticks, cast(size_t)&globalRand);
     }
 }

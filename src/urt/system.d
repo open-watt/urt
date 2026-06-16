@@ -166,7 +166,7 @@ SystemInfo get_sysinfo()
             r.pools[1].largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
         }
 
-        r.uptime = getAppTime();
+        r.uptime = get_app_time();
     }
     else version (Bouffalo)
     {
@@ -183,7 +183,7 @@ SystemInfo get_sysinfo()
             r.pools[i].peak_used = s.peak_used;
             r.pools[i].largest_free = s.largest_free;
         }
-        r.uptime = getAppTime();
+        r.uptime = get_app_time();
     }
     return r;
 }
@@ -214,7 +214,7 @@ void set_system_idle_params(IdleParams params)
 
 void count_system_load(MonoTime reference)
 {
-    MonoTime now = getTime();
+    MonoTime now = get_time();
 
     size_t a = cast(size_t)(reference - MonoTime()).as!"nsecs";
     size_t b = cast(size_t)(now - MonoTime()).as!"nsecs";

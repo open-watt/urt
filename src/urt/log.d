@@ -144,9 +144,9 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
         return;
     import urt.string, urt.array;
     static if (T.length == 1 && (is(T[0] : const(char)[]) || is(T[0] : const String) || is(T[0] : const MutableString!N, size_t N) || is(T[0] : const Array!char)))
-        auto msg = LogMessage(severity, tag, object_name, args[0][], getTime());
+        auto msg = LogMessage(severity, tag, object_name, args[0][], get_time());
     else
-        auto msg = LogMessage(severity, tag, object_name, tconcat_impl(normalise_args(args)), getTime());
+        auto msg = LogMessage(severity, tag, object_name, tconcat_impl(normalise_args(args)), get_time());
     write_log(msg);
 }
 
@@ -154,7 +154,7 @@ void write_logf(T...)(Severity severity, const(char)[] tag, const(char)[] object
 {
     if (severity > g_max_severity)
         return;
-    auto msg = LogMessage(severity, tag, object_name, tformat(fmt, args), getTime());
+    auto msg = LogMessage(severity, tag, object_name, tformat(fmt, args), get_time());
     write_log(msg);
 }
 

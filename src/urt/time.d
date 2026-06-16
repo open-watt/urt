@@ -52,71 +52,56 @@ enum Clock
 {
     SystemTime,
     Monotonic,
+    LocalTime,
 }
 
 alias MonoTime = Time!(Clock.Monotonic);
 alias SysTime = Time!(Clock.SystemTime);
+alias LocalTime = Time!(Clock.LocalTime);
 
 struct Time(Clock clock)
 {
-pure nothrow @nogc:
+nothrow @nogc:
 
     ulong ticks;
 
-    bool opCast(T : bool)() const
+    bool opCast(T : bool)() const pure
         => ticks != 0;
 
     T opCast(T)() const
         if (is(T == Time!c, Clock c) && c != clock)
     {
-        static if (is(T == Time!c, Clock c) && c != clock)
-        {
-            static if (clock == Clock.Monotonic && c == Clock.SystemTime)
-                return SysTime(ticks + sys_time_offset);
-            else
-                return MonoTime(ticks - sys_time_offset);
-        }
+        static if (is(T == Time!c, Clock c))
+            return T(ticks + cast(ulong)(clock_offset!c - clock_offset!clock));
         else
             static assert(false, "constraint out of sync");
     }
 
-    bool opEquals(Time!clock b) const
+    bool opEquals(Time!clock b) const pure
         => ticks == b.ticks;
 
-    int opCmp(Time!clock b) const
+    int opCmp(Time!clock b) const pure
         => ticks < b.ticks ? -1 : ticks > b.ticks ? 1 : 0;
 
     Duration opBinary(string op, Clock c)(Time!c rhs) const if (op == "-")
     {
-        ulong t1 = ticks;
-        ulong t2 = rhs.ticks;
-        static if (clock != c)
-        {
-            static if (clock == Clock.Monotonic)
-                t1 += sys_time_offset;
-            else
-                t2 += sys_time_offset;
-        }
+        ulong t1 = ticks - cast(ulong)clock_offset!clock;
+        ulong t2 = rhs.ticks - cast(ulong)clock_offset!c;
         return Duration(t1 - t2);
     }
 
-    Time opBinary(string op)(Duration rhs) const if (op == "+" || op == "-")
+    Time opBinary(string op)(Duration rhs) const pure if (op == "+" || op == "-")
         => Time(mixin("ticks " ~ op ~ " rhs.ticks"));
 
-    void opOpAssign(string op)(Duration rhs) if (op == "+" || op == "-")
+    void opOpAssign(string op)(Duration rhs) pure if (op == "+" || op == "-")
     {
         mixin("ticks " ~ op ~ "= rhs.ticks;");
     }
 
     import urt.string.format : FormatArg;
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const pure
     {
-        static if (clock == Clock.SystemTime)
-        {
-            DateTime dt = getDateTime(this);
-            return dt.toString(buffer, format, formatArgs);
-        }
-        else
+        static if (clock == Clock.Monotonic)
         {
             long ns = (ticks != 0 ? appTime(this) : Duration()).as!"nsecs";
             if (!buffer.ptr)
@@ -127,26 +112,31 @@ pure nothrow @nogc:
             ptrdiff_t len = timeToString(ns, buffer[2..$]);
             return len < 0 ? len : 2 + len;
         }
+        else
+        {
+            DateTime dt = getDateTime(SysTime(ticks));
+            return dt.toString(buffer, format, formatArgs);
+        }
     }
 
-    ptrdiff_t fromString(const(char)[] s)
+    ptrdiff_t fromString(const(char)[] s) pure
     {
-        static if (clock == Clock.SystemTime)
+        static if (clock == Clock.Monotonic)
+        {
+            assert(false, "TODO: ???"); // what is the format we parse?
+        }
+        else
         {
             DateTime dt;
             ptrdiff_t len = dt.fromString(s);
             if (len >= 0)
-                this = getSysTime(dt);
+                this = Time(getSysTime(dt).ticks);
             return len;
-        }
-        else
-        {
-            assert(false, "TODO: ???"); // what is the format we parse?
         }
     }
 
     version (Windows)
-    auto __debugOverview() const
+    auto __debugOverview() const pure
     {
         import urt.mem;
         char[] b = debug_alloc!char(64);
@@ -977,6 +967,9 @@ SysTime getSysTime(DateTime time) pure
     return from_unix_time_ns(datetime_to_unix_ns(time));
 }
 
+LocalTime getLocalTime()
+    => cast(LocalTime)getSysTime();
+
 DateTime getDateTime()
 {
     return getDateTime(getSysTime());
@@ -1065,6 +1058,12 @@ void set_utc_time(ulong unix_ns)
     notify_clock_change();
 }
 
+void set_timezone(Duration offset)
+{
+    g_current_timezone = offset;
+    notify_clock_change();
+}
+
 
 alias ClockChangeHandler = void delegate() nothrow @nogc;
 
@@ -1100,6 +1099,7 @@ debug __gshared g_iterating_clock_change = false;
 private:
 
 __gshared Array!ClockChangeHandler _clock_change_handlers;
+__gshared Duration g_current_timezone;
 
 __gshared immutable MonoTime startTime;
 
@@ -1126,6 +1126,18 @@ else version (Embedded)
 
 __gshared immutable ulong sys_time_offset;
 __gshared bool has_wall_time;
+
+long clock_offset(Clock c)()
+{
+    static if (c == Clock.Monotonic)
+        return 0;
+    else static if (c == Clock.SystemTime)
+        return cast(long)sys_time_offset;
+    else static if (c == Clock.LocalTime)
+        return cast(long)sys_time_offset + g_current_timezone.ticks;
+    else
+        static assert(false, "unknown clock");
+}
 
 package(urt) void init_clock()
 {
@@ -1404,6 +1416,34 @@ unittest
     dt = unix_ns_to_datetime(1_735_689_600UL * 1_000_000_000); // 2025-01-01 00:00:00
     assert(dt.year == 2025 && dt.month == Month.January && dt.day == 1);
     assert(dt.wday == Day.Wednesday);
+
+    // ---- LocalTime ----
+
+    SysTime utc = from_unix_time_ns(1_700_000_000UL * 1_000_000_000);
+
+    set_timezone(dur!"hours"(10));
+    LocalTime local = cast(LocalTime)utc;
+
+    // local wall-clock reads 10 hours ahead of UTC...
+    assert(unixTimeNs(SysTime(local.ticks)) == unixTimeNs(utc) + 10UL*3_600 * 1_000_000_000);
+    // ...but names the same instant, so it round-trips and differences are zero
+    assert(cast(SysTime)local == utc);
+    assert((local - utc).ticks == 0);
+
+    // negative, non-whole-hour offset
+    set_timezone(-dur!"hours"(5) - dur!"minutes"(30));
+    local = cast(LocalTime)utc;
+    assert(unixTimeNs(SysTime(local.ticks)) == unixTimeNs(utc) - (5UL*3_600 + 30*60) * 1_000_000_000);
+    assert(cast(SysTime)local == utc);
+
+    // LocalTime parses / formats as local wall-clock
+    set_timezone(dur!"hours"(10));
+    LocalTime parsed;
+    assert(parsed.fromString("2025-06-15T12:00:00") == 19);
+    assert(tconcat(parsed)[] == "2025-06-15T12:00:00");
+    assert(cast(SysTime)parsed == getSysTime(DateTime(2025, Month.June, Day.Sunday, 15, 2, 0, 0)));
+
+    set_timezone(Duration.zero);
 }
 
 

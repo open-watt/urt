@@ -175,66 +175,6 @@ void write_log(scope ref const LogMessage msg)
 }
 
 
-// --- backward compatibility (deprecated) ---
-
-enum Level : ubyte
-{
-    Error = 0,
-    Warning,
-    Info,
-    Debug
-}
-
-immutable string[] levelNames = ["Error", "Warning", "Info", "Debug"];
-
-Severity level_to_severity(Level level)
-{
-    final switch (level)
-    {
-        case Level.Error:   return Severity.error;
-        case Level.Warning: return Severity.warning;
-        case Level.Info:    return Severity.info;
-        case Level.Debug:   return Severity.debug_;
-    }
-}
-
-__gshared Level logLevel = Level.Info;
-
-void writeDebug(T...)(ref T things) { writeLog(Level.Debug, things); }
-void writeInfo(T...)(ref T things) { writeLog(Level.Info, things); }
-void writeWarning(T...)(ref T things) { writeLog(Level.Warning, things); }
-void writeError(T...)(ref T things) { writeLog(Level.Error, things); }
-
-void writeDebugf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Debug, format, things); }
-void writeInfof(T...)(const(char)[] format, ref T things) { writeLogf(Level.Info, format, things); }
-void writeWarningf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Warning, format, things); }
-void writeErrorf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Error, format, things); }
-
-void writeLog(T...)(Level level, ref T things)
-{
-    Severity sev = level_to_severity(level);
-    if (sev > g_max_severity)
-        return;
-    write_log(sev, null, null, things);
-}
-
-void writeLogf(T...)(Level level, const(char)[] format, ref T things)
-{
-    write_logf(level_to_severity(level), null, null, format, things);
-}
-
-alias LegacyLogSink = void function(Level level, scope const(char)[] message) nothrow @nogc;
-
-private void legacy_sink_adapter(void* context, scope ref const LogMessage msg) nothrow @nogc
-{
-    __gshared immutable Level[9] map = [Level.Error, Level.Error, Level.Error, Level.Error, Level.Warning, Level.Info, Level.Info, Level.Debug, Level.Debug];
-    (cast(LegacyLogSink)context)(map[msg.severity], msg.message);
-}
-
-LogSinkHandle register_log_sink(LegacyLogSink sink)
-    => register_log_sink(&legacy_sink_adapter, cast(void*)sink);
-
-
 private:
 
 enum max_sinks = 16;

@@ -2097,7 +2097,7 @@ version (WinSock)
 
     FAIL:
         import urt.log;
-        writeWarning("Failed to get WSASendMsg/WSARecvMsg function pointers - sendmsg() won't work, recvfrom() won't be able to report the dst address");
+        log_warning("socket", "Failed to get WSASendMsg/WSARecvMsg function pointers - sendmsg() won't work, recvfrom() won't be able to report the dst address");
     }
 
     pragma(crt_destructor)

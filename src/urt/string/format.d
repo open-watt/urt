@@ -389,13 +389,16 @@ template DefFormat(T)
             static if (T.sizeof <= size_t.sizeof)
             {
                 size_t bits = cast(size_t)cast(void*)&this;
+                // value laundered via 'this', which the optimiser assumes to be non-null; this in-register barrier interrupts the assumption
+                version (DigitalMars) {}
+                else asm pure nothrow @nogc { "" : "=r" (bits) : "0" (bits); }
                 ref T value = *cast(T*)&bits;
             }
 
             static if (is(T == U[N], U, size_t N))
                 return defToString!(U[])(value[], buffer, format, formatArgs);
-            else static if (is(T : String) || is(T : MutableString!N, size_t N) || is(T : Array!(char, N), size_t N))
-                return defToString!(char[])(value[], buffer, format, formatArgs);
+            else static if (is(typeof(value.toString()) : const(char)[]))
+                return defToString!(char[])(cast(char[])value.toString(), buffer, format, formatArgs);
             else static if (is(T == typeof(null)))
             {
                 if (!buffer.ptr)

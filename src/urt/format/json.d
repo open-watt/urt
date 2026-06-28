@@ -227,7 +227,22 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
 
             size_t len = 0;
             if (val.isDouble())
-                len += val.asDouble().format_float(number_buffer);
+            {
+                double d = val.asDouble();
+                // HACK: JSON has no nan/inf literal; emit null (should we translate inf->null, or emit float.max?)
+                if (d != d || d == double.infinity || d == -double.infinity)
+                {
+                    if (number_buffer.ptr)
+                    {
+                        if (number_buffer.length < 4)
+                            return -1;
+                        number_buffer[0 .. 4] = "null";
+                    }
+                    len = 4;
+                }
+                else
+                    len += d.format_float(number_buffer);
+            }
             else if (val.isUlong())
                 len += val.asUlong().format_uint(number_buffer);
             else

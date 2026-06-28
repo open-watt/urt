@@ -335,6 +335,7 @@ enum MsgFlags : ubyte
     peek    = 1 << 0,
     confirm = 1 << 1,
     no_sig  = 1 << 2,
+    dont_wait = 1 << 3,
     //...
 }
 
@@ -2028,10 +2029,14 @@ int map_message_flags(MsgFlags flags)
 {
     int r = 0;
     if (flags & MsgFlags.peek) r |= MSG_PEEK;
-    version (linux)
+    version (Posix)
     {
-        if (flags & MsgFlags.confirm) r |= MSG_CONFIRM;
-        if (flags & MsgFlags.no_sig) r |= MSG_NOSIGNAL;
+        if (flags & MsgFlags.dont_wait) r |= MSG_DONTWAIT;
+        version (linux)
+        {
+            if (flags & MsgFlags.confirm) r |= MSG_CONFIRM;
+            if (flags & MsgFlags.no_sig) r |= MSG_NOSIGNAL;
+        }
     }
     return r;
 }

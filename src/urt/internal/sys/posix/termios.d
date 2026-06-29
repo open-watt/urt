@@ -10,6 +10,7 @@ alias speed_t = uint;
 alias tcflag_t = uint;
 
 enum NCCS = 32;
+enum NCCS2 = 19;
 
 struct termios
 {
@@ -22,6 +23,19 @@ struct termios
     speed_t c_ispeed;
     speed_t c_ospeed;
 }
+
+struct termios2
+{
+    tcflag_t c_iflag;
+    tcflag_t c_oflag;
+    tcflag_t c_cflag;
+    tcflag_t c_lflag;
+    cc_t c_line;
+    cc_t[NCCS2] c_cc;
+    speed_t c_ispeed;
+    speed_t c_ospeed;
+}
+static assert(termios2.sizeof == 44);
 
 // c_iflag
 enum IGNBRK  = 0x01;
@@ -50,7 +64,9 @@ enum CREAD   = 0x80;
 enum PARENB  = 0x100;
 enum PARODD  = 0x200;
 enum CLOCAL  = 0x800;
+enum CMSPAR  = 0x40000000;
 enum CRTSCTS = 0x80000000;
+enum CBAUD   = 0x100F;
 
 // c_lflag
 enum ISIG    = 0x01;
@@ -90,6 +106,7 @@ enum B4800   = 0xC;
 enum B9600   = 0xD;
 enum B19200  = 0xE;
 enum B38400  = 0xF;
+enum BOTHER  = 0x1000;
 enum B57600  = 0x1001;
 enum B115200 = 0x1002;
 enum B230400 = 0x1003;
@@ -97,10 +114,22 @@ enum B460800 = 0x1004;
 enum B500000 = 0x1005;
 enum B576000 = 0x1006;
 enum B921600 = 0x1007;
+enum B1000000 = 0x1008;
+enum B1152000 = 0x1009;
+enum B1500000 = 0x100A;
+enum B2000000 = 0x100B;
+enum B2500000 = 0x100C;
+enum B3000000 = 0x100D;
+enum B3500000 = 0x100E;
+enum B4000000 = 0x100F;
+
+enum TCGETS2 = 0x802C542A;
+enum TCSETS2 = 0x402C542B;
 
 int tcgetattr(int fd, termios* t);
 int tcsetattr(int fd, int action, const termios* t);
 int tcflush(int fd, int queue);
+int tcdrain(int fd);
 speed_t cfgetispeed(const termios* t);
 speed_t cfgetospeed(const termios* t);
 int cfsetispeed(termios* t, speed_t speed);

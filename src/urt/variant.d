@@ -591,7 +591,10 @@ nothrow @nogc:
                         // TODO: determine if float/bool comparison seems right? is: -1 < false < 0.9 < true < 1.1?
                         double af = asDoubleWithBool(*a);
                         double bf = asDoubleWithBool(*b);
-                        r = af < bf ? -1 : af > bf ? 1 : 0;
+                        if (af != af || bf != bf)
+                            r = (af != af) - (bf != bf); // nan compares equal to itself and sorts after numbers; naive comparison would find it "equal" to everything
+                        else
+                            r = af < bf ? -1 : af > bf ? 1 : 0;
                         break;
                     }
 
@@ -728,6 +731,8 @@ nothrow @nogc:
         => (flags & Flags.FloatFlag) != 0;
     bool isDouble() const pure
         => (flags & Flags.DoubleFlag) != 0;
+    bool is_nan() const pure
+        => (flags & Flags.DoubleFlag) != 0 && value.d != value.d;
     bool isQuantity() const pure
         => isNumber && count != 0 && !is_enum;
     bool isDuration() const pure

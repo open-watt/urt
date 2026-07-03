@@ -53,6 +53,10 @@ nothrow @nogc:
         if (is(U : T))
         => unit.unit == compatibleWith.unit.unit;
 
+    // raw IEEE test; opEquals/opCmp have epsilon semantics, so q == q can't be used
+    bool is_nan() const pure
+        => is_some_float!T && value != value;
+
     static if (Dynamic)
     {
         this(T value, ScaledUnit unit = ScaledUnit()) pure
@@ -287,6 +291,12 @@ nothrow @nogc:
             rhs = adjust_scale(rh);
 
     compare:
+        static if (!eq)
+        {
+            // nan compares equal to itself and sorts after numbers; naive ordering would find it "equal" to everything
+            if (lhs != lhs || rhs != rhs)
+                return (lhs != lhs) - (rhs != rhs);
+        }
         static if (epsilon == 0)
         {
             static if (eq)

@@ -493,7 +493,7 @@ nothrow @nogc:
     {
         // TODO: handle short-cut array/map comparisons?
         static if (is(T == typeof(null)))
-            return type == Type.Null || ((type == Type.String || type == Type.Array || type == Type.Map) && empty());
+            return type == Type.Null || ((type == Type.Buffer || type == Type.Array || type == Type.Map) && empty());
         else static if (is(T == bool))
         {
             if (!isBool)
@@ -520,7 +520,11 @@ nothrow @nogc:
             return opEquals(cast(E)rhs);
         }
         else static if (is(T : const(char)[]) || is(T : const String) || is(T : const MutableString!N, size_t N))
+        {
+            if (type == Type.Null)
+                return rhs[].length == 0;
             return isString && asString() == rhs[];
+        }
         else static if (ValidUserType!T)
             return isUser!T && asUser!T == rhs;
         else
@@ -566,6 +570,24 @@ nothrow @nogc:
 
                     uint aunit = a.count;
                     uint bunit = b.count;
+                    bool aenum = a.is_enum;
+                    bool benum = b.is_enum;
+                    if (aenum || benum)
+                    {
+                        // count holds enum-info bits, not a unit; enums compare numerically with the
+                        // same enum type or a unitless number, and never equal anything else
+                        if (aenum != benum && (aenum ? bunit : aunit) != 0)
+                        {
+                            r = aenum ? 1 : -1;
+                            break;
+                        }
+                        if (aenum && benum && aunit != bunit)
+                        {
+                            r = aunit < bunit ? -1 : 1;
+                            break;
+                        }
+                        aunit = bunit = 0;
+                    }
                     if (aunit || bunit)
                     {
                         // we can't compare different units
@@ -680,9 +702,9 @@ nothrow @nogc:
     {
         // TODO: handle short-cut string, array, map comparisons
         static if (is(T == typeof(null)))
-            return type == Type.Null || ((type == Type.String || type == Type.Array || type == Type.Map) && empty()) ? 0 : 1;
+            return type == Type.Null || ((type == Type.Buffer || type == Type.Array || type == Type.Map) && empty()) ? 0 : 1;
         else static if (is(T : const(char)[]))
-            return isString() ? compare(asString(), rhs) : (type < Type.String ? -1 : 1);
+            return isString() ? compare(asString(), rhs) : (type < Type.Buffer ? -1 : 1);
         static if (ValidUserType!T)
             return compare(asUser!T, rhs);
         else
@@ -700,7 +722,7 @@ nothrow @nogc:
     {
         // TODO: handle short-cut array/map comparisons?
         static if (is(T == typeof(null)))
-            return type == Type.Null || ((type == Type.String || type == Type.Array || type == Type.Map) && empty());
+            return type == Type.Null || ((type == Type.Buffer || type == Type.Array || type == Type.Map) && empty());
         else static if (is(T : const(char)[]))
             return isString && asString().ptr is rhs.ptr && length() == rhs.length;
         else static if (ValidUserType!T)
@@ -1485,6 +1507,14 @@ unittest
     assert(v[2]["bogus"].asBool == false);
     assert(v[3].asUser!IPAddr == IPAddrLit!"127.0.0.1");
     assert(v[4].asQuantity == Metres(10));
+
+    // null/empty-string equivalence: "" constructs as Null and must compare equal both ways
+    Variant empty = Variant("");
+    assert(empty == null);
+    assert(empty == "");
+    assert(empty != "x");
+    assert(Variant("x") == "x");
+    assert(Variant("x") != "");
 }
 
 

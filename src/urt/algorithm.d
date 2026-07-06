@@ -137,15 +137,20 @@ size_t binary_search(alias pred = void, bool insert_pos = false, T, Cmp...)(T[] 
 }
 
 
-void qsort(alias pred = void, T)(T[] arr) pure
+void qsort(alias _pred = void, T)(T[] arr) pure
 {
-    if (arr.length <= 1)
-        return;
+    static if (!is(_pred == void) && is(typeof(_pred(lvalue_of!T, lvalue_of!T)) == bool))
+        static int pred(ref T a, ref T b) => _pred(a, b) ? -1 : _pred(b, a) ? 1 : 0;
+    else
+        alias pred = _pred;
 
     version (SmallSize)
         enum use_small_size_impl = true;
     else
         enum use_small_size_impl = false;
+
+    if (arr.length <= 1)
+        return;
 
     if (!__ctfe && use_small_size_impl)
     {
@@ -225,6 +230,18 @@ unittest
     qsort(arr2);
     foreach (i, ref s; arr2)
         assert(s.x == arr[i]);
+
+    // bool less-predicates
+    int[5] arr3 = [3, 100, -1, 17, 30];
+    qsort!((ref a, ref b) => a < b)(arr3);
+    assert(arr3 == [-1, 3, 17, 30, 100]);
+    qsort!((ref a, ref b) => a > b)(arr3);
+    assert(arr3 == [100, 30, 17, 3, -1]);
+
+    // descending float ranking with infinity, as the energy allocator sorts policies
+    double[4] mv = [0.2, double.infinity, 0.8, 0.2];
+    qsort!((ref a, ref b) => a > b)(mv);
+    assert(mv == [double.infinity, 0.8, 0.2, 0.2]);
 
     // test binary search, not that they're sorted...
     assert(binary_search(arr, -1) == 0);

@@ -607,10 +607,14 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
     char[64] result = void;
 
     // parse format; precision is '.10' => 10 digits
-    int digits = 6; 
+    int digits = 6;
     size_t dot = format.findFirst('.');
     if (dot < format.length)
         digits = cast(int)parse_uint(format[dot + 1 .. $]);
+
+    if (value == 0)
+        value = 0; // normalise -0.0 so we never render a signed zero as "-0"
+
     version (Windows)
     {
         import urt.internal.stdc.stdlib : _gcvt_s;
@@ -692,7 +696,7 @@ unittest
     len = format_float(0.001, buf);
     assert(buf[0..len] == "0.001" || buf[0..len] == "1e-3"); // i don't know why it emits e-3 :/
     len = format_float(-0.0, buf);
-    assert(buf[0..len] == "-0"); // do we want to print -0?
+    assert(buf[0..len] == "0"); // signed zero is normalised, never "-0"
 }
 
 

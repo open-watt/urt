@@ -238,26 +238,34 @@ pure nothrow @nogc:
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
-        return time_to_string(as!"nsecs", buffer);
+        return duration_to_string(as!"nsecs", buffer);
     }
 
     ptrdiff_t fromString(const(char)[] s)
     {
-        import urt.conv : parse_int;
-        import urt.string.ascii : is_alpha, ieq;
+        import urt.conv : parse_uint;
+        import urt.string.ascii : is_alpha, is_numeric, ieq;
 
         if (s.length == 0)
             return -1;
 
         size_t offset = 0;
+        bool negate = false;
+        if (s[0] == '-' || s[0] == '+')
+        {
+            negate = s[0] == '-';
+            offset = 1;
+        }
+
         long total_nsecs = 0;
         ubyte last_unit = 8;
 
         while (offset < s.length)
         {
-            // Parse number
+            if (!s[offset].is_numeric)
+                return last_unit != 8 ? offset : -1;
             size_t len;
-            long value = s[offset..$].parse_int(&len);
+            long value = s[offset..$].parse_uint(&len);
             if (len == 0)
                 return last_unit != 8 ? offset : -1;
             offset += len;
@@ -328,7 +336,7 @@ pure nothrow @nogc:
         if (last_unit == 8)
             return -1;
 
-        ticks = total_nsecs / nsec_multiplier;
+        ticks = (negate ? -total_nsecs : total_nsecs) / nsec_multiplier;
         return offset;
     }
 
@@ -1284,6 +1292,60 @@ package(urt) void init_clock()
         static assert(false, "TODO");
 }
 
+ptrdiff_t duration_to_string(long ns, char[] buffer) pure
+{
+    import urt.conv : format_int;
+
+    char[48] tmp = void;
+    size_t len = 0;
+
+    long a = ns;
+    if (a < 0)
+    {
+        tmp[len++] = '-';
+        a = -a;
+    }
+
+    if (a == 0)
+    {
+        tmp[len++] = '0';
+        tmp[len++] = 's';
+    }
+    else
+    {
+        static immutable long[5] divs = [604_800_000_000_000L, 86_400_000_000_000L, 3_600_000_000_000L, 60_000_000_000L, 1_000_000_000L];
+        static immutable string[5] units = ["w", "d", "h", "m", "s"];
+        foreach (i; 0 .. 5)
+        {
+            long c = a / divs[i];
+            if (c == 0)
+                continue;
+            len += c.format_int(tmp[len .. $], 10, 1, '0');
+            foreach (ch; units[i])
+                tmp[len++] = ch;
+            a %= divs[i];
+        }
+        if (a != 0)
+        {
+            long v;
+            const(char)[] u;
+            if (a % 1_000_000 == 0) { v = a / 1_000_000; u = "ms"; }
+            else if (a % 1_000 == 0) { v = a / 1_000; u = "us"; }
+            else { v = a; u = "ns"; }
+            len += v.format_int(tmp[len .. $], 10, 1, '0');
+            foreach (ch; u)
+                tmp[len++] = ch;
+        }
+    }
+
+    if (!buffer.ptr)
+        return len;
+    if (buffer.length < len)
+        return -1;
+    buffer.ptr[0 .. len] = tmp[0 .. len];
+    return len;
+}
+
 ptrdiff_t time_to_string(long ns, char[] buffer) pure
 {
     import urt.conv : format_int;
@@ -1347,9 +1409,9 @@ unittest
 {
     import urt.mem.temp;
 
-    assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "03:47:34.123");
-    assert(tconcat(msecs(3_600_000*-123))[] == "-123:00:00");
-    assert(tconcat(usecs(3_600_000_000*-123 + 1))[] == "-122:59:59.999999");
+    assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "3h47m34s123ms");
+    assert(tconcat(msecs(3_600_000*-123))[] == "-5d3h");
+    assert(tconcat(usecs(3_600_000_000*-123 + 1))[] == "-5d2h59m59s999999us");
     assert(MonoTime().toString(null, null, null) == 10);
     assert(tconcat(get_time())[0..2] == "T+");
 
@@ -1380,6 +1442,20 @@ unittest
 
     // Correctly ordered units should work
     assert(d.fromString("1d2h30m15s") == 10 && d.as!"seconds" == 86_400 + 7_200 + 1_800 + 15);
+
+    // A single leading sign negates the whole duration (every component), matching toString
+    assert(d.fromString("-5d3h") == 5 && d.as!"hours" == -123);
+    assert(d.fromString("-30s") == 4 && d.as!"seconds" == -30);
+    assert(d.fromString("+5m") == 3 && d.as!"minutes" == 5);
+    assert(d.fromString("-") == -1);        // bare sign, no magnitude
+    assert(d.fromString("5s-3s") == 2);     // embedded sign terminates the parse after "5s"
+
+    // toString/fromString round-trip, including negatives and sub-second tails
+    foreach (ns; [0L, 5_000_000_000L, -442_800_000_000_000L, -442_799_999_999_000_000L, 90_061_000_000_000L])
+    {
+        Duration r;
+        assert(r.fromString(tconcat(nsecs(ns))[]) > 0 && r.as!"nsecs" == ns);
+    }
 
     // Test DateTime.fromString
     DateTime dt;

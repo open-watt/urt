@@ -11,6 +11,7 @@ alias VarQuantity = Quantity!double;
 alias Scalar = Quantity!(double, ScaledUnit());
 alias Metres = Quantity!(double, ScaledUnit(Metre));
 alias Seconds = Quantity!(double, ScaledUnit(Second));
+alias PerSecond = Quantity!(double, ScaledUnit(Second^^-1));
 alias Volts = Quantity!(double, ScaledUnit(Volt));
 alias Amps = Quantity!(double, ScaledUnit(Ampere));
 alias AmpHours = Quantity!(double, AmpereHour);
@@ -398,7 +399,22 @@ nothrow @nogc:
 
     ptrdiff_t fromString(const(char)[] s)
     {
-        return -1;
+        size_t taken;
+        VarQuantity q = parse_quantity(s, &taken);
+        if (taken == 0)
+            return -1;
+        static if (Dynamic)
+        {
+            unit = q.unit;
+            value = cast(T)q.value;
+        }
+        else
+        {
+            if (!q.isCompatible(this))
+                return -1;
+            value = adjust_scale(q);
+        }
+        return taken;
     }
 
 private:
@@ -587,4 +603,28 @@ unittest
     size_t taken;
     assert("10V".parse_quantity(&taken) == Volts(10) && taken == 3);
     assert("10.2e+2Wh".parse_quantity(&taken) == WattHours(1020) && taken == 9);
+
+    // reciprocal units (leading '/' and ascii powers)
+    VarQuantity q = "3/hr".parse_quantity(&taken);
+    assert(taken == 4 && q.value == 3 && q.unit == Hour^^-1);
+    q = "3/h".parse_quantity(&taken);
+    assert(taken == 3 && q.value == 3 && q.unit == Hour^^-1);
+    q = "3h^-1".parse_quantity(&taken);
+    assert(taken == 5 && q.value == 3 && q.unit == Hour^^-1);
+    q = "0.2/s".parse_quantity(&taken);
+    assert(taken == 5 && q.value == 0.2 && q.unit == ScaledUnit(Second)^^-1);
+    q = "4/min".parse_quantity(&taken);
+    assert(taken == 5 && q.value == 4 && q.unit == Minute^^-1);
+    assert("12/hr".parse_quantity().normalise().opEquals!1e-12(VarQuantity(12.0 / 3600, ScaledUnit(Second)^^-1)));
+
+    // scale factors that can't combine must reject the unit, not assert
+    q = "3km/h".parse_quantity(&taken);
+    assert(taken == 1 && q.unit == ScaledUnit());
+
+    // fromString round-trip, including unit conversion to the target scale
+    Seconds sec;
+    assert(sec.fromString("2min") == 4 && sec.value == 120);
+    assert(sec.fromString("5V") == -1);
+    VarQuantity dyn;
+    assert(dyn.fromString("12/hr") == 5 && dyn.value == 12 && dyn.unit == Hour^^-1);
 }

@@ -605,6 +605,43 @@ nothrow:
         return ScaledUnit(u | (pack & 0x1F000000) | (encodeExp[e + 4] << 29));
     }
 
+    // preconditions of `^^` and `*`/`/` above (scale representability, not dims); parse_unit()
+    // checks these so unrepresentable input like "km/h" is a parse error, not a combine assert
+    bool can_pow(int e) const pure
+    {
+        if (pack == 0 || uint(e + 1) <= 2)
+            return true;
+        if (siScale())
+            return true;
+        if (isExtended() || is_prefix_mode(sf()))
+            return false;
+        return uint(decodeExp[pack >> 29] * e + 4) <= 8;
+    }
+
+    bool can_combine(string op)(ScaledUnit b) const pure
+        if (op == "*" || op == "/")
+    {
+        ubyte f = pack >> 24;
+        ubyte bf = b.pack >> 24;
+        if (f == 0 || bf == 0)
+            return true;
+        if (siScale() != b.siScale())
+            return false;
+        if (siScale())
+            return true;
+        if (isExtended() || b.isExtended())
+            return false;
+        if (sf() != b.sf())
+            return false;
+        if (is_prefix_mode(sf()))
+            return op == "/" && (pack & 0xFF000000) == (b.pack & 0xFF000000);
+        static if (op == "*")
+            int e = decodeExp[f >> 5] + decodeExp[bf >> 5];
+        else
+            int e = decodeExp[f >> 5] - decodeExp[bf >> 5];
+        return uint(e + 4) <= 8;
+    }
+
     void opOpAssign(string op, T)(T rh) pure
     {
         this = this.opBinary!op(rh);
@@ -639,10 +676,32 @@ nothrow:
         }
 
         ScaledUnit r;
+
+        bool combine(ScaledUnit t, int q)
+        {
+            if (!t.can_pow(q))
+                return false;
+            ScaledUnit x = t ^^ q;
+            if (!r.can_combine!"*"(x))
+                return false;
+            r *= x;
+            return true;
+        }
+
         bool invert;
+        bool leading = true;
         char sep;
         while (const(char)[] term = s.split!(['/', '*'], false, false)(&sep))
         {
+            if (term.length == 0 && leading && sep == '/')
+            {
+                // a leading '/' opens a reciprocal unit, like "/s" (per-second)
+                leading = false;
+                invert = true;
+                continue;
+            }
+            leading = false;
+
             int p = term.take_power();
             if (p == 0)
                 return -1; // invalid exponent
@@ -662,10 +721,14 @@ nothrow:
             }
 
             if (offset == term.length)
-                r *= ScaledUnit(Unit(), e);
+            {
+                if (!combine(ScaledUnit(Unit(), e), 1))
+                    return -1;
+            }
             else if (const ScaledUnit* su = term[offset .. $] in noScaleUnitMap)
             {
-                r *= (*su) ^^ (invert ? -p : p);
+                if (!combine(*su, invert ? -p : p))
+                    return -1;
                 pre_scale *= 10.0^^e;
             }
             else
@@ -719,10 +782,14 @@ nothrow:
                         // we alrady parsed the 'k', so this string must have been "kkg", which is nonsense
                         return -1;
                     }
-                    r *= ScaledUnit((*u) ^^ (invert ? -p : p), e);
+                    if (!combine(ScaledUnit((*u) ^^ (invert ? -p : p), e), 1))
+                        return -1;
                 }
                 else if (const ScaledUnit* su = term in scaledUnitMap)
-                    r *= ScaledUnit(su.unit, su.exp + e) ^^ (invert ? -p : p);
+                {
+                    if (!combine(ScaledUnit(su.unit, su.exp + e), invert ? -p : p))
+                        return -1;
+                }
                 else if (const ScaledUnit* su = term in noScaleUnitMapSI)
                 {
                     // if SI exponent fits in our 2-bit prefix table (none / k / M / G), encode the prefix into the ScaledUnit exponent
@@ -730,11 +797,13 @@ nothrow:
                     if (!su.siScale() && !su.isExtended() && is_prefix_mode(su.sf()) && (e == 0 || e == 3 || e == 6 || e == 9))
                     {
                         SiPrefix prefix = cast(SiPrefix)(e / 3);
-                        r *= ScaledUnit(*su, prefix) ^^ (invert ? -p : p);
+                        if (!combine(ScaledUnit(*su, prefix), invert ? -p : p))
+                            return -1;
                     }
                     else
                     {
-                        r *= (*su) ^^ (invert ? -p : p);
+                        if (!combine(*su, invert ? -p : p))
+                            return -1;
                         pre_scale *= 10.0^^e;
                     }
                 }
@@ -839,6 +908,19 @@ nothrow:
                 }
                 len += name.length;
             }
+            else if (const string* name = len == 0 ? (unit ^^ -1) in unitNames : null)
+            {
+                // reciprocal of a nameable unit formats as "/name" (only prefix-free; a prefix
+                // ahead of the '/' would bind to the numerator and not parse back)
+                if (buffer.ptr)
+                {
+                    if (buffer.length < 1 + name.length)
+                        return -1;
+                    buffer[0] = '/';
+                    buffer[1 .. 1 + name.length] = *name;
+                }
+                len = 1 + name.length;
+            }
             else
             {
                 // synth a unit name...
@@ -856,6 +938,17 @@ nothrow:
                     buffer[len .. len + name.length] = *name;
                 }
                 len += name.length;
+            }
+            else if (const string* name = (this ^^ -1) in scaledUnitNames)
+            {
+                if (buffer.ptr)
+                {
+                    if (buffer.length < len + 1 + name.length)
+                        return -1;
+                    buffer[len] = '/';
+                    buffer[len + 1 .. len + 1 + name.length] = *name;
+                }
+                len += 1 + name.length;
             }
             else
             {
@@ -959,6 +1052,28 @@ unittest
     assert(Megahertz.scale() == Hertz.scale() * 1e6);
     assert(Gigahertz.scale() == Hertz.scale() * 1e9);
     assert((Kilohertz^^-1).scale() == 1.0 / (Hertz.scale() * 1e3));
+
+    // ascii unit powers
+    const(char)[] pow_s = "m^2";
+    assert(pow_s.take_power() == 2 && pow_s == "m");
+    pow_s = "s^-1";
+    assert(pow_s.take_power() == -1 && pow_s == "s");
+    pow_s = "s^-5";
+    assert(pow_s.take_power() == 0);
+
+    // parse: leading '/' reciprocals; unrepresentable scale combinations reject rather than assert
+    ScaledUnit su;
+    float pre;
+    assert(su.parse_unit("/hr", pre) == 3 && su == Hour^^-1 && pre == 1);
+    assert(su.parse_unit("/s", pre) == 2 && su == ScaledUnit(Second)^^-1);
+    assert(su.parse_unit("km/h", pre) == -1);
+    assert(su.parse_unit("hr*min", pre) == -1);
+    assert(su.parse_unit("Wh^2", pre) == -1);
+
+    // format: reciprocal of a nameable unit renders as "/name"
+    char[16] fmt_buf;
+    assert((Hour^^-1).format_unit(fmt_buf[], pre) == 3 && fmt_buf[0..3] == "/hr" && pre == 1);
+    assert((ScaledUnit(Second)^^-1).format_unit(fmt_buf[], pre) == 2 && fmt_buf[0..2] == "/s");
 }
 
 
@@ -1130,6 +1245,7 @@ immutable Unit[string] unitMap = [
 immutable ScaledUnit[string] noScaleUnitMap = [
     "min"   : Minute,
     "mins"  : Minute,
+    "h"     : Hour,
     "hr"    : Hour,
     "hrs"   : Hour,
     "day"   : Day,
@@ -1182,13 +1298,13 @@ int take_power(ref const(char)[] s) pure
             return 0;
         if (p[0] == '-')
         {
-            if (p.length != 2 || uint(p[2] - '0') > 4)
+            if (p.length != 2 || uint(p[1] - '0') > 4)
                 return 0;
-            return -(p[2] - '0');
+            return -(p[1] - '0');
         }
-        if (p.length != 1 || uint(p[1] - '0') > 4)
+        if (p.length != 1 || uint(p[0] - '0') > 4)
             return 0;
-        return p[2] - '0';
+        return p[0] - '0';
     }
     else if (s.length > 2)
     {

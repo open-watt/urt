@@ -30,7 +30,8 @@ struct LogMessage
     const(char)[] tag;
     const(char)[] object_name;
     const(char)[] message;
-    MonoTime timestamp;
+    const(char)[] hostname;
+    SysTime timestamp;
 }
 
 struct LogFilter
@@ -90,6 +91,11 @@ void set_sink_enabled(LogSinkHandle handle, bool enabled)
     recalc_max_severity();
 }
 
+void set_log_hostname(const(char)[] name)
+{
+    g_log_hostname = name;
+}
+
 void log_emergency(T...)(const(char)[] tag, ref T args) { write_log(Severity.emergency, tag, null, args); }
 void log_alert(T...)(const(char)[] tag, ref T args) { write_log(Severity.alert, tag, null, args); }
 void log_critical(T...)(const(char)[] tag, ref T args) { write_log(Severity.critical, tag, null, args); }
@@ -144,9 +150,9 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
         return;
     import urt.string, urt.array;
     static if (T.length == 1 && (is(T[0] : const(char)[]) || is(T[0] : const String) || is(T[0] : const MutableString!N, size_t N) || is(T[0] : const Array!char)))
-        auto msg = LogMessage(severity, tag, object_name, args[0][], get_time());
+        auto msg = LogMessage(severity, tag, object_name, args[0][], g_log_hostname, get_sys_time());
     else
-        auto msg = LogMessage(severity, tag, object_name, tconcat_impl(normalise_args(args)), get_time());
+        auto msg = LogMessage(severity, tag, object_name, tconcat_impl(normalise_args(args)), g_log_hostname, get_sys_time());
     write_log(msg);
 }
 
@@ -154,7 +160,7 @@ void write_logf(T...)(Severity severity, const(char)[] tag, const(char)[] object
 {
     if (severity > g_max_severity)
         return;
-    auto msg = LogMessage(severity, tag, object_name, tformat(fmt, args), get_time());
+    auto msg = LogMessage(severity, tag, object_name, tformat(fmt, args), g_log_hostname, get_sys_time());
     write_log(msg);
 }
 
@@ -250,6 +256,8 @@ struct SinkSlot
 
 __gshared SinkSlot[max_sinks] g_sinks;
 __gshared Severity g_max_severity = Severity.info;
+
+__gshared const(char)[] g_log_hostname;
 
 void recalc_max_severity()
 {

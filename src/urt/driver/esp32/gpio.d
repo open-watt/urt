@@ -20,6 +20,7 @@ enum bool has_pull_up = true;
 enum bool has_pull_down = true;
 enum bool has_open_drain = false;
 enum bool has_pin_function_muxing = false;
+enum bool has_gpio_sampler = false;   // TODO: RMT capture
 
 
 uint gpio_count() => ow_gpio_count();

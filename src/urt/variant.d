@@ -1203,6 +1203,25 @@ nothrow @nogc:
                 return len;
 
             case Variant.Type.Number:
+                if (is_enum)
+                {
+                    const(VoidEnumInfo)* ei = get_enum_info();
+                    if (ei)
+                    {
+                        if (ei.bitfield)
+                            return ei.format_flags(asLong, buffer);
+                        if (const(char)[] key = ei.key_for_raw(asLong))
+                        {
+                            if (!buffer.ptr)
+                                return key.length;
+                            if (buffer.length < key.length)
+                                return -1;
+                            buffer[0 .. key.length] = key[];
+                            return key.length;
+                        }
+                    }
+                    // unknown scalar enum values fall through to the honest number
+                }
                 if (isQuantity())
                     return asQuantity().toString(buffer, format, formatArgs);
 

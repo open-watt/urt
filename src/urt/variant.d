@@ -16,6 +16,8 @@ import urt.time;
 import urt.traits;
 import urt.util : swap;
 
+public import urt.typereg;
+
 nothrow @nogc:
 
 
@@ -1551,14 +1553,10 @@ template MakeTypeDetails(T)
 {
     static assert(is(Unqual!T == T), "Only instantiate for mutable types");
 
-//    pragma(msg, "Add user type: ", T.stringof, EmbedUserType!T ? " - embedded" : "");
-
-    // this is a hack which populates an array of user type details when the program starts
     // TODO: we can probably NOT do this for class types, and just use RTTI instead...
     shared static this()
     {
-        assert(g_num_type_details < g_type_details.length, "Too many user types!");
-        g_type_details[g_num_type_details++] = TypeDetailsFor!T;
+        register_type_record(TypeDetailsFor!T);
     }
 
     alias MakeTypeDetails = void;
@@ -1572,42 +1570,6 @@ ushort type_detail_index(T)() pure
         if (get_type_details(i).type_id == UserTypeId!T)
             return i;
     assert(false, "Why wasn't the type registered?");
-}
-
-struct TypeDetails
-{
-    uint type_id;
-    uint super_type_id;
-    ushort size;
-    ubyte alignment;
-    bool embedded;
-    void function(void* src, void* dst, bool move) nothrow @nogc copy_emplace;
-    void function(void* val) nothrow @nogc destroy;
-    ptrdiff_t function(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc stringify;
-    int function(const void* a, const void* b, int type) pure nothrow @nogc cmp;
-}
-@fast_data __gshared TypeDetails[16] g_type_details;
-@fast_data __gshared ushort g_num_type_details = 0;
-
-typeof(g_type_details)* type_details() => &g_type_details;
-ushort num_type_details() => g_num_type_details;
-
-ref immutable(TypeDetails) find_type_details(uint type_id) pure
-{
-    auto tds = (cast(immutable(typeof(g_type_details)*) function() pure nothrow @nogc)&type_details)();
-    ushort count = (cast(ushort function() pure nothrow @nogc)&num_type_details)();
-    foreach (i, ref td; (*tds)[0 .. count])
-    {
-        if (td.type_id == type_id)
-            return td;
-    }
-    assert(false, "TypeDetails not found!");
-}
-ref immutable(TypeDetails) get_type_details(uint index) pure
-{
-    auto tds = (cast(immutable(typeof(g_type_details)*) function() pure nothrow @nogc)&type_details)();
-    debug assert(index < g_num_type_details);
-    return (*tds)[index];
 }
 
 public template TypeDetailsFor(T)
@@ -1627,99 +1589,5 @@ public template TypeDetailsFor(T)
     else
         enum ushort SuperTypeId = 0;
 
-    static if (!is(T == class))
-    {
-        static void move_emplace_impl(void* src, void* dst, bool move) nothrow @nogc
-        {
-            if (move)
-                moveEmplace(*cast(T*)src, *cast(T*)dst);
-            else
-            {
-                static if (is_trivial!T)
-                    *cast(T*)dst = *cast(T*)src;
-                else static if (__traits(compiles, new(*cast(T*)dst) T(*cast(T*)src)))
-                    new(*cast(T*)dst) T(*cast(T*)src);
-                else
-                    assert(false, "Can't copy " ~ T.stringof);
-            }
-        }
-        enum move_emplace = &move_emplace_impl;
-    }
-    else
-        enum move_emplace = null;
-
-    static if (!is_trivial!T && is(typeof(destroy!(false, T))))
-    {
-        static void destroy_impl(void* val) nothrow @nogc
-        {
-            destroy!false(*cast(T*)val);
-        }
-        enum destroy_fun = &destroy_impl;
-    }
-    else
-        enum destroy_fun = null;
-
-    static ptrdiff_t stringify(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc
-    {
-        if (do_format)
-        {
-            static if (__traits(compiles, { formatValue(*cast(const T*)val, buffer, format_spec, format_args); }))
-                return formatValue(*cast(const T*)val, buffer, format_spec, format_args);
-            else
-                return -1;
-        }
-        else
-        {
-            static if (is(typeof(parse!T)))
-                return buffer.parse!T(*cast(T*)val);
-            else
-                return -1;
-        }
-    }
-
-    int compare(const void* pa, const void* pb, int type) pure nothrow @nogc
-    {
-        ref const T a = *cast(const T*)pa;
-        ref const T b = *cast(const T*)pb;
-        switch (type)
-        {
-            case 0:
-                static if (is(T == class) || is(T == U*, U) || is(T == V[], V))
-                {
-                    if (pa is pb)
-                        return 0;
-                }
-                static if (__traits(compiles, { a.opCmp(b); }))
-                    return a.opCmp(b);
-                else static if (__traits(compiles, { b.opCmp(a); }))
-                    return -b.opCmp(a);
-                else static if (is(T == class))
-                {
-                    ptrdiff_t r = cast(ptrdiff_t)pa - cast(ptrdiff_t)pb;
-                    return r < 0 ? -1 : r > 0 ? 1 : 0;
-                }
-                else
-                    assert(false, "No comparison!"); // TODO: hash or stringify the values and order that way?
-            case 1:
-                static if (is(T == class) || is(T == U*, U) || is(T == V[], V))
-                {
-                    if (pa is pb)
-                        return 1;
-                }
-                static if (__traits(compiles, { a.opEquals(b); }))
-                    return a.opEquals(b);
-                else static if (__traits(compiles, { b.opEquals(a); }))
-                    return b.opEquals(a);
-                else static if (!is(T == class) && !is(T == U*, U) && !is(T == V[], V))
-                    return a == b ? 1 : 0;
-                else
-                    return 0;
-            case 2:
-                return pa is pb ? 1 : 0;
-            default:
-                assert(false);
-        }
-    }
-
-    enum TypeDetailsFor = TypeDetails(UserTypeId!T, SuperTypeId, T.sizeof, T.alignof, EmbedUserType!T, move_emplace, destroy_fun, &stringify, &compare);
+    enum TypeDetailsFor = TypeRecordFor!(T, UserTypeId!T, SuperTypeId, EmbedUserType!T);
 }

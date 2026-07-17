@@ -41,6 +41,8 @@ struct IPAddr
 {
 nothrow @nogc:
 
+    enum type_name = "ipv4";
+
     enum any       = IPAddr(0, 0, 0, 0);
     enum loopback  = IPAddr(127, 0, 0, 1);
     enum broadcast = IPAddr(255, 255, 255, 255);
@@ -180,6 +182,8 @@ nothrow @nogc:
 struct IPv6Addr
 {
 nothrow @nogc:
+
+    enum type_name = "ipv6";
 
     enum any                = IPv6Addr(0, 0, 0, 0, 0, 0, 0, 0);
     enum loopback           = IPv6Addr(0, 0, 0, 0, 0, 0, 0, 1);
@@ -375,6 +379,8 @@ struct IPNetworkAddress
 {
 nothrow @nogc:
 
+    enum type_name = "ipv4nwk";
+
     enum multicast = IPNetworkAddress(IPAddr(224, 0, 0, 0), 4);
     enum loopback  = IPNetworkAddress(IPAddr(127, 0, 0, 0), 8);
     enum linklocal = IPNetworkAddress(IPAddr(169, 254, 0, 0), 16);
@@ -465,6 +471,8 @@ nothrow @nogc:
 struct IPv6NetworkAddress
 {
 nothrow @nogc:
+
+    enum type_name = "ipv6nwk";
 
     enum global      = IPv6NetworkAddress(IPv6Addr(0x2000, 0, 0, 0, 0, 0, 0, 0), 3);
     enum linklocal   = IPv6NetworkAddress(IPv6Addr(0xFE80, 0, 0, 0, 0, 0, 0, 0), 10);
@@ -571,6 +579,8 @@ struct MulticastGroup
 struct InetAddress
 {
 nothrow @nogc:
+
+    enum type_name = "inetaddr";
 
     struct IPv4
     {

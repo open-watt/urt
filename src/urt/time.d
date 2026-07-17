@@ -72,6 +72,9 @@ struct Time(Clock clock)
 {
 nothrow @nogc:
 
+    static if (clock == Clock.SystemTime)
+        enum type_name = "dt";
+
     ulong ticks;
 
     bool opCast(T : bool)() const pure
@@ -402,6 +405,8 @@ struct DateTime
 {
 pure nothrow @nogc:
 
+    enum type_name = "dt";
+
     short year;
     Month month;
     Day wday;
@@ -723,6 +728,8 @@ pure nothrow @nogc:
 struct TimeOfDay
 {
 pure nothrow @nogc:
+
+    enum type_name = "tod";
 
     ubyte hour;
     ubyte minute;

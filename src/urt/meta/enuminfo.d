@@ -8,19 +8,7 @@ import urt.variant;
 nothrow @nogc:
 
 
-const(E)* enum_from_key(E)(const(char)[] key) pure
-    if (is_enum!E)
-    => enum_info!E.value_for(key);
-
-const(char)[] enum_key_from_value(E)(EnumType!E value) pure
-    if (is_enum!E)
-    => enum_info!E.key_for(value);
-
-const(char)[] enum_key_by_decl_index(E)(size_t value) pure
-    if (is_enum!E)
-    => enum_info!E.key_by_decl_index(value);
-
-// UDA for enum declarations whose members combine as flags
+// UDA for bitfield declarations
 struct bitfield {}
 
 template is_bitfield_enum(E)
@@ -39,6 +27,18 @@ private template has_bitfield_attr(Attrs...)
         enum has_bitfield_attr = has_bitfield_attr!(Attrs[1 .. $]);
 }
 
+const(E)* enum_from_key(E)(const(char)[] key) pure
+    if (is_enum!E)
+    => enum_info!E.value_for(key);
+
+const(char)[] enum_key_from_value(E)(EnumType!E value) pure
+    if (is_enum!E)
+    => enum_info!E.key_for(value);
+
+const(char)[] enum_key_by_decl_index(E)(size_t value) pure
+    if (is_enum!E)
+    => enum_info!E.key_by_decl_index(value);
+
 struct VoidEnumInfo
 {
     import urt.algorithm : binary_search;
@@ -48,7 +48,7 @@ nothrow @nogc:
     ushort count;
     ushort stride;
     uint type_hash;
-    bool bitfield;      // members combine as flags; text form is key1|key2|...
+    bool bitfield;
 
     const(char)[] key_for(const void* value, int function(const void* a, const void* b) pure nothrow @nogc pred) const pure
     {
@@ -103,7 +103,6 @@ nothrow @nogc:
         return null;
     }
 
-    // bitfield text form: keys joined with '|'; a bare number is also accepted
     long parse_flags(const(char)[] text, out bool ok) const
     {
         import urt.conv : parse_int_with_base;
@@ -134,8 +133,6 @@ nothrow @nogc:
         return r;
     }
 
-    // an exact key wins (declared compound keys print as themselves), then set flags emit
-    // their keys, and residual unknown bits (or zero) emit as trailing hex
     ptrdiff_t format_flags(long value, char[] buffer) const
     {
         import urt.conv : format_uint;
@@ -472,6 +469,34 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
 
     // build and return the object
     return new(*result) VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), value_ptr, key_ptr, str_data, lookup, cast(GetFun)&get_value!T);
+}
+
+size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc
+{
+    size_t total_string;
+    foreach (i; 0 .. info.count)
+    {
+        size_t l = info.key_by_sorted_index(i).length;
+        total_string += 2 + l + (l & 1);
+    }
+    size_t total = VoidEnumInfo.sizeof + info.stride*info.count;
+    total += (total & 1) + ushort.sizeof*info.count + info.count*3;
+    total += (total & 1) + total_string;
+    return total;
+}
+
+bool enum_info_equal(ref const VoidEnumInfo a, ref const VoidEnumInfo b) pure nothrow @nogc
+{
+    if (a.count != b.count || a.stride != b.stride || a.bitfield != b.bitfield || a.type_hash != b.type_hash)
+        return false;
+    if ((cast(const(ubyte)*)a._values)[0 .. a.count*a.stride] != (cast(const(ubyte)*)b._values)[0 .. b.count*b.stride])
+        return false;
+    foreach (i; 0 .. a.count)
+    {
+        if (a.key_by_sorted_index(i) != b.key_by_sorted_index(i))
+            return false;
+    }
+    return true;
 }
 
 

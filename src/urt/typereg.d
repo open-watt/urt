@@ -11,7 +11,7 @@ import urt.internal.traits : hasIndirections;
 import urt.lifetime;
 import urt.string.format : FormatArg, formatValue;
 import urt.traits : is_trivial, Unqual;
-import urt.variant : Variant;
+import urt.variant : ValidUserType, Variant;
 
 nothrow @nogc:
 
@@ -222,6 +222,25 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
         }
         enum var_fun = &variant_impl;
     }
+    // the guard must not instantiate Variant machinery: records are built from inside
+    // Variant's own ctor, and an eager compiles-check on it collapses under the cycle
+    else static if (!is(T == class) && ValidUserType!T && !hasIndirections!T &&
+                    __traits(compiles, (ref T a, ref T b) nothrow @nogc { b = a; }))
+    {
+        static bool variant_default(void* val, ref Variant var, bool to_variant) nothrow @nogc
+        {
+            if (to_variant)
+            {
+                var = Variant(*cast(T*)val);
+                return true;
+            }
+            if (!var.isUser!T)
+                return false;
+            *cast(T*)val = var.asUser!T;
+            return true;
+        }
+        enum var_fun = &variant_default;
+    }
     else
         enum var_fun = null;
 
@@ -305,7 +324,16 @@ unittest
     }
     enum idr = TypeRecordFor!(Ident, 3, 0, false, "ident");
     static assert(idr.variant !is null);
-    static assert(r.variant is null);
+
+    // no override: a synthesised structural marshal boxes the payload as itself
+    static assert(r.variant !is null);
+    Vec2 vv = Vec2(3, 4);
+    Variant vb;
+    assert(r.variant(&vv, vb, true));
+    assert(vb.isUser!Vec2);
+    Vec2 vback;
+    assert(r.variant(&vback, vb, false) && vback == vv);
+
     Ident src = Ident(42);
     Variant boxed;
     assert(idr.variant(&src, boxed, true));

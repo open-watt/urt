@@ -26,6 +26,15 @@
 //
 // function_id is opaque per chip; peripheral drivers know the right
 // value. The peripheral owns I/O direction once muxed.
+//
+// A backend may also implement the realtime edge sampler by setting has_gpio_sampler = true and exporting:
+//   Result gpio_sampler_open(uint chip, uint line, out GpioSampler, Pull, uint debounce_us);
+//   GpioSampler.drain(GpioEdge[])   non-blocking, events since the last call
+//   GpioSampler.close()
+//   linux also exposes GpioSampler.fd (reactor registration) and decode(), to turn the event bytes
+//     the reactor read off the fd into GpioEdge[].
+// chip selects the controller on hosted targets (/dev/gpiochipN); SoC backends have a single
+// implicit chip (chip == 0), line is the offset on it.
 module urt.driver.gpio;
 
 version (Bouffalo)
@@ -43,6 +52,7 @@ else
     enum bool has_pull_down = false;
     enum bool has_open_drain = false;
     enum bool has_pin_function_muxing = false;
+    enum bool has_gpio_sampler = false;
 
     uint gpio_count() nothrow @nogc => 0;
 }
@@ -60,6 +70,23 @@ enum DriveMode : ubyte
 {
     push_pull,
     open_drain,
+}
+
+
+// One captured edge from the realtime sampler: a native sample-clock tick with the level in bit 0,
+// so a record is 8 bytes and raw values stay monotonic in time. See the sampler contract at the top.
+struct GpioEdge
+{
+nothrow @nogc:
+    ulong raw;      // (tick << 1) | level: native sample-clock tick (GpioSampler.clock_hz), level in bit 0
+
+    this(ulong tick, bool level)
+    {
+        raw = (tick << 1) | ulong(level);
+    }
+
+    ulong tick() const pure => raw >> 1;
+    bool level() const pure => (raw & 1) != 0;
 }
 
 

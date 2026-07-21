@@ -22,6 +22,7 @@ enum bool has_pull_up = true;
 enum bool has_pull_down = true;
 enum bool has_open_drain = false;
 enum bool has_pin_function_muxing = true;
+enum bool has_gpio_sampler = false;
 
 
 uint gpio_count() => num_gpio;

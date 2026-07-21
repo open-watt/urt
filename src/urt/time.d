@@ -73,7 +73,27 @@ struct Time(Clock clock)
 nothrow @nogc:
 
     static if (clock == Clock.SystemTime)
+    {
         enum type_name = "dt";
+
+        // ticks are platform-epoch (FILETIME on Windows); canonical wire image is LE u64 unix-ns
+        ptrdiff_t serialise(void[] buffer) const
+        {
+            import urt.endian : storeLittleEndian;
+            if (buffer.length < 8)
+                return -1;
+            storeLittleEndian(cast(ulong*)buffer.ptr, unix_time_ns(this));
+            return 8;
+        }
+        ptrdiff_t deserialise(const(void)[] buffer)
+        {
+            import urt.endian : loadLittleEndian;
+            if (buffer.length < 8)
+                return -1;
+            this = from_unix_time_ns(loadLittleEndian(cast(const(ulong)*)buffer.ptr));
+            return 8;
+        }
+    }
 
     ulong ticks;
 
@@ -404,8 +424,6 @@ nothrow @nogc:
 struct DateTime
 {
 pure nothrow @nogc:
-
-    enum type_name = "dt";
 
     short year;
     Month month;

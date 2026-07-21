@@ -92,6 +92,9 @@ nothrow @nogc:
             auto arr = Array!Variant(Reserve, rh.nodeArray.length);
             foreach (ref i; rh.nodeArray)
                 arr.pushBack(i);
+            value.n = cast(inout(Variant)*)arr[].ptr;
+            count = cast(uint)arr.length;
+            emplace(&arr);
             flags = rh.flags;
         }
         else if ((rh.flags & Flags.NeedDestruction) == 0)
@@ -387,6 +390,8 @@ nothrow @nogc:
     {
         static if (is(Unqual!T == MonoTime))
             this(cast(SysTime)thing);
+        else static if (is(Unqual!T == DateTime))
+            this(get_sys_time(thing));
         else
         {
             alias dummy = MakeTypeDetails!T;
@@ -975,22 +980,13 @@ nothrow @nogc:
             return cast(MonoTime)asUser!SysTime;
         else static if (is(T == SysTime))
         {
-            static assert (EmbedUserType!SysTime && EmbedUserType!DateTime);
+            static assert (EmbedUserType!SysTime);
             if (isUser!SysTime)
                 return *cast(inout(SysTime)*)embed.ptr;
-            if (isUser!DateTime)
-                return get_sys_time(*cast(DateTime*)embed.ptr);
             assert(false, "Variant is not a timestamp");
         }
         else static if (is(T == DateTime))
-        {
-            static assert (EmbedUserType!SysTime && EmbedUserType!DateTime);
-            if (isUser!DateTime)
-                return *cast(inout(DateTime)*)embed.ptr;
-            if (isUser!SysTime)
-                return get_date_time(*cast(SysTime*)embed.ptr);
-            assert(false, "Variant is not a timestamp");
-        }
+            return get_date_time(asUser!SysTime);
         else
         {
             if (!isUser!U)
@@ -1528,6 +1524,11 @@ unittest
     assert(v[2]["bogus"].asBool == false);
     assert(v[3].asUser!IPAddr == IPAddrLit!"127.0.0.1");
     assert(v[4].asQuantity == Metres(10));
+
+    const(Variant)* object = &v[2];
+    Variant object_copy = Variant(*object);
+    assert(object_copy.isObject && object_copy["wow"].isTrue &&
+           !object_copy["bogus"].asBool);
 
     // null/empty-string equivalence: "" constructs as Null and must compare equal both ways
     Variant empty = Variant("");

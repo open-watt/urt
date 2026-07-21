@@ -5,11 +5,13 @@ module urt.typereg;
 
 import urt.attribute : fast_data;
 import urt.conv;
+import urt.endian : can_reverse_endian, reverse_endian;
 import urt.hash : fnv1a;
 import urt.internal.traits : hasIndirections;
 import urt.lifetime;
 import urt.string.format : FormatArg, formatValue;
 import urt.traits : is_trivial, Unqual;
+import urt.variant : Variant;
 
 nothrow @nogc:
 
@@ -29,10 +31,10 @@ struct TypeDetails
     ptrdiff_t function(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc stringify;
     int function(const void* a, const void* b, int type) pure nothrow @nogc cmp;
     ptrdiff_t function(void* val, void[] buffer, bool do_serialise) nothrow @nogc serialise;
+    bool function(void* val, ref Variant var, bool to_variant) nothrow @nogc variant;   // null = structural boxing (type_id + payload)
+    void function(const(void)* src, void* dst) nothrow @nogc byte_reverse;              // src == dest is allowed
 }
 
-// pods default to their LE memory image; a serialise handler overrides, and is mandatory
-// for non-pods to have a binary form at all
 bool binary_representable(ref const TypeDetails td) pure
     => td.pod || td.serialise !is null;
 
@@ -207,9 +209,36 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
     else
         enum ser_fun = null;
 
+    static if (__traits(hasMember, T, "to_variant") && __traits(hasMember, T, "from_variant"))
+    {
+        static bool variant_impl(void* val, ref Variant var, bool to_variant) nothrow @nogc
+        {
+            if (to_variant)
+            {
+                var = (cast(const(T)*)val).to_variant();
+                return true;
+            }
+            return T.from_variant(var, *cast(T*)val);
+        }
+        enum var_fun = &variant_impl;
+    }
+    else
+        enum var_fun = null;
+
+    static if (pod && ser_fun is null && can_reverse_endian!T)
+    {
+        static void byte_swap_impl(const(void)* src, void* dst) nothrow @nogc
+        {
+            reverse_endian(*cast(const(T)*)src, *cast(T*)dst);
+        }
+        enum swap_fun = &byte_swap_impl;
+    }
+    else
+        enum swap_fun = null;
+
     enum TypeRecordFor = TypeDetails(type_name, type_id, super_type_id, T.sizeof, T.alignof,
                                      embedded, pod, move_emplace, destroy_fun, &stringify, &compare,
-                                     ser_fun);
+                                     ser_fun, var_fun, swap_fun);
 }
 
 
@@ -247,4 +276,41 @@ unittest
     static assert(!b.pod && b.serialise !is null);
     assert(binary_representable(b));
     assert(!binary_representable(TypeRecordFor!(Boxed, 1, 0, false)));
+
+    // byte_reverse: synthesised member-recursive flip for pods; encoding owners get null
+    static assert(r.byte_reverse !is null);
+    static assert(b.byte_reverse is null);                                   // serialise pair owns encoding
+    static assert(TypeRecordFor!(Boxed, 1, 0, false).byte_reverse is null);  // not a pod
+    Vec2 v2 = Vec2(0x01020304, 0x0A0B0C0D);
+    r.byte_reverse(&v2, &v2);
+    assert(v2.x == 0x04030201 && v2.y == 0x0D0C0B0A);
+    Vec2 v2out;
+    r.byte_reverse(&v2, &v2out);
+    assert(v2out == Vec2(0x01020304, 0x0A0B0C0D));
+
+    // variant marshal override: boxed surface differs from payload
+    static struct Ident
+    {
+    nothrow @nogc:
+        uint id;
+        Variant to_variant() const
+            => Variant(long(id));
+        static bool from_variant(ref const Variant v, out Ident result)
+        {
+            if (!v.isNumber)
+                return false;
+            result.id = cast(uint)v.asLong;
+            return true;
+        }
+    }
+    enum idr = TypeRecordFor!(Ident, 3, 0, false, "ident");
+    static assert(idr.variant !is null);
+    static assert(r.variant is null);
+    Ident src = Ident(42);
+    Variant boxed;
+    assert(idr.variant(&src, boxed, true));
+    assert(boxed.isNumber && boxed.asLong == 42);
+    Ident back;
+    assert(idr.variant(&back, boxed, false));
+    assert(back.id == 42);
 }

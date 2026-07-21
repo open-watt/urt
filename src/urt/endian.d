@@ -293,6 +293,61 @@ T loadLittleEndian(T)(const(T)* src)
 }
 
 
+template can_reverse_endian(T)
+{
+    static if (is(T == union) || is(T == class) || is(T == interface) ||
+               is(T == U*, U) || is(T == U[], U))
+        enum can_reverse_endian = false;
+    else static if (is(T == struct))
+        enum can_reverse_endian = () {
+            bool r = true;
+            size_t end = 0;
+            static foreach (i; 0 .. T.tupleof.length)
+            {
+                // overlapping members (anonymous unions) fail the monotonic-offset check
+                r = r && can_reverse_endian!(typeof(T.tupleof[i])) && T.tupleof[i].offsetof >= end;
+                end = T.tupleof[i].offsetof + typeof(T.tupleof[i]).sizeof;
+            }
+            return r;
+        }();
+    else static if (is(T == U[N], U, size_t N))
+        enum can_reverse_endian = can_reverse_endian!U;
+    else
+        enum can_reverse_endian = T.sizeof == 1 || T.sizeof == 2 || T.sizeof == 4 || T.sizeof == 8;
+}
+
+void reverse_endian(T)(ref const T src, ref T dst)
+    if (can_reverse_endian!T)
+{
+    static if (is(T == struct))
+    {
+        static foreach (i; 0 .. T.tupleof.length)
+            reverse_endian(src.tupleof[i], dst.tupleof[i]);
+    }
+    else static if (is(T == U[N], U, size_t N))
+    {
+        static if (U.sizeof > 1)
+        {
+            foreach (i; 0 .. N)
+                reverse_endian(src[i], dst[i]);
+        }
+        else
+        {
+            if (&src !is &dst)
+                dst = src;
+        }
+    }
+    else static if (T.sizeof > 1)
+    {
+        import urt.meta : IntForWidth;
+        alias U = IntForWidth!(T.sizeof*8);
+        *cast(U*)&dst = byte_reverse(*cast(const(U)*)&src);
+    }
+    else
+        dst = src;
+}
+
+
 unittest
 {
     ubyte[8] test = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0];
@@ -314,4 +369,21 @@ unittest
     assert(nativeToEndian!(!LittleEndian)(0x1234) == test[0..2]);
     assert(nativeToEndian!(!LittleEndian)(0x12345678) == test[0..4]);
     assert(nativeToEndian!(!LittleEndian)(0x123456789ABCDEF0) == test);
+
+    // reverse_endian: member-recursive flip, padding-exact, aliasing-tolerant
+    static struct Flip { ubyte a; ushort b; uint c; }
+    Flip fl = Flip(1, 0x0203, 0x04050607);
+    reverse_endian(fl, fl);
+    assert(fl.a == 1 && fl.b == 0x0302 && fl.c == 0x07060504);
+    Flip fl2;
+    reverse_endian(fl, fl2);
+    assert(fl2 == Flip(1, 0x0203, 0x04050607));
+    ushort[2] arr = [0x0102, 0x0304];
+    reverse_endian(arr, arr);
+    assert(arr[0] == 0x0201 && arr[1] == 0x0403);
+    static struct Nested { Flip f; ushort w; }
+    static assert(can_reverse_endian!Nested && can_reverse_endian!(ushort[4]));
+    static struct HasUnion { union { ushort u; ubyte b2; } }
+    static assert(!can_reverse_endian!HasUnion);
+    static assert(!can_reverse_endian!(int*));
 }

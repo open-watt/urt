@@ -20,6 +20,25 @@ const(char)[] enum_key_by_decl_index(E)(size_t value) pure
     if (is_enum!E)
     => enum_info!E.key_by_decl_index(value);
 
+// UDA for enum declarations whose members combine as flags
+struct bitfield {}
+
+template is_bitfield_enum(E)
+    if (is(E == enum))
+{
+    enum is_bitfield_enum = has_bitfield_attr!(__traits(getAttributes, E));
+}
+
+private template has_bitfield_attr(Attrs...)
+{
+    static if (Attrs.length == 0)
+        enum has_bitfield_attr = false;
+    else static if (__traits(isSame, Attrs[0], bitfield))
+        enum has_bitfield_attr = true;
+    else
+        enum has_bitfield_attr = has_bitfield_attr!(Attrs[1 .. $]);
+}
+
 struct VoidEnumInfo
 {
     import urt.algorithm : binary_search;
@@ -29,6 +48,7 @@ nothrow @nogc:
     ushort count;
     ushort stride;
     uint type_hash;
+    bool bitfield;      // members combine as flags; text form is key1|key2|...
 
     const(char)[] key_for(const void* value, int function(const void* a, const void* b) pure nothrow @nogc pred) const pure
     {
@@ -73,7 +93,97 @@ nothrow @nogc:
         return i < count;
     }
 
+    const(char)[] key_for_raw(long value) const
+    {
+        foreach (i; 0 .. count)
+        {
+            if (_get_value(_values + i*stride, &this).asLong == value)
+                return get_key(_lookup_tables[count + i]);
+        }
+        return null;
+    }
+
+    // bitfield text form: keys joined with '|'; a bare number is also accepted
+    long parse_flags(const(char)[] text, out bool ok) const
+    {
+        import urt.conv : parse_int_with_base;
+        import urt.string : split, trimBack, trimFront;
+
+        long r = 0;
+        ok = true;
+        while (text.length)
+        {
+            const(char)[] key = text.split!'|'.trimFront.trimBack;
+            if (!key.length)
+                continue;
+            Variant v = value_for(key);
+            if (!v.isNull)
+            {
+                r |= v.asLong;
+                continue;
+            }
+            size_t taken;
+            long num = key.parse_int_with_base(&taken);
+            if (taken != key.length)
+            {
+                ok = false;
+                return 0;
+            }
+            r |= num;
+        }
+        return r;
+    }
+
+    // an exact key wins (declared compound keys print as themselves), then set flags emit
+    // their keys, and residual unknown bits (or zero) emit as trailing hex
+    ptrdiff_t format_flags(long value, char[] buffer) const
+    {
+        import urt.conv : format_uint;
+
+        size_t offset = 0;
+        if (const(char)[] exact = key_for_raw(value))
+            return append(buffer, offset, exact) ? offset : -1;
+
+        long residue = value;
+        foreach (i; 0 .. count)
+        {
+            long m = _get_value(_values + i*stride, &this).asLong;
+            if (m == 0 || (residue & m) != m)
+                continue;
+            residue &= ~m;
+            const(char)[] key = get_key(_lookup_tables[count + i]);
+            if (offset && !append(buffer, offset, "|"))
+                return -1;
+            if (!append(buffer, offset, key))
+                return -1;
+        }
+        if (residue || offset == 0)
+        {
+            if (offset && !append(buffer, offset, "|"))
+                return -1;
+            if (!append(buffer, offset, "0x"))
+                return -1;
+            ptrdiff_t n = format_uint(cast(ulong)residue, buffer.ptr ? buffer[offset .. $] : null, 16);
+            if (n < 0)
+                return -1;
+            offset += n;
+        }
+        return offset;
+    }
+
 private:
+    static bool append(char[] buffer, ref size_t offset, const(char)[] s) pure
+    {
+        if (buffer.ptr)
+        {
+            if (offset + s.length > buffer.length)
+                return false;
+            buffer[offset .. offset + s.length] = s[];
+        }
+        offset += s.length;
+        return true;
+    }
+
     const void* _values;
     const ushort* _keys;
     const char* _string_buffer;
@@ -83,11 +193,12 @@ private:
 
     const GetFun _get_value;
 
-    this(ubyte count, ushort stride, uint type_hash, inout void* values, inout ushort* keys, inout char* strings, inout ubyte* lookup, GetFun get_value) inout pure
+    this(ubyte count, ushort stride, uint type_hash, inout void* values, inout ushort* keys, inout char* strings, inout ubyte* lookup, GetFun get_value, bool bitfield = false) inout pure
     {
         this.count = count;
         this.stride = stride;
         this.type_hash = type_hash;
+        this.bitfield = bitfield;
         this._keys = keys;
         this._values = values;
         this._string_buffer = strings;
@@ -135,9 +246,9 @@ template EnumInfo(E)
             inout(VoidEnumInfo*) make_void() inout pure
                 => &_base;
 
-            this(ubyte count, uint type_hash, inout(E)* values, inout ushort* keys, inout char* strings, inout ubyte* lookup) inout pure
+            this(ubyte count, uint type_hash, inout(E)* values, inout ushort* keys, inout char* strings, inout ubyte* lookup, bool bitfield = false) inout pure
             {
-                _base = inout(VoidEnumInfo)(count, E.sizeof, type_hash, values, keys, strings, lookup, cast(GetFun)&get_value!V);
+                _base = inout(VoidEnumInfo)(count, E.sizeof, type_hash, values, keys, strings, lookup, cast(GetFun)&get_value!V, bitfield);
             }
 
             const(E)[] values() const pure
@@ -185,7 +296,8 @@ template enum_info(E)
         _values.ptr,
         _keys.ptr,
         _strings.ptr,
-        _lookup.ptr
+        _lookup.ptr,
+        is_bitfield_enum!E
     );
 
 private:
@@ -391,4 +503,32 @@ int key_compare(ushort a, const(char)[] b, const(char)* strings) pure
     import urt.string.uni : uni_compare;
     const(char)* s = strings + a;
     return uni_compare(s[0 .. s.key_length], b);
+}
+
+
+unittest
+{
+    @bitfield enum TestFlags : ubyte { a = 1, b = 2, c = 4, all = 7 }
+    enum TestPlain { x = 1, y = 2 }
+
+    static assert(is_bitfield_enum!TestFlags);
+    static assert(!is_bitfield_enum!TestPlain);
+
+    const VoidEnumInfo* info = enum_info!TestFlags.make_void();
+    assert(info.bitfield);
+
+    char[64] buf = void;
+    ptrdiff_t n = info.format_flags(3, buf);
+    assert(buf[0 .. n] == "a|b");
+    n = info.format_flags(7, buf);      // exact compound key wins over decomposition
+    assert(buf[0 .. n] == "all");
+    n = info.format_flags(9, buf);      // unknown bits keep their hex residue
+    assert(buf[0 .. n] == "a|0x8");
+    n = info.format_flags(0, buf);
+    assert(buf[0 .. n] == "0x0");
+
+    bool ok;
+    assert(info.parse_flags("a|b", ok) == 3 && ok);
+    assert(info.parse_flags("a | 0x8", ok) == 9 && ok);
+    assert(info.parse_flags("a|nope", ok) == 0 && !ok);
 }

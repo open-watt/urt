@@ -397,7 +397,12 @@ nothrow:
 
     Node* delete_node(_K)(Node* _pRoot, ref const _K key)
     {
-        return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_node, (void* from, void* to) {
+        static if (!is(K == _K))
+            static ptrdiff_t compare_search(const void* a, const void* b) pure
+                => Pred(*cast(K*)a, *cast(_K*)b);
+        else
+            alias compare_search = compare_node;
+        return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_search, &compare_node, (void* from, void* to) {
             // Copy the in-order successor's data to this Node
             (cast(Node*)to).kvp.key = (cast(Node*)from).kvp.key; // we can't move the key, because delete_node still needs to be able to find it
             (cast(Node*)to).kvp.value = (cast(Node*)from).kvp.value.move;
@@ -812,6 +817,25 @@ unittest
         }
         assert(count == 2);
     }
+
+    // Heterogeneous remove: search key type differs from the key type, so the search compare
+    // must not reinterpret the search key as a K (String vs slice have different layouts)
+    {
+        import urt.mem.allocator : defaultAllocator;
+        import urt.string.string : String, makeString;
+
+        Map!(String, int) map;
+        map.insert("alpha".makeString(defaultAllocator), 1);
+        map.insert("beta".makeString(defaultAllocator), 2);
+        map.insert("gamma".makeString(defaultAllocator), 3);
+
+        const(char)[] k = "beta";
+        assert(k in map);
+        map.remove(k);
+        assert(map.length == 2);
+        assert(k !in map);
+        assert(map["alpha"] == 1 && map["gamma"] == 3);
+    }
 }
 
 
@@ -1016,24 +1040,24 @@ BaseNode* insert_node(BaseNode* n, BaseNode* newnode, ref size_t num_nodes, Comp
     return n;
 }
 
-BaseNode* delete_node(BaseNode* root, const void* key, ref size_t num_nodes, CompFn pred, MoveFn move_fun, DestroyFn free_fun)
+BaseNode* delete_node(BaseNode* root, const void* key, ref size_t num_nodes, CompFn search_pred, CompFn pred, MoveFn move_fun, DestroyFn free_fun)
 {
     // STEP 1: PERFORM STANDARD BST DELETE
 
     if (root is null)
         return root;
 
-    ptrdiff_t c = pred(node_key(root), key);
+    ptrdiff_t c = search_pred(node_key(root), key);
 
     // If the key to be deleted is smaller than the root's key,
     // then it lies in left subtree
     if (c > 0)
-        root.left = delete_node(root.left, key, num_nodes, pred, move_fun, free_fun);
+        root.left = delete_node(root.left, key, num_nodes, search_pred, pred, move_fun, free_fun);
 
     // If the key to be deleted is greater than the root's key,
     // then it lies in right subtree
     else if (c < 0)
-        root.right = delete_node(root.right, key, num_nodes, pred, move_fun, free_fun);
+        root.right = delete_node(root.right, key, num_nodes, search_pred, pred, move_fun, free_fun);
 
     // if key is same as root's key, then this is the Node
     // to be deleted
@@ -1081,7 +1105,7 @@ BaseNode* do_delete(BaseNode* root, ref size_t num_nodes, CompFn pred, MoveFn mo
         move_fun(next, root);
 
         // Delete the node we just shifted
-        root.right = delete_node(root.right, node_key(next), num_nodes, pred, move_fun, free_fun);
+        root.right = delete_node(root.right, node_key(next), num_nodes, pred, pred, move_fun, free_fun);
     }
 
     return root;

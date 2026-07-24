@@ -1548,15 +1548,8 @@ import urt.string.format : formatValue, FormatArg;
 static assert(Variant.sizeof == 16);
 static assert(Variant.Type.max <= Variant.Flags.TypeMask);
 
-template UserTypeId(T)
-{
-    enum uint Hash = fnv1a(cast(const(ubyte)[])T.stringof); // maybe this isn't a good enough hash?
-    static if (!EmbedUserType!T)
-        enum uint UserTypeId = Hash;
-    else
-        enum ushort UserTypeId = cast(ushort)Hash ^ (Hash >> 16);
-}
-enum bool EmbedUserType(T) = is(T == struct) && T.sizeof <= Variant.embed.sizeof - 2 && T.alignof <= Variant.alignof;
+// public: typereg's UserTypeId/TypeDetailsFor consult this to fold ids for inline storage
+public enum bool EmbedUserType(T) = is(T == struct) && T.sizeof <= Variant.embed.sizeof - 2 && T.alignof <= Variant.alignof;
 enum bool UserTypeReturnByRef(T) = is(T == struct) && !EmbedUserType!T;
 
 ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
@@ -1569,45 +1562,3 @@ ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
     return true;
 }
 
-template MakeTypeDetails(T)
-{
-    static assert(is(Unqual!T == T), "Only instantiate for mutable types");
-
-    // TODO: we can probably NOT do this for class types, and just use RTTI instead...
-    shared static this()
-    {
-        register_type_record(TypeDetailsFor!T);
-    }
-
-    alias MakeTypeDetails = void;
-}
-
-ushort type_detail_index(T)() pure
-    if (ValidUserType!T)
-{
-    ushort count = (cast(ushort function() pure nothrow @nogc)&num_type_details)();
-    foreach (ushort i; 0 .. count)
-        if (get_type_details(i).type_id == UserTypeId!T)
-            return i;
-    assert(false, "Why wasn't the type registered?");
-}
-
-public template TypeDetailsFor(T)
-    if (is(Unqual!T == T) && (is(T == struct) || is(T == class)))
-{
-    static if (is(T == class) && is(T S == super))
-    {
-        alias Super = Unqual!S;
-        static if (!is(Super == Object))
-        {
-            alias dummy = MakeTypeDetails!Super;
-            enum SuperTypeId = UserTypeId!Super;
-        }
-        else
-            enum ushort SuperTypeId = 0;
-    }
-    else
-        enum ushort SuperTypeId = 0;
-
-    enum TypeDetailsFor = TypeRecordFor!(T, UserTypeId!T, SuperTypeId, EmbedUserType!T);
-}

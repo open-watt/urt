@@ -11,7 +11,7 @@ import urt.internal.traits : hasIndirections;
 import urt.lifetime;
 import urt.string.format : FormatArg, formatValue;
 import urt.traits : is_trivial, Unqual;
-import urt.variant : ValidUserType, Variant;
+import urt.variant : EmbedUserType, ValidUserType, Variant;
 
 nothrow @nogc:
 
@@ -98,6 +98,61 @@ template register_type(T, string type_name = type_name_of!T)
         register_type_record(TypeRecordFor!(T, fnv1a(cast(const(ubyte)[])type_name), 0, false, type_name));
     }
     alias register_type = void;
+}
+
+// identity for Variant-integrated types: embeddable types fold to 16 bits so Variant can
+// store the id inline (the registrar's contract on TypeDetails.embedded)
+template UserTypeId(T)
+{
+    enum uint Hash = fnv1a(cast(const(ubyte)[])T.stringof); // maybe this isn't a good enough hash?
+    static if (!EmbedUserType!T)
+        enum uint UserTypeId = Hash;
+    else
+        enum ushort UserTypeId = cast(ushort)Hash ^ (Hash >> 16);
+}
+
+template TypeDetailsFor(T)
+    if (is(Unqual!T == T) && (is(T == struct) || is(T == class)))
+{
+    static if (is(T == class) && is(T S == super))
+    {
+        alias Super = Unqual!S;
+        static if (!is(Super == Object))
+        {
+            alias dummy = MakeTypeDetails!Super;
+            enum SuperTypeId = UserTypeId!Super;
+        }
+        else
+            enum ushort SuperTypeId = 0;
+    }
+    else
+        enum ushort SuperTypeId = 0;
+
+    enum TypeDetailsFor = TypeRecordFor!(T, UserTypeId!T, SuperTypeId, EmbedUserType!T);
+}
+
+// instantiate anywhere to register T's Variant-integrated details at startup
+template MakeTypeDetails(T)
+{
+    static assert(is(Unqual!T == T), "Only instantiate for mutable types");
+
+    // TODO: we can probably NOT do this for class types, and just use RTTI instead...
+    shared static this()
+    {
+        register_type_record(TypeDetailsFor!T);
+    }
+
+    alias MakeTypeDetails = void;
+}
+
+ushort type_detail_index(T)() pure
+    if (ValidUserType!T)
+{
+    ushort count = (cast(ushort function() pure nothrow @nogc)&num_type_details)();
+    foreach (ushort i; 0 .. count)
+        if (get_type_details(i).type_id == UserTypeId!T)
+            return i;
+    assert(false, "Why wasn't the type registered?");
 }
 
 template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, string type_name = type_name_of!T)

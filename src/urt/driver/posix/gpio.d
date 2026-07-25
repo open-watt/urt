@@ -13,10 +13,11 @@
 // rates).
 module urt.driver.posix.gpio;
 
-import urt.driver.gpio : Pull, DriveMode, GpioEdge;
+import urt.driver.gpio : Pull, DriveMode, GpioDrainStatus, GpioEdge;
 import urt.file : File, FileOpenMode, save_file, open, close, read;
+import urt.internal.stdc.errno : EAGAIN, EWOULDBLOCK, EINTR;
 import urt.mem.temp : tconcat;
-import urt.result : Result;
+import urt.result : Result, errno_result;
 import urt.time : getTime, MonoTime, SysTime, msecs, get_sys_time, unix_time_ns, from_unix_time_ns;
 
 import sys = urt.internal.sys.posix;
@@ -102,8 +103,7 @@ void gpio_release(uint pin)
 // pigpiod daemon over its socket interface (127.0.0.1:8888) when running - the DMA sampler stamps
 // from the free-running system timer, immune to IRQ latency, and its notify socket is a pollable fd
 // like the cdev line fd. No Pi 5 (RP1) support, so we connect-to-detect. Both expose one surface:
-// an fd for the reactor, decode() (advances the slice, call in a loop until it returns 0; pigpio
-// reassembles reports split across reactor reads, cdev events are kernel-aligned), drain(), close().
+// an fd for readiness, drain() for backend-aware non-blocking reads and decoding, and close().
 //
 // pigpio ticks are 32-bit microseconds since boot (wrap ~71.6 min) from a non-POSIX clock;
 // correlate() anchors tick->wall via min-RTT get_current_tick probes.
@@ -125,14 +125,12 @@ nothrow @nogc:
     int fd = -1;                // cdev: the line fd. pigpio: the notification socket (reactor-watched).
     Backend backend;
 
-    size_t delegate(ref const(void)[] data, GpioEdge[] events) nothrow @nogc decode;
-
     bool valid() const pure
         => fd >= 0;
 
-    size_t drain(GpioEdge[] events)
+    GpioDrainStatus drain(GpioEdge[] events, out size_t count)
     {
-        size_t count = 0;
+        count = 0;
         ubyte[2048] buf = void;
         size_t rec = backend == Backend.pigpio ? gpioReport.sizeof : gpio_v2_line_event.sizeof;
         while (count < events.length)
@@ -141,13 +139,46 @@ nothrow @nogc:
             size_t want = (events.length - count) * rec;
             if (want > buf.length)
                 want = buf.length;
-            sys.ssize_t r = sys.read(fd, buf.ptr, want);
-            if (r <= 0)
-                break;
-            const(void)[] data = buf[0 .. cast(size_t)r];
+            size_t moved;
+            final switch (backend)
+            {
+                case Backend.cdev:
+                    sys.ssize_t r = sys.read(fd, buf.ptr, want);
+                    if (r == 0)
+                        return GpioDrainStatus.drained;
+                    if (r < 0)
+                    {
+                        uint error = errno_result().system_code;
+                        if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR)
+                            return GpioDrainStatus.drained;
+                        return GpioDrainStatus.error;
+                    }
+                    moved = cast(size_t)r;
+                    break;
+
+                case Backend.pigpio:
+                    Result result = sock.recv(sock.Socket(fd), buf[0 .. want],
+                                              sock.MsgFlags.dont_wait, &moved);
+                    if (result.failed)
+                    {
+                        switch (sock.socket_result(result))
+                        {
+                            case sock.SocketResult.would_block:
+                                return GpioDrainStatus.drained;
+                            case sock.SocketResult.connection_closed:
+                                return GpioDrainStatus.closed;
+                            default:
+                                return GpioDrainStatus.error;
+                        }
+                    }
+                    if (moved == 0)
+                        return GpioDrainStatus.drained;
+                    break;
+            }
+            const(void)[] data = buf[0 .. moved];
             count += decode(data, events[count .. $]);
         }
-        return count;
+        return GpioDrainStatus.drained;
     }
 
     void close()
@@ -185,17 +216,14 @@ nothrow @nogc:
     const(char)[] backend_name() const pure
         => backend == Backend.pigpio ? "pigpio" : "cdev";
 
-    // pigpio's fd is a TCP socket, so a 0-byte read is a daemon disconnect, not "drained"
-    bool socket_backed() const pure
-        => backend == Backend.pigpio;
-
     // both backends emit microsecond ticks (pigpio STC us; cdev CLOCK_MONOTONIC ns decimated to us)
     uint clock_hz() const pure
         => 1_000_000;
 
 private:
 
-    // pigpio state, main-thread only (reactor reads the socket, update() runs correlate()), so unlocked
+    // pigpio state is main-thread only: drain reads notifications and update() invokes correlate()
+    size_t delegate(ref const(void)[] data, GpioEdge[] events) nothrow @nogc decode;
     int _cmd_fd = -1;
     ubyte _gpio;
     ubyte _carry_len;
@@ -624,3 +652,41 @@ bool read_uint_file(const(char)[] path, out uint value)
     value = v;
     return true;
 }
+
+
+unittest
+{
+    enum AF_UNIX = 1;
+    enum SOCK_STREAM = 1;
+
+    int[2] sockets;
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.ptr) == 0);
+    assert(sock.set_socket_option(sock.Socket(sockets[0]), sock.SocketOption.non_blocking, true));
+
+    GpioSampler sampler;
+    sampler.backend = Backend.pigpio;
+    sampler.fd = sockets[0];
+    sampler._gpio = 4;
+    sampler.decode = &sampler.decode_pigpio;
+
+    gpioReport[2] reports = [
+        gpioReport(1, 0, 10, 1u << 4),
+        gpioReport(2, 0, 12, 0),
+    ];
+    size_t bytes = reports.sizeof;
+    assert(sys.write(sockets[1], reports.ptr, bytes) == bytes);
+    assert(sock.shutdown(sock.Socket(sockets[1]), sock.SocketShutdownMode.write));
+
+    GpioEdge[4] edges;
+    size_t count;
+    assert(sampler.drain(edges[], count) == GpioDrainStatus.closed);
+    assert(count == 2);
+    assert(edges[0].tick == 10 && edges[0].level);
+    assert(edges[1].tick == 12 && !edges[1].level);
+
+    sampler.close();
+    sock.close(sock.Socket(sockets[1]));
+}
+
+
+private extern(C) int socketpair(int domain, int type, int protocol, int* sockets);

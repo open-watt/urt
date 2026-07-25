@@ -29,10 +29,10 @@
 //
 // A backend may also implement the realtime edge sampler by setting has_gpio_sampler = true and exporting:
 //   Result gpio_sampler_open(uint chip, uint line, out GpioSampler, Pull, uint debounce_us);
-//   GpioSampler.drain(GpioEdge[])   non-blocking, events since the last call
+//   GpioSampler.drain(GpioEdge[], out size_t)   non-blocking, events plus source status
 //   GpioSampler.close()
-//   linux also exposes GpioSampler.fd (reactor registration) and decode(), to turn the event bytes
-//     the reactor read off the fd into GpioEdge[].
+//   linux also exposes GpioSampler.fd for readiness registration; the sampler owns all reads so
+//     socket closure and device-drained semantics remain backend-specific.
 // chip selects the controller on hosted targets (/dev/gpiochipN); SoC backends have a single
 // implicit chip (chip == 0), line is the offset on it.
 module urt.driver.gpio;
@@ -70,6 +70,13 @@ enum DriveMode : ubyte
 {
     push_pull,
     open_drain,
+}
+
+enum GpioDrainStatus : ubyte
+{
+    drained,
+    closed,
+    error,
 }
 
 

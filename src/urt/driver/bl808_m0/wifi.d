@@ -46,9 +46,9 @@ nothrow @nogc:
 // WiFi driver API
 // ====================================================================
 
-void wifi_hw_set_wake_callback(void function() nothrow @nogc cb)
+void wifi_hw_set_ready_callback(WifiReadyCallback cb)
 {
-    urt.driver.bl808_m0.bl_ops.wifi_set_wake_callback(cb);
+    urt.driver.bl808_m0.bl_ops.wifi_set_ready_callback(cb);
 }
 
 bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
@@ -60,6 +60,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 
     if (port != 0)
         return false;
+    reset_queues();
     _configured_channel = cfg.channel;
     _current_channel = 0;
     _sta_candidate_channel = 0;
@@ -228,8 +229,7 @@ void wifi_hw_close(ubyte port)
     _event_cb = null;
     _rx_cb = null;
     _raw_rx_cb = null;
-    _wifi_evt_head = 0;
-    _wifi_evt_tail = 0;
+    reset_queues();
     _sta_ap_idx = ubyte.max;
     _sta_pending_pmk[] = 0;
     _sta_pending_pmk_hex[] = 0;
@@ -576,6 +576,15 @@ void wifi_hw_set_rx_callback(ubyte port, WifiRxCallback cb)
     _rx_cb = cb;
 }
 
+uint wifi_hw_take_rx_drops(ubyte port)
+{
+    if (port != 0)
+        return 0;
+    uint drops = _wifi_rx_drops;
+    _wifi_rx_drops = 0;
+    return drops;
+}
+
 bool wifi_hw_raw_tx(ubyte port, const(ubyte)[] frame)
 {
     return bl_send_scanu_raw_send(&_bl_hw, cast(ubyte*)frame.ptr, cast(int)frame.length) == 0;
@@ -630,13 +639,33 @@ void wifi_hw_set_event_callback(ubyte port, WifiEventCallback cb)
     _event_cb = cb;
 }
 
-void wifi_hw_poll(ubyte port)
+uint wifi_hw_take_event_drops(ubyte port)
 {
+    if (port != 0)
+        return 0;
+    uint drops = _wifi_evt_drops;
+    _wifi_evt_drops = 0;
+    return drops;
+}
+
+bool wifi_hw_service(ubyte port, size_t budget)
+{
+    if (port != 0)
+        return false;
+    if (_servicing)
+        return queues_pending();
+
+    _servicing = true;
     if (_bl_hw.is_up && _bl_hw.ipc_env !is null)
         bl_irq_bottomhalf(&_bl_hw);
     wifi_fibre_pump();
-    dispatch_queued_events();
-    ap_auth_tick();
+    uint generation = _queue_generation;
+    dispatch_queued_callbacks(budget, generation);
+    if (generation == _queue_generation)
+        ap_auth_tick();
+    bool pending = queues_pending();
+    _servicing = false;
+    return pending;
 }
 
 
@@ -656,11 +685,33 @@ struct WifiQueuedEvent
     WifiEvent event;
     ubyte[6] mac;
     bool has_mac;
+    WifiStaDisconnectInfo disconnect;
 }
 enum size_t wifi_evt_cap = 16;
 __gshared WifiQueuedEvent[wifi_evt_cap] _wifi_evt_queue;
 __gshared uint _wifi_evt_head;
 __gshared uint _wifi_evt_tail;
+__gshared uint _wifi_evt_drops;
+
+enum size_t wifi_rx_frame_max = 1518;
+// The vendor owns RX storage only until tcpip_stack_input() returns. This
+// PSRAM copy queue preserves frames for budgeted main-context delivery.
+align(4) struct WifiQueuedRx
+{
+    ubyte[wifi_rx_frame_max] data;
+    ushort length;
+    ubyte vif;
+}
+// Eight maximum-sized frames consume about 12 KiB of the 1 MiB M0 PSRAM.
+enum size_t wifi_rx_cap = 8;
+__gshared WifiQueuedRx[wifi_rx_cap] _wifi_rx_queue;
+__gshared ubyte[wifi_rx_frame_max] _wifi_rx_dispatch_buffer;
+__gshared uint _wifi_rx_head;
+__gshared uint _wifi_rx_tail;
+__gshared uint _wifi_rx_drops;
+__gshared ubyte _service_cursor;
+__gshared bool _servicing;
+__gshared uint _queue_generation;
 
 @section(".sram_data.wifi") __gshared bl_hw _bl_hw;
 
@@ -875,10 +926,8 @@ extern(C) int tcpip_stack_input(void* swdesc, ubyte status, void* hwhdr, uint ms
         {
             _wpa_sta_rx_eapol_real(cast(ubyte*)(eth + 6), cast(ubyte*)(eth + 14), eth_len - 14);
         }
-        else if (_rx_cb !is null && eth_len <= 1518)
-        {
-            _rx_cb(Wifi(0), rx_vif, eth[0 .. eth_len]);
-        }
+        else if (_rx_cb !is null)
+            queue_rx(rx_vif, eth[0 .. eth_len]);
     }
 
     return -1;
@@ -926,31 +975,135 @@ private void install_msg_hdlrs()
 }
 
 
+private void reset_queues()
+{
+    ++_queue_generation;
+    _wifi_evt_head = 0;
+    _wifi_evt_tail = 0;
+    _wifi_evt_drops = 0;
+    _wifi_rx_head = 0;
+    _wifi_rx_tail = 0;
+    _wifi_rx_drops = 0;
+    _service_cursor = 0;
+}
+
+private bool queues_pending()
+{
+    return _wifi_evt_head != _wifi_evt_tail ||
+           _wifi_rx_head != _wifi_rx_tail;
+}
+
+private void queue_rx(WifiVif vif, const(ubyte)[] frame)
+{
+    if (frame.length > wifi_rx_frame_max ||
+        _wifi_rx_head - _wifi_rx_tail >= wifi_rx_cap)
+    {
+        ++_wifi_rx_drops;
+        wifi_signal_ready();
+        return;
+    }
+
+    auto slot = &_wifi_rx_queue[_wifi_rx_head & (wifi_rx_cap - 1)];
+    slot.data[0 .. frame.length] = frame;
+    slot.length = cast(ushort)frame.length;
+    slot.vif = cast(ubyte)vif;
+    _wifi_rx_head++;
+    wifi_signal_ready();
+}
+
 package void queue_event(WifiEvent event, const(void)* data)
 {
     if (_wifi_evt_head - _wifi_evt_tail >= wifi_evt_cap)
+    {
         _wifi_evt_tail++;
+        ++_wifi_evt_drops;
+    }
     auto slot = &_wifi_evt_queue[_wifi_evt_head & (wifi_evt_cap - 1)];
     slot.event = event;
     slot.has_mac = data !is null &&
         (event == WifiEvent.ap_sta_connected || event == WifiEvent.ap_sta_disconnected);
     if (slot.has_mac)
         slot.mac[] = (cast(const(ubyte)*)data)[0 .. 6];
+    if (event == WifiEvent.sta_disconnected)
+    {
+        slot.disconnect.reason = data is null
+            ? 0
+            : (cast(const(ushort)*)data)[1];
+        slot.disconnect.message = wifi_hw_sta_status_message(0);
+    }
     _wifi_evt_head++;
+    wifi_signal_ready();
 }
 
-private void dispatch_queued_events()
+private size_t dispatch_queued_callbacks(size_t budget, uint generation)
 {
     if (_event_cb is null)
-        return;
+        _wifi_evt_tail = _wifi_evt_head;
+    if (_rx_cb is null)
+        _wifi_rx_tail = _wifi_rx_head;
 
-    Wifi w = Wifi(0);
-    while (_wifi_evt_head != _wifi_evt_tail)
+    size_t dispatched;
+    uint empty_queues;
+    while (dispatched < budget && empty_queues < 2 &&
+           generation == _queue_generation)
     {
-        auto slot = &_wifi_evt_queue[_wifi_evt_tail & (wifi_evt_cap - 1)];
-        _wifi_evt_tail++;
-        _event_cb(w, slot.event, slot.has_mac ? slot.mac.ptr : null);
+        ubyte source = _service_cursor;
+        _service_cursor = cast(ubyte)((source + 1) % 2);
+        bool delivered = source == 0
+            ? dispatch_one_event()
+            : dispatch_one_rx();
+        if (delivered)
+        {
+            ++dispatched;
+            empty_queues = 0;
+        }
+        else
+            ++empty_queues;
     }
+    return dispatched;
+}
+
+private bool dispatch_one_event()
+{
+    auto cb = _event_cb;
+    if (cb is null)
+    {
+        _wifi_evt_tail = _wifi_evt_head;
+        return false;
+    }
+    if (_wifi_evt_head == _wifi_evt_tail)
+        return false;
+
+    auto slot = &_wifi_evt_queue[_wifi_evt_tail & (wifi_evt_cap - 1)];
+    WifiQueuedEvent queued = *slot;
+    _wifi_evt_tail++;
+    const(void)* event_data;
+    if (queued.event == WifiEvent.sta_disconnected)
+        event_data = &queued.disconnect;
+    else if (queued.has_mac)
+        event_data = queued.mac.ptr;
+    cb(Wifi(0), queued.event, event_data);
+    return true;
+}
+
+private bool dispatch_one_rx()
+{
+    auto cb = _rx_cb;
+    if (cb is null)
+    {
+        _wifi_rx_tail = _wifi_rx_head;
+        return false;
+    }
+    if (_wifi_rx_head == _wifi_rx_tail)
+        return false;
+
+    auto slot = &_wifi_rx_queue[_wifi_rx_tail & (wifi_rx_cap - 1)];
+    size_t length = slot.length;
+    WifiVif vif = cast(WifiVif)slot.vif;
+    _wifi_rx_dispatch_buffer[0 .. length] = slot.data[0 .. length];
+    _wifi_rx_tail++;
+    cb(Wifi(0), vif, _wifi_rx_dispatch_buffer[0 .. length]);
+    return true;
 }
 
 private int fw_vif_index(WifiVif vif)

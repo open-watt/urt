@@ -18,6 +18,7 @@
 module urt.driver.bl808_m0.bl_ops;
 
 import urt.attribute : section;
+import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
 
 version (BL808_M0):
 
@@ -378,17 +379,21 @@ __gshared AwakenEvent  _wifi_pending_event;
 
 extern(D)
 {
-    alias WifiWakeCallback = void function() nothrow @nogc;
-    private __gshared WifiWakeCallback _wifi_wake_callback;
+    alias WifiReadyHandler = void function() nothrow @nogc;
+    private shared size_t _wifi_ready_callback_bits;
 
-    public void wifi_set_wake_callback(WifiWakeCallback cb)
+    public void wifi_set_ready_callback(WifiReadyHandler cb)
     {
-        _wifi_wake_callback = cb;
+        atomicStore!(MemoryOrder.seq)(
+            _wifi_ready_callback_bits, cast(size_t)cb);
+        if (cb !is null)
+            cb();
     }
 
     public void wifi_signal_ready()
     {
-        auto cb = _wifi_wake_callback;
+        auto cb = cast(WifiReadyHandler)
+            atomicLoad!(MemoryOrder.seq)(_wifi_ready_callback_bits);
         if (cb !is null)
             cb();
     }

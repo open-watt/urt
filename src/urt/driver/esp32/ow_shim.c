@@ -393,20 +393,22 @@ int ow_wifi_ap_set_max_clients(uint8_t max_conn)
 // esp_wifi_internal_reg_rxcb gives us raw Ethernet frames before lwIP,
 // so the bridge/routing layer sees all traffic.
 
-typedef void (*ow_wifi_rx_cb_t)(const uint8_t *data, int len, int iface);
+// Return non-zero when the callback retains eb and assumes responsibility for
+// releasing it with ow_wifi_free_rx_buffer().
+typedef int (*ow_wifi_rx_cb_t)(const uint8_t *data, int len, int iface, void *eb);
 
 static ow_wifi_rx_cb_t ow_wifi_rx_callback;
 
 static esp_err_t ow_wifi_sta_rx(void *buffer, uint16_t len, void *eb)
 {
+    int retained = 0;
     if (ow_wifi_rx_callback)
-        ow_wifi_rx_callback((const uint8_t *)buffer, len, 0);
+        retained = ow_wifi_rx_callback((const uint8_t *)buffer, len, 0, eb);
 #ifdef OW_USE_LWIP
+    (void)retained;
     return esp_netif_receive(ow_wifi_netif_sta, buffer, len, eb);
 #else
-    // Internal stack consumes via ow_wifi_rx_callback; we own the eb buffer
-    // (esp_netif_receive normally frees it).
-    if (eb)
+    if (eb && !retained)
         esp_wifi_internal_free_rx_buffer(eb);
     return ESP_OK;
 #endif
@@ -414,15 +416,23 @@ static esp_err_t ow_wifi_sta_rx(void *buffer, uint16_t len, void *eb)
 
 static esp_err_t ow_wifi_ap_rx(void *buffer, uint16_t len, void *eb)
 {
+    int retained = 0;
     if (ow_wifi_rx_callback)
-        ow_wifi_rx_callback((const uint8_t *)buffer, len, 1);
+        retained = ow_wifi_rx_callback((const uint8_t *)buffer, len, 1, eb);
 #ifdef OW_USE_LWIP
+    (void)retained;
     return esp_netif_receive(ow_wifi_netif_ap, buffer, len, eb);
 #else
-    if (eb)
+    if (eb && !retained)
         esp_wifi_internal_free_rx_buffer(eb);
     return ESP_OK;
 #endif
+}
+
+void ow_wifi_free_rx_buffer(void *eb)
+{
+    if (eb)
+        esp_wifi_internal_free_rx_buffer(eb);
 }
 
 int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb)
@@ -459,7 +469,8 @@ static ow_wifi_promisc_cb_t ow_wifi_promisc_callback;
 
 static void ow_wifi_promisc_trampoline(void *buf, wifi_promiscuous_pkt_type_t type)
 {
-    if (!ow_wifi_promisc_callback || !buf)
+    // ESP-IDF reports WIFI_PKT_MISC with metadata but no payload.
+    if (!ow_wifi_promisc_callback || !buf || type == WIFI_PKT_MISC)
         return;
     const wifi_promiscuous_pkt_t *pkt = (const wifi_promiscuous_pkt_t *)buf;
     const wifi_pkt_rx_ctrl_t *rx = &pkt->rx_ctrl;

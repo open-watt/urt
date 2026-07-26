@@ -15,12 +15,18 @@ nothrow @nogc:
 static if (!__traits(compiles, wifi_max_ap_clients))
     enum ubyte wifi_max_ap_clients = ubyte.max;
 
-alias WifiWakeCallback = void function() nothrow @nogc;
+// May be called from task or interrupt context after deferred work becomes
+// ready, and synchronously during registration. The callback must be IRQ-safe,
+// non-blocking, @nogc, and nothrow. It may only signal or schedule service; it
+// must not call wifi_service or re-enter the driver. Calls may be repeated,
+// coalesced, or spurious. Registration is backend-global and remains active
+// across port close/open cycles until explicitly replaced or cleared.
+alias WifiReadyCallback = void function() nothrow @nogc;
 
-void wifi_set_wake_callback(WifiWakeCallback cb)
+void wifi_set_ready_callback(WifiReadyCallback cb)
 {
-    static if (__traits(compiles, wifi_hw_set_wake_callback(cb)))
-        wifi_hw_set_wake_callback(cb);
+    static if (__traits(compiles, wifi_hw_set_ready_callback(cb)))
+        wifi_hw_set_ready_callback(cb);
 }
 
 
@@ -93,6 +99,17 @@ enum WifiEvent : ubyte
     ap_sta_connected,     // a client joined our AP
     ap_sta_disconnected,  // a client left our AP
     scan_done,
+    sta_started,
+    sta_stopped,
+}
+
+static assert(WifiEvent.sta_connected == 0);
+static assert(WifiEvent.scan_done == 6);
+
+struct WifiStaDisconnectInfo
+{
+    int reason;
+    const(char)[] message;
 }
 
 struct WifiConfig
@@ -154,18 +171,21 @@ struct WifiStaInfo
     byte rssi;
 }
 
-// Called from ISR/driver when an Ethernet frame is received on a
-// virtual interface. Data includes the 14-byte Ethernet header.
+// Delivered by wifi_service() when an Ethernet frame is received on a virtual
+// interface. Data includes the 14-byte Ethernet header and remains valid only
+// until the callback returns.
 alias WifiRxCallback = void function(Wifi wifi, WifiVif vif, const(ubyte)[] data) nothrow @nogc;
 
-// Called from ISR/driver when a raw 802.11 frame is received
-// (promiscuous/monitor tap). Data is the full 802.11 frame
-// starting at the MAC header. Delivered independently of the
-// Ethernet RX callback - both can be active simultaneously.
+// Delivered by wifi_service() for a promiscuous/monitor frame. Data starts at
+// the 802.11 MAC header and remains valid only until the callback returns.
+// Raw and Ethernet RX can be active simultaneously.
 alias WifiRawRxCallback = void function(Wifi wifi, const(ubyte)[] frame, byte rssi, ubyte channel) nothrow @nogc;
 
 // Called when a wifi event occurs. Replaces per-event callbacks
 // to match the single-callback pattern used by the router layer.
+// data points to WifiStaDisconnectInfo for sta_disconnected, six MAC bytes
+// for AP station join/leave events, and is null for other events. Its lifetime
+// ends when the callback returns.
 alias WifiEventCallback = void function(Wifi wifi, WifiEvent event, const(void)* data) nothrow @nogc;
 
 struct Wifi
@@ -392,6 +412,26 @@ void wifi_set_rx_callback(ref Wifi wifi, WifiRxCallback cb)
         wifi_hw_set_rx_callback(wifi.port, cb);
 }
 
+uint wifi_take_rx_drops(ref Wifi wifi)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else static if (__traits(compiles, wifi_hw_take_rx_drops(wifi.port)))
+        return wifi_hw_take_rx_drops(wifi.port);
+    else
+        return 0;
+}
+
+uint wifi_take_event_drops(ref Wifi wifi)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else static if (__traits(compiles, wifi_hw_take_event_drops(wifi.port)))
+        return wifi_hw_take_event_drops(wifi.port);
+    else
+        return 0;
+}
+
 // Raw 802.11 frame TX/RX (monitor/promiscuous)
 
 // Transmit a raw 802.11 frame. Data must include the full MAC header.
@@ -414,6 +454,16 @@ void wifi_set_raw_rx_callback(ref Wifi wifi, WifiRawRxCallback cb)
         assert(false, "no WiFi on this platform");
     else
         wifi_hw_set_raw_rx_callback(wifi.port, cb);
+}
+
+uint wifi_take_raw_rx_drops(ref Wifi wifi)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else static if (__traits(compiles, wifi_hw_take_raw_rx_drops(wifi.port)))
+        return wifi_hw_take_raw_rx_drops(wifi.port);
+    else
+        return 0;
 }
 
 // Queries
@@ -481,14 +531,19 @@ void wifi_set_event_callback(ref Wifi wifi, WifiEventCallback cb)
         wifi_hw_set_event_callback(wifi.port, cb);
 }
 
-// Poll (for platforms without native event delivery)
+// Service deferred backend work in caller context. budget limits the number of
+// consumer callbacks delivered in one pass; platform bookkeeping may also run.
+// Returns true when work remains, in which case the caller must schedule
+// another pass without waiting for a new hardware event. Event, Ethernet RX,
+// and raw RX are independent sources, so their callbacks have no cross-source
+// order guarantee.
 
-void wifi_poll(ref Wifi wifi)
+bool wifi_service(ref Wifi wifi, size_t budget = 32)
 {
     static if (num_wifi == 0)
         assert(false, "no WiFi on this platform");
     else
-        wifi_hw_poll(wifi.port);
+        return wifi_hw_service(wifi.port, budget);
 }
 
 
@@ -519,7 +574,7 @@ unittest
             assert(port.is_open);
             assert(port.port == p);
 
-            wifi_poll(port);
+            wifi_service(port);
 
             wifi_close(port);
             assert(!port.is_open);

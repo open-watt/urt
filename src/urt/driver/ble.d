@@ -194,7 +194,14 @@ alias BLEWriteCallback = void function(BLE ble, BLEConn conn, ushort handle, BLE
 // data is only valid during callback.
 alias BLENotifyCallback = void function(BLE ble, BLEConn conn, ushort handle, const(ubyte)[] data) nothrow @nogc;
 
-alias BLEWakeCallback = void function() nothrow @nogc;
+// May be called from task or interrupt context after deferred work becomes
+// ready, and synchronously during registration. The callback must be IRQ-safe,
+// non-blocking, @nogc, and nothrow. It may only signal or schedule service; it
+// must not call ble_service or re-enter the driver. Calls may be repeated,
+// coalesced, or spurious. Registration is backend-global and remains active
+// across port close/open cycles until explicitly replaced or cleared.
+alias BLEReadyCallback = void function() nothrow @nogc;
+alias BLEWakeCallback = BLEReadyCallback;
 
 
 // ====================================================================
@@ -483,24 +490,73 @@ void ble_set_notify_callback(ref BLE ble, BLENotifyCallback cb)
         ble_hw_set_notify_callback(ble.port, cb);
 }
 
-void ble_set_wake_callback(ref BLE ble, BLEWakeCallback cb)
+void ble_set_ready_callback(ref BLE ble, BLEReadyCallback cb)
 {
     static if (num_ble == 0)
         assert(false, "no BLE on this platform");
+    else static if (__traits(compiles, ble_hw_set_ready_callback(cb)))
+        ble_hw_set_ready_callback(cb);
     else
         ble_hw_set_wake_callback(ble.port, cb);
+
+    if (cb !is null)
+        cb();
 }
 
-// --- Poll ---
+void ble_set_wake_callback(ref BLE ble, BLEWakeCallback cb)
+{
+    ble_set_ready_callback(ble, cb);
+}
 
-// Drive completions for platforms that don't deliver events natively.
-// Must be called periodically from the main loop.
+// Service deferred backend work in caller context. Backends with bounded
+// service support limit each pass to budget deferred events and return true
+// when work remains. Compatibility backends perform one complete legacy poll
+// and return false.
+bool ble_service(ref BLE ble, size_t budget = 32)
+{
+    static if (num_ble == 0)
+        assert(false, "no BLE on this platform");
+    else static if (__traits(compiles, ble_hw_service(ble.port, budget)))
+        return ble_hw_service(ble.port, budget);
+    else
+    {
+        ble_hw_poll(ble.port);
+        return false;
+    }
+}
+
+// Compatibility polling entry point. Bounded backends signal readiness again
+// when work remains.
 void ble_poll(ref BLE ble)
 {
     static if (num_ble == 0)
         assert(false, "no BLE on this platform");
     else
         ble_hw_poll(ble.port);
+}
+
+// Return and clear the number of incoming data reports the backend could not
+// deliver since the previous call. Control and operation-completion losses are
+// reported separately because they invalidate backend state rather than
+// representing received interface frames.
+uint ble_take_rx_drops(ref BLE ble)
+{
+    static if (num_ble == 0)
+        assert(false, "no BLE on this platform");
+    else static if (__traits(compiles, ble_hw_take_rx_drops(ble.port)))
+        return ble_hw_take_rx_drops(ble.port);
+    else
+        return 0;
+}
+
+uint ble_take_event_drops(ref BLE ble)
+{
+    static if (num_ble == 0)
+        assert(false, "no BLE on this platform");
+    else static if (__traits(compiles, ble_hw_take_event_drops(ble.port)))
+        return ble_hw_take_event_drops(ble.port);
+    else
+        return 0;
 }
 
 

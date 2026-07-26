@@ -1,13 +1,12 @@
-// ESP32 UART driver -- D wrapper over the C shim (ow_shim.c)
-//
-// The C shim calls ESP-IDF UART HAL directly (no FreeRTOS UART driver).
-// GPIO pin routing is done via the ROM GPIO matrix.
+// ESP32 UART driver -- D wrapper over the C shim (ow_shim.c).
 //
 // 3 UART ports: UART0 (console), UART1, UART2.
 // UART0 TX/RX defaults set by bootloader (typically GPIO43/44 on S3).
 module urt.driver.esp32.uart;
 
-import urt.driver.uart : Parity, StopBits, UartConfig;
+import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
+import urt.driver.uart : Parity, StopBits, Uart, UartCallbackContext, UartError,
+    UartConfig, UartRxCallback;
 
 nothrow @nogc:
 
@@ -25,20 +24,41 @@ else version (ESP32_H2) enum num_uarts = 2;
 else static assert(false, "unknown Espressif chip -- add num_uarts");
 
 enum uint uart_clock_hz = 80_000_000;
-enum bool has_irq_driven_uart = false;
+enum bool has_irq_driven_uart = true;
 enum bool has_dma_driven_uart = false;
 
-bool uart_hw_open(uint id, ref const UartConfig cfg)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
 {
     if (id >= num_uarts)
         return false;
+    if (cfg.rs485.enabled &&
+        (cfg.rs485.de_assert_us != 0 || cfg.rs485.de_deassert_us != 0 ||
+         cfg.rs485.turnaround_us != 0))
+        return false;
+
     byte tx = cfg.tx_gpio == ubyte.max ? -1 : cast(byte)cfg.tx_gpio;
     byte rx = cfg.rx_gpio == ubyte.max ? -1 : cast(byte)cfg.rx_gpio;
-    return ow_uart_open(id, cfg.baud_rate, cfg.data_bits, cast(ubyte)cfg.stop_bits, cast(ubyte)cfg.parity, tx, rx) != 0;
+    byte de = cfg.rs485.enabled && cfg.rs485.de_gpio != ubyte.max
+        ? cast(byte)cfg.rs485.de_gpio : -1;
+    atomicStore!(MemoryOrder.release)(_rx_callback_bits[id],
+                                      cast(size_t)rx_cb);
+    bool opened = ow_uart_open(id, cfg.baud_rate, cfg.data_bits,
+                               cast(ubyte)cfg.stop_bits,
+                               cast(ubyte)cfg.parity,
+                               tx, rx, cfg.rs485.enabled, de,
+                               cfg.rs485.de_active_high,
+                               &rx_ready) != 0;
+    if (!opened)
+        atomicStore!(MemoryOrder.release)(_rx_callback_bits[id],
+                                          cast(size_t)0);
+    return opened;
 }
 
 void uart_hw_close(uint id)
 {
+    if (id < num_uarts)
+        atomicStore!(MemoryOrder.release)(_rx_callback_bits[id],
+                                          cast(size_t)0);
     ow_uart_close(id);
 }
 
@@ -54,13 +74,12 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 
 void uart_hw_poll(uint id)
 {
-    // ESP32 UART HAL is polled via read/rx_pending -- no separate poll needed
+    ow_uart_poll(id);
 }
 
-bool uart_hw_check_errors(uint id)
+UartError uart_hw_check_errors(uint id)
 {
-    // TODO: check UART error status register via HAL
-    return false;
+    return cast(UartError)ow_uart_check_errors(id);
 }
 
 ptrdiff_t uart_hw_rx_pending(uint id)
@@ -86,15 +105,32 @@ void uart0_hw_puts(const(char)[] s)
 
 private:
 
+shared size_t[num_uarts] _rx_callback_bits;
+
+extern(C) void rx_ready(uint port, size_t available)
+{
+    if (port >= num_uarts)
+        return;
+    auto callback = cast(UartRxCallback)
+        atomicLoad!(MemoryOrder.acquire)(_rx_callback_bits[port]);
+    if (callback !is null)
+        callback(Uart(cast(ubyte)port), available, UartCallbackContext.task);
+}
+
 extern(C) nothrow @nogc
 {
     void esp_rom_uart_putc(char c) nothrow @nogc;
 
-    int ow_uart_open(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits, ubyte parity, byte tx_gpio, byte rx_gpio);
+    int ow_uart_open(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits,
+                     ubyte parity, byte tx_gpio, byte rx_gpio,
+                     bool rs485_enabled, byte de_gpio, bool de_active_high,
+                     void function(uint, size_t) nothrow @nogc rx_ready);
     void ow_uart_close(uint port);
+    void ow_uart_poll(uint port);
     int ow_uart_read(uint port, ubyte* buf, int len);
     int ow_uart_write(uint port, const(ubyte)* buf, int len);
     int ow_uart_rx_pending(uint port);
     int ow_uart_tx_idle(uint port);
     int ow_uart_flush(uint port);
+    int ow_uart_check_errors(uint port);
 }

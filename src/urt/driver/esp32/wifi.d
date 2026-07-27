@@ -4,8 +4,8 @@
 //   - ow_wifi_init/deinit: WIFI_INIT_CONFIG_DEFAULT macro, netif creation,
 //     event handler registration
 //   - ow_wifi_sta_config/ap_config: wifi_config_t struct construction
-//   - ow_wifi_set_rx_callback: RX trampolines that forward to D AND to
-//     esp_netif_receive (so lwIP still works)
+//   - ow_wifi_set_rx_callback: RX trampolines that queue frames for D AND
+//     forward to esp_netif_receive (so lwIP still works)
 //
 // Everything else (mode, connect, disconnect, tx, mac, channel, power)
 // calls ESP-IDF directly.
@@ -13,6 +13,7 @@
 // ESP32 has one WiFi port (port 0).
 module urt.driver.esp32.wifi;
 
+import urt.atomic : MemoryOrder, atomicExchange, atomicFetchAdd, atomicLoad, atomicStore;
 import urt.driver.wifi;
 
 nothrow @nogc:
@@ -35,9 +36,10 @@ static if (num_wifi > 0):
 
 bool wifi_hw_open(uint port, ref const WifiConfig cfg)
 {
-    if (_opened)
+    if (port >= num_wifi || _opened)
         return false;
 
+    reset_queues();
     if (ow_wifi_init() != 0)
         return false;
 
@@ -61,17 +63,18 @@ void wifi_hw_close(uint port)
 {
     if (!_opened)
         return;
-    ow_wifi_set_rx_callback(null);
-    ow_wifi_set_sta_callback(null);
-    ow_wifi_set_ap_callback(null);
-    esp_wifi_stop();
-    ow_wifi_deinit();
-    _opened = false;
     _event_cb = null;
     _rx_cb = null;
     _raw_rx_cb = null;
-    _wifi_evt_head = 0;
-    _wifi_evt_tail = 0;
+    ow_wifi_set_rx_callback(null);
+    ow_wifi_set_sta_callback(null);
+    ow_wifi_set_ap_callback(null);
+    ow_wifi_set_promiscuous_callback(null);
+    ow_wifi_set_promiscuous(0, 0);
+    reset_queues();
+    esp_wifi_stop();
+    ow_wifi_deinit();
+    _opened = false;
 }
 
 bool wifi_hw_set_mode(uint port, WifiMode mode)
@@ -137,13 +140,14 @@ const(char)[] wifi_hw_sta_status_message(uint port)
 {
     if (_sta_status_message.length != 0)
         return _sta_status_message;
-    return esp_wifi_sta_reason_message(_sta_disconnect_reason);
+    return esp_wifi_sta_reason_message(
+        atomicLoad!(MemoryOrder.acquire)(_sta_disconnect_reason));
 }
 
 bool wifi_hw_sta_connect(uint port)
 {
     _sta_status_message = null;
-    _sta_disconnect_reason = 0;
+    atomicStore!(MemoryOrder.release)(_sta_disconnect_reason, 0);
     auto rc = esp_wifi_connect();
     if (rc == ESP_OK)
         return true;
@@ -217,6 +221,20 @@ void wifi_hw_set_rx_callback(uint port, WifiRxCallback cb)
     ow_wifi_set_rx_callback(cb !is null ? &rx_trampoline : null);
 }
 
+uint wifi_hw_take_rx_drops(uint port)
+{
+    if (port >= num_wifi)
+        return 0;
+    return atomicExchange!(MemoryOrder.relaxed)(&_wifi_rx_drops, 0u);
+}
+
+uint wifi_hw_take_event_drops(uint port)
+{
+    if (port >= num_wifi)
+        return 0;
+    return atomicExchange!(MemoryOrder.relaxed)(&_wifi_evt_drops, 0u);
+}
+
 // Raw 802.11 TX/RX
 
 bool wifi_hw_raw_tx(uint port, const(ubyte)[] frame)
@@ -247,6 +265,24 @@ void wifi_hw_set_raw_rx_callback(uint port, WifiRawRxCallback cb)
     // correctly but content is wrong".
     enum uint WIFI_PROMIS_FILTER_MASK_ALL_WITH_FCSFAIL = 0xE00000FF;
     ow_wifi_set_promiscuous(1, WIFI_PROMIS_FILTER_MASK_ALL_WITH_FCSFAIL);
+}
+
+uint wifi_hw_take_raw_rx_drops(uint port)
+{
+    if (port >= num_wifi)
+        return 0;
+    return atomicExchange!(MemoryOrder.relaxed)(&_wifi_raw_rx_drops, 0u);
+}
+
+void wifi_hw_set_ready_callback(WifiReadyCallback cb)
+{
+    atomicStore!(MemoryOrder.seq)(_ready_cb_bits, cast(size_t)cb);
+
+    // Registration is itself a readiness edge. This closes the startup race
+    // where ESP-IDF can post STA_START before the frontend installs its
+    // callback; an empty service pass is harmless.
+    if (cb !is null)
+        cb();
 }
 
 bool wifi_hw_set_channel(uint port, ubyte primary)
@@ -291,22 +327,120 @@ void wifi_hw_set_event_callback(uint port, WifiEventCallback cb)
     _event_cb = cb;
 }
 
-void wifi_hw_poll(uint port)
+bool wifi_hw_service(uint port, size_t budget)
 {
-    if (_event_cb is null)
-        return;
+    if (port >= num_wifi)
+        return false;
+    // Callback code may initiate shutdown. Keep the entry published until the
+    // callback returns, block recursive consumers, and only advance its tail
+    // if shutdown did not reset the queues underneath this service pass.
+    if (_servicing)
+        return queues_pending();
 
-    Wifi w = Wifi(0);
-    while (_wifi_evt_head != _wifi_evt_tail)
+    _servicing = true;
+    uint generation = atomicLoad!(MemoryOrder.acquire)(_queue_generation);
+    Wifi w = Wifi(cast(ubyte)port);
+    size_t serviced;
+    uint empty_queues;
+
+    while (serviced < budget && empty_queues < 3 &&
+           generation == atomicLoad!(MemoryOrder.acquire)(_queue_generation))
     {
-        auto slot = &_wifi_evt_queue[_wifi_evt_tail & (wifi_evt_cap - 1)];
-        _wifi_evt_tail++;
-        _event_cb(w, slot.event, slot.has_mac ? slot.mac.ptr : null);
+        bool dispatched;
+        final switch (_service_cursor)
+        {
+            case 0:
+                dispatched = dispatch_one_event(w);
+                break;
+            case 1:
+                dispatched = dispatch_one_rx(w);
+                break;
+            case 2:
+                dispatched = dispatch_one_raw_rx(w);
+                break;
+        }
+        _service_cursor = cast(ubyte)((_service_cursor + 1) % 3);
+        if (dispatched)
+        {
+            ++serviced;
+            empty_queues = 0;
+        }
+        else
+            ++empty_queues;
     }
+
+    _servicing = false;
+    return queues_pending();
 }
 
-
 private:
+
+bool dispatch_one_event(Wifi wifi)
+{
+    uint tail = atomicLoad!(MemoryOrder.relaxed)(_wifi_evt_tail);
+    if (tail == atomicLoad!(MemoryOrder.acquire)(_wifi_evt_head))
+        return false;
+    auto slot = &_wifi_evt_queue[tail & (wifi_evt_cap - 1)];
+    WifiQueuedEvent queued = *slot;
+    uint generation = atomicLoad!(MemoryOrder.acquire)(_queue_generation);
+    if (_event_cb !is null)
+    {
+        const(void)* data;
+        if (queued.event == WifiEvent.sta_disconnected)
+            data = &queued.disconnect;
+        else if (queued.has_mac)
+            data = queued.mac.ptr;
+        _event_cb(wifi, queued.event, data);
+    }
+    if (generation == atomicLoad!(MemoryOrder.acquire)(_queue_generation))
+        atomicStore!(MemoryOrder.release)(_wifi_evt_tail, tail + 1);
+    return true;
+}
+
+bool dispatch_one_rx(Wifi wifi)
+{
+    uint tail = atomicLoad!(MemoryOrder.relaxed)(_wifi_rx_tail);
+    if (tail == atomicLoad!(MemoryOrder.acquire)(_wifi_rx_head))
+        return false;
+    auto slot = &_wifi_rx_queue[tail & (wifi_rx_cap - 1)];
+    version (UseInternalIPStack)
+    {
+        ubyte[wifi_rx_frame_max] frame = void;
+        size_t length = slot.length;
+        WifiVif vif = cast(WifiVif)slot.vif;
+        void* eb = slot.eb;
+        if (_rx_cb !is null)
+            frame[0 .. length] = slot.data[0 .. length];
+        slot.eb = null;
+        atomicStore!(MemoryOrder.release)(_wifi_rx_tail, tail + 1);
+        ow_wifi_free_rx_buffer(eb);
+        if (_rx_cb !is null)
+            _rx_cb(wifi, vif, frame[0 .. length]);
+    }
+    else
+    {
+        uint generation = atomicLoad!(MemoryOrder.acquire)(_queue_generation);
+        if (_rx_cb !is null)
+            _rx_cb(wifi, cast(WifiVif)slot.vif, slot.data[0 .. slot.length]);
+        if (generation == atomicLoad!(MemoryOrder.acquire)(_queue_generation))
+            atomicStore!(MemoryOrder.release)(_wifi_rx_tail, tail + 1);
+    }
+    return true;
+}
+
+bool dispatch_one_raw_rx(Wifi wifi)
+{
+    uint tail = atomicLoad!(MemoryOrder.relaxed)(_wifi_raw_rx_tail);
+    if (tail == atomicLoad!(MemoryOrder.acquire)(_wifi_raw_rx_head))
+        return false;
+    auto slot = &_wifi_raw_rx_queue[tail & (wifi_raw_rx_cap - 1)];
+    uint generation = atomicLoad!(MemoryOrder.acquire)(_queue_generation);
+    if (_raw_rx_cb !is null)
+        _raw_rx_cb(wifi, slot.data[0 .. slot.length], slot.rssi, slot.channel);
+    if (generation == atomicLoad!(MemoryOrder.acquire)(_queue_generation))
+        atomicStore!(MemoryOrder.release)(_wifi_raw_rx_tail, tail + 1);
+    return true;
+}
 
 enum int ESP_OK = 0;
 
@@ -327,45 +461,164 @@ __gshared bool _opened;
 __gshared WifiEventCallback _event_cb;
 __gshared WifiRxCallback _rx_cb;
 __gshared WifiRawRxCallback _raw_rx_cb;
-__gshared int _sta_disconnect_reason;
+shared size_t _ready_cb_bits;
+shared int _sta_disconnect_reason;
 __gshared const(char)[] _sta_status_message;
+__gshared ubyte _service_cursor;
+__gshared bool _servicing;
+shared uint _queue_generation;
 
+// ESP-IDF serialises each source onto one producer task: system events use
+// the default event task, while Ethernet and promiscuous RX use the WiFi
+// driver task. Each queue therefore has one producer and the OpenWatt reactor
+// is its sole consumer.
 struct WifiQueuedEvent
 {
     WifiEvent event;
     ubyte[6] mac;
     bool has_mac;
+    WifiStaDisconnectInfo disconnect;
 }
 enum size_t wifi_evt_cap = 8;
 __gshared WifiQueuedEvent[wifi_evt_cap] _wifi_evt_queue;
-__gshared uint _wifi_evt_head;
-__gshared uint _wifi_evt_tail;
+shared uint _wifi_evt_head;
+shared uint _wifi_evt_tail;
+shared uint _wifi_evt_drops;
 
-void push_wifi_evt(WifiEvent event, const ubyte* mac = null) nothrow @nogc
+enum size_t wifi_rx_frame_max = 1518;
+version (UseInternalIPStack)
 {
-    if (_wifi_evt_head - _wifi_evt_tail >= wifi_evt_cap)
-        _wifi_evt_tail++;
-    auto slot = &_wifi_evt_queue[_wifi_evt_head & (wifi_evt_cap - 1)];
+    // Descriptors retain ESP-IDF RX buffers, so queue depth is cheap and
+    // backpressure is governed by the driver's configured RX-buffer pool.
+    struct WifiQueuedRx
+    {
+        const(ubyte)* data;
+        void* eb;
+        ushort length;
+        ubyte vif;
+    }
+    enum size_t wifi_rx_cap = 32;
+}
+else
+{
+    // lwIP consumes the ESP-IDF buffer immediately, so this fallback owns a
+    // small aligned copy ring instead.
+    align(4) struct WifiQueuedRx
+    {
+        ubyte[wifi_rx_frame_max] data;
+        ushort length;
+        ubyte vif;
+    }
+    enum size_t wifi_rx_cap = 8;
+}
+__gshared WifiQueuedRx[wifi_rx_cap] _wifi_rx_queue;
+shared uint _wifi_rx_head;
+shared uint _wifi_rx_tail;
+shared uint _wifi_rx_drops;
+
+// sig_len is a 12-bit ESP-IDF field and includes the FCS.
+enum size_t wifi_raw_rx_frame_max = 4095;
+align(4) struct WifiQueuedRawRx
+{
+    ubyte[wifi_raw_rx_frame_max] data;
+    ushort length;
+    byte rssi;
+    ubyte channel;
+}
+// Two maximum-sized monitor frames consume 8.2 KiB. Promiscuous capture is a
+// sampled diagnostic stream; overruns are reported through raw RX drops.
+enum size_t wifi_raw_rx_cap = 2;
+__gshared WifiQueuedRawRx[wifi_raw_rx_cap] _wifi_raw_rx_queue;
+shared uint _wifi_raw_rx_head;
+shared uint _wifi_raw_rx_tail;
+shared uint _wifi_raw_rx_drops;
+
+void reset_queues() nothrow @nogc
+{
+    atomicFetchAdd!(MemoryOrder.acq_rel)(_queue_generation, 1u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_evt_head, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_evt_tail, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_evt_drops, 0u);
+    version (UseInternalIPStack)
+    {
+        uint tail = atomicLoad!(MemoryOrder.relaxed)(_wifi_rx_tail);
+        uint head = atomicLoad!(MemoryOrder.acquire)(_wifi_rx_head);
+        while (tail != head)
+        {
+            auto slot = &_wifi_rx_queue[tail & (wifi_rx_cap - 1)];
+            void* eb = slot.eb;
+            slot.eb = null;
+            ow_wifi_free_rx_buffer(eb);
+            ++tail;
+        }
+    }
+    atomicStore!(MemoryOrder.relaxed)(_wifi_rx_head, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_rx_tail, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_rx_drops, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_raw_rx_head, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_raw_rx_tail, 0u);
+    atomicStore!(MemoryOrder.relaxed)(_wifi_raw_rx_drops, 0u);
+    _service_cursor = 0;
+}
+
+bool queues_pending() nothrow @nogc
+{
+    return atomicLoad!(MemoryOrder.acquire)(_wifi_evt_head) !=
+               atomicLoad!(MemoryOrder.relaxed)(_wifi_evt_tail) ||
+           atomicLoad!(MemoryOrder.acquire)(_wifi_rx_head) !=
+               atomicLoad!(MemoryOrder.relaxed)(_wifi_rx_tail) ||
+           atomicLoad!(MemoryOrder.acquire)(_wifi_raw_rx_head) !=
+               atomicLoad!(MemoryOrder.relaxed)(_wifi_raw_rx_tail);
+}
+
+void notify_ready() nothrow @nogc
+{
+    auto cb = cast(WifiReadyCallback)
+        atomicLoad!(MemoryOrder.seq)(_ready_cb_bits);
+    if (cb !is null)
+        cb();
+}
+
+void push_wifi_evt(WifiEvent event, const ubyte* mac = null,
+                   const WifiStaDisconnectInfo* disconnect = null) nothrow @nogc
+{
+    uint head = atomicLoad!(MemoryOrder.relaxed)(_wifi_evt_head);
+    uint tail = atomicLoad!(MemoryOrder.acquire)(_wifi_evt_tail);
+    if (head - tail >= wifi_evt_cap)
+    {
+        atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_evt_drops, 1u);
+        notify_ready();
+        return;
+    }
+    auto slot = &_wifi_evt_queue[head & (wifi_evt_cap - 1)];
     slot.event = event;
     slot.has_mac = mac !is null;
     if (mac !is null)
         slot.mac[] = mac[0 .. 6];
-    _wifi_evt_head++;
+    if (disconnect !is null)
+        slot.disconnect = *disconnect;
+    atomicStore!(MemoryOrder.release)(_wifi_evt_head, head + 1);
+    notify_ready();
 }
 
 extern(C) void sta_event_trampoline(int event_id, void*, int data_len) nothrow @nogc
 {
-    if (event_id == WIFI_EVENT_STA_CONNECTED)
+    if (event_id == WIFI_EVENT_STA_START)
+        push_wifi_evt(WifiEvent.sta_started);
+    else if (event_id == WIFI_EVENT_STA_STOP)
+        push_wifi_evt(WifiEvent.sta_stopped);
+    else if (event_id == WIFI_EVENT_STA_CONNECTED)
     {
-        _sta_status_message = null;
-        _sta_disconnect_reason = 0;
+        atomicStore!(MemoryOrder.release)(_sta_disconnect_reason, 0);
         push_wifi_evt(WifiEvent.sta_connected);
     }
     else if (event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        _sta_disconnect_reason = data_len;
-        _sta_status_message = null;
-        push_wifi_evt(WifiEvent.sta_disconnected);
+        atomicStore!(MemoryOrder.release)(_sta_disconnect_reason, data_len);
+        WifiStaDisconnectInfo info;
+        info.reason = data_len;
+        info.message = esp_wifi_sta_reason_message(data_len);
+        push_wifi_evt(WifiEvent.sta_disconnected, null, &info);
     }
 }
 
@@ -459,29 +712,96 @@ extern(C) void ap_event_trampoline(int event_id, void* event_data, int) nothrow 
 
 // RX trampoline -- called from C shim's esp_wifi_internal_reg_rxcb handler.
 // The C shim also forwards to esp_netif_receive so lwIP still gets frames.
-extern(C) void rx_trampoline(const(ubyte)* data, int len, int iface) nothrow @nogc
+extern(C) int rx_trampoline(const(ubyte)* data, int len, int iface,
+                            void* eb) nothrow @nogc
 {
-    if (_rx_cb !is null && len > 0)
-        _rx_cb(Wifi(0), cast(WifiVif)iface, data[0 .. len]);
+    if (_rx_cb is null)
+        return 0;
+    if (data is null || len <= 0 || iface < 0 || iface > 1)
+    {
+        atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_rx_drops, 1u);
+        notify_ready();
+        return 0;
+    }
+    if (len > wifi_rx_frame_max)
+    {
+        atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_rx_drops, 1u);
+        notify_ready();
+        return 0;
+    }
+    version (UseInternalIPStack)
+    {
+        if (eb is null)
+        {
+            atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_rx_drops, 1u);
+            notify_ready();
+            return 0;
+        }
+    }
+
+    uint head = atomicLoad!(MemoryOrder.relaxed)(_wifi_rx_head);
+    uint tail = atomicLoad!(MemoryOrder.acquire)(_wifi_rx_tail);
+    if (head - tail >= wifi_rx_cap)
+    {
+        atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_rx_drops, 1u);
+        notify_ready();
+        return 0;
+    }
+
+    auto slot = &_wifi_rx_queue[head & (wifi_rx_cap - 1)];
+    slot.length = cast(ushort)len;
+    slot.vif = cast(ubyte)iface;
+    version (UseInternalIPStack)
+    {
+        slot.data = data;
+        slot.eb = eb;
+    }
+    else
+        slot.data[0 .. len] = data[0 .. len];
+    atomicStore!(MemoryOrder.release)(_wifi_rx_head, head + 1);
+    notify_ready();
+    version (UseInternalIPStack)
+        return 1;
+    else
+        return 0;
 }
 
 // Promiscuous trampoline -- called from C shim for every 802.11 frame the
 // radio decodes (including FCS-fail frames when the filter bit is set).
-// rx_state non-zero == FCS failed; we forward unchanged and let the
-// subscriber decide what to do with broken frames.
 extern(C) void promisc_trampoline(int type, int rssi, int channel,
                                   int rate, int fcs_fail, int len,
                                   const(ubyte)* payload) nothrow @nogc
 {
     if (_raw_rx_cb is null || len <= 0 || payload is null)
         return;
-    // Drop FCS-fail frames for now -- the raw RX callback signature has no
-    // place to surface the bad-FCS flag yet, and forwarding garbage frames
-    // confuses subscribers that assume valid framing. The driver-level RX
-    // dropped counter is bumped at the iface layer instead.
+    // The raw callback cannot surface bad-FCS frames without confusing
+    // subscribers that assume valid framing. This is deliberate filtering,
+    // not queue loss, so it does not contribute to the drop counter.
     if (fcs_fail)
         return;
-    _raw_rx_cb(Wifi(0), payload[0 .. len], cast(byte)rssi, cast(ubyte)channel);
+    if (len > wifi_raw_rx_frame_max)
+    {
+        atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_raw_rx_drops, 1u);
+        notify_ready();
+        return;
+    }
+
+    uint head = atomicLoad!(MemoryOrder.relaxed)(_wifi_raw_rx_head);
+    uint tail = atomicLoad!(MemoryOrder.acquire)(_wifi_raw_rx_tail);
+    if (head - tail >= wifi_raw_rx_cap)
+    {
+        atomicFetchAdd!(MemoryOrder.relaxed)(_wifi_raw_rx_drops, 1u);
+        notify_ready();
+        return;
+    }
+
+    auto slot = &_wifi_raw_rx_queue[head & (wifi_raw_rx_cap - 1)];
+    slot.length = cast(ushort)len;
+    slot.rssi = cast(byte)rssi;
+    slot.channel = cast(ubyte)channel;
+    slot.data[0 .. len] = payload[0 .. len];
+    atomicStore!(MemoryOrder.release)(_wifi_raw_rx_head, head + 1);
+    notify_ready();
 }
 
 // C shim functions (ow_shim.c) -- needed for macros, complex structs, netif
@@ -492,7 +812,9 @@ extern(C) nothrow @nogc
     int ow_wifi_sta_config(const(char)* ssid, const(char)* password, const(ubyte)* bssid);
     int ow_wifi_ap_config(const(char)* ssid, const(char)* password, ubyte channel, ubyte max_conn, ubyte hidden);
     int ow_wifi_ap_set_max_clients(ubyte max_conn);
-    int ow_wifi_set_rx_callback(void function(const(ubyte)*, int, int) nothrow @nogc cb);
+    int ow_wifi_set_rx_callback(
+        int function(const(ubyte)*, int, int, void*) nothrow @nogc cb);
+    void ow_wifi_free_rx_buffer(void* eb);
     void ow_wifi_set_sta_callback(void function(int, void*, int) nothrow @nogc);
     void ow_wifi_set_ap_callback(void function(int, void*, int) nothrow @nogc);
     int ow_wifi_set_promiscuous(int enable, uint filter_mask);

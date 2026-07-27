@@ -238,7 +238,7 @@ void bl_irq_bottomhalf(bl_hw* bl_hw);
 int  bl_shim_ipc_init(bl_hw* bl_hw, ipc_shared_env_tag* shared_mem);
 
 // libwifi.a entry point. Long-lived task; we spawn it on a fibre and pump
-// it from wifi_hw_poll. Param is unused by the blob (vendor SDK passes NULL).
+// it from wifi_hw_service. Param is unused by the blob (vendor SDK passes NULL).
 void wifi_main(void* param);
 
 struct phy_channel_info

@@ -3,12 +3,13 @@
 // needs C headers or static-inline access.
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "hal/uart_hal.h"
-#include "hal/uart_types.h"
-#include "hal/uart_periph.h"
-#include "esp_rom_gpio.h"
+#include "driver/uart.h"
 #include "esp_rom_serial_output.h"
+#include "soc/soc_caps.h"
+#include <stdatomic.h>
 #ifdef OW_USE_LWIP
 #include "lwip/netdb.h"
 #endif
@@ -96,20 +97,26 @@ uint32_t ow_gpio_count(void)
 }
 
 
-// -- UART HAL wrappers --
+// -- UART driver wrappers --
 
-#include "soc/soc_caps.h"
-#include "hal/uart_ll.h"
-#include "esp_private/periph_ctrl.h"
 #define NUM_UARTS SOC_UART_NUM
+#define UART_RX_BUFFER_SIZE 1024
+#define UART_TX_BUFFER_SIZE 1024
+#define UART_EVENT_QUEUE_SIZE 16
+#define UART_EVENT_TASK_STACK 3072
 
-static uart_hal_context_t uart_ctx[NUM_UARTS];
-static bool uart_initialized[NUM_UARTS];
+typedef void (*ow_uart_rx_ready_cb_t)(unsigned port, size_t available);
+
+static atomic_bool uart_initialized[NUM_UARTS];
+static QueueHandle_t uart_event_queue[NUM_UARTS];
+static TaskHandle_t uart_event_task[NUM_UARTS];
+static SemaphoreHandle_t uart_event_task_done[NUM_UARTS];
+static StaticSemaphore_t uart_event_task_done_storage[NUM_UARTS];
+static atomic_uint uart_errors[NUM_UARTS];
+static _Atomic(ow_uart_rx_ready_cb_t) uart_rx_ready[NUM_UARTS];
 
 // D enums: StopBits { half=0, one=1, one_point_five=2, two=3 }
 //          Parity   { none=0, even=1, odd=2, mark=3, space=4 }
-// HAL enums: UART_STOP_BITS_1=1, _1_5=2, _2=3
-//            UART_PARITY_DISABLE=0, _EVEN=2, _ODD=3
 static const uart_stop_bits_t stop_bits_map[] = {
     UART_STOP_BITS_1, UART_STOP_BITS_1, UART_STOP_BITS_1_5, UART_STOP_BITS_2
 };
@@ -118,106 +125,214 @@ static const uart_parity_t parity_map[] = {
     UART_PARITY_DISABLE, UART_PARITY_DISABLE
 };
 
+static void ow_uart_event_task(void *argument)
+{
+    unsigned port = (unsigned)(uintptr_t)argument;
+    uart_event_t event;
+
+    while (xQueueReceive(uart_event_queue[port], &event, portMAX_DELAY) == pdTRUE)
+    {
+        if (event.type == UART_EVENT_MAX)
+            break;
+
+        unsigned error = 0;
+        switch (event.type)
+        {
+            case UART_DATA:
+            {
+                size_t available = event.size;
+                uart_get_buffered_data_len((uart_port_t)port, &available);
+                ow_uart_rx_ready_cb_t callback = atomic_load_explicit(
+                    &uart_rx_ready[port], memory_order_acquire);
+                if (callback)
+                    callback(port, available);
+                continue;
+            }
+            case UART_BREAK:
+                error = 1u << 4;
+                break;
+            case UART_BUFFER_FULL:
+            case UART_FIFO_OVF:
+                error = 1u << 2;
+                uart_flush_input((uart_port_t)port);
+                break;
+            case UART_FRAME_ERR:
+                error = 1u << 0;
+                break;
+            case UART_PARITY_ERR:
+                error = 1u << 1;
+                break;
+            default:
+                continue;
+        }
+
+        atomic_fetch_or_explicit(&uart_errors[port], error, memory_order_relaxed);
+        ow_uart_rx_ready_cb_t callback = atomic_load_explicit(
+            &uart_rx_ready[port], memory_order_acquire);
+        if (callback)
+            callback(port, 0);
+    }
+
+    xSemaphoreGive(uart_event_task_done[port]);
+    vTaskDelete(NULL);
+}
+
 int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits,
                  uint8_t stop_bits, uint8_t parity,
-                 int8_t tx_gpio, int8_t rx_gpio)
+                 int8_t tx_gpio, int8_t rx_gpio,
+                 bool rs485_enabled, int8_t de_gpio, bool de_active_high,
+                 ow_uart_rx_ready_cb_t rx_ready)
 {
-    if (port >= NUM_UARTS)
+    if (port >= NUM_UARTS ||
+        atomic_load_explicit(&uart_initialized[port], memory_order_acquire) ||
+        data_bits < 5 || data_bits > 8)
         return 0;
 
-    // Enable peripheral clock before touching any registers
-    PERIPH_RCC_ATOMIC()
+    uart_config_t config = {0};
+    config.baud_rate = (int)baud_rate;
+    config.data_bits = (uart_word_length_t)(UART_DATA_5_BITS + data_bits - 5);
+    config.parity = parity < sizeof(parity_map) / sizeof(parity_map[0])
+        ? parity_map[parity] : UART_PARITY_DISABLE;
+    config.stop_bits = stop_bits < sizeof(stop_bits_map) / sizeof(stop_bits_map[0])
+        ? stop_bits_map[stop_bits] : UART_STOP_BITS_1;
+    config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    config.source_clk = UART_SCLK_DEFAULT;
+
+    uart_port_t uart = (uart_port_t)port;
+    if (uart_param_config(uart, &config) != ESP_OK ||
+        uart_set_pin(uart, tx_gpio, rx_gpio, de_gpio, UART_PIN_NO_CHANGE) != ESP_OK ||
+        uart_driver_install(uart, UART_RX_BUFFER_SIZE, UART_TX_BUFFER_SIZE,
+                            UART_EVENT_QUEUE_SIZE, &uart_event_queue[port], 0) != ESP_OK)
     {
-        uart_ll_enable_bus_clock(port, true);
-        uart_ll_reset_register(port);
+        uart_event_queue[port] = NULL;
+        return 0;
     }
 
-    // Set device pointer before calling hal_init (v6 API expects it pre-set)
-    uart_ctx[port].dev = UART_LL_GET_HW(port);
-    uart_hal_init(&uart_ctx[port], port);
-
-    int __DECLARE_RCC_ATOMIC_ENV __attribute__((unused));
-    uart_ll_set_sclk(uart_ctx[port].dev, UART_SCLK_DEFAULT);
-    uart_ll_set_baudrate(uart_ctx[port].dev, baud_rate, 80000000);
-    uart_ll_set_data_bit_num(uart_ctx[port].dev, data_bits - 5);
-    uart_ll_set_stop_bits(uart_ctx[port].dev, stop_bits < sizeof(stop_bits_map) ? stop_bits_map[stop_bits] : 1);
-    uart_ll_set_parity(uart_ctx[port].dev, parity < sizeof(parity_map)/sizeof(parity_map[0]) ? parity_map[parity] : UART_PARITY_DISABLE);
-
-    uart_hal_rxfifo_rst(&uart_ctx[port]);
-    uart_hal_txfifo_rst(&uart_ctx[port]);
-
-    // GPIO pin routing -- UART0 defaults (TX=43, RX=44) set by bootloader.
-    // For non-default pins or UART1/2, route via GPIO matrix.
-    if (tx_gpio >= 0)
+    uint32_t inverse = rs485_enabled && !de_active_high
+        ? UART_SIGNAL_RTS_INV : 0;
+    if (uart_set_line_inverse(uart, inverse) != ESP_OK)
     {
-        esp_rom_gpio_pad_select_gpio(tx_gpio);
-        esp_rom_gpio_connect_out_signal(tx_gpio,
-            uart_periph_signal[port].pins[SOC_UART_PERIPH_SIGNAL_TX].signal, false, false);
+        uart_driver_delete(uart);
+        uart_event_queue[port] = NULL;
+        return 0;
     }
-    if (rx_gpio >= 0)
+    if (rs485_enabled &&
+        uart_set_mode(uart, UART_MODE_RS485_HALF_DUPLEX) != ESP_OK)
     {
-        esp_rom_gpio_pad_select_gpio(rx_gpio);
-        esp_rom_gpio_pad_pullup_only(rx_gpio);
-        esp_rom_gpio_connect_in_signal(rx_gpio,
-            uart_periph_signal[port].pins[SOC_UART_PERIPH_SIGNAL_RX].signal, false);
+        uart_driver_delete(uart);
+        uart_event_queue[port] = NULL;
+        return 0;
     }
 
-    uart_initialized[port] = true;
+    if (!uart_event_task_done[port])
+        uart_event_task_done[port] = xSemaphoreCreateBinaryStatic(
+            &uart_event_task_done_storage[port]);
+    if (!uart_event_task_done[port])
+    {
+        uart_driver_delete(uart);
+        uart_event_queue[port] = NULL;
+        return 0;
+    }
+    xSemaphoreTake(uart_event_task_done[port], 0);
+
+    atomic_store_explicit(&uart_errors[port], 0, memory_order_relaxed);
+    atomic_store_explicit(&uart_rx_ready[port], rx_ready, memory_order_release);
+    atomic_store_explicit(&uart_initialized[port], true, memory_order_release);
+    if (xTaskCreate(ow_uart_event_task, "ow-uart", UART_EVENT_TASK_STACK,
+                    (void *)(uintptr_t)port, tskIDLE_PRIORITY + 2,
+                    &uart_event_task[port]) != pdPASS)
+    {
+        atomic_store_explicit(&uart_initialized[port], false,
+                              memory_order_release);
+        atomic_store_explicit(&uart_rx_ready[port], NULL,
+                              memory_order_release);
+        uart_driver_delete(uart);
+        uart_event_queue[port] = NULL;
+        return 0;
+    }
     return 1;
 }
 
 void ow_uart_close(unsigned port)
 {
-    if (port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS ||
+        !atomic_exchange_explicit(&uart_initialized[port], false,
+                                  memory_order_acq_rel))
         return;
-    uart_hal_txfifo_rst(&uart_ctx[port]);
-    uart_hal_rxfifo_rst(&uart_ctx[port]);
-    PERIPH_RCC_ATOMIC()
+    atomic_store_explicit(&uart_rx_ready[port], NULL, memory_order_release);
+    if (uart_event_task[port])
     {
-        uart_ll_enable_bus_clock(port, false);
+        configASSERT(xTaskGetCurrentTaskHandle() != uart_event_task[port]);
+        uart_event_t shutdown = { .type = UART_EVENT_MAX };
+        xQueueSendToFront(uart_event_queue[port], &shutdown, portMAX_DELAY);
+        xSemaphoreTake(uart_event_task_done[port], portMAX_DELAY);
+        uart_event_task[port] = NULL;
     }
-    uart_initialized[port] = false;
+    uart_driver_delete((uart_port_t)port);
+    uart_event_queue[port] = NULL;
 }
 
 int32_t ow_uart_read(unsigned port, uint8_t *buf, int32_t len)
 {
-    if (port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS ||
+        !atomic_load_explicit(&uart_initialized[port], memory_order_acquire) ||
+        !buf || len <= 0)
         return 0;
-    int rd_len = (int)len;
-    uart_hal_read_rxfifo(&uart_ctx[port], buf, &rd_len);
-    return rd_len;
+    return uart_read_bytes((uart_port_t)port, buf, (uint32_t)len, 0);
 }
 
 int32_t ow_uart_write(unsigned port, const uint8_t *buf, int32_t len)
 {
-    if (port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS ||
+        !atomic_load_explicit(&uart_initialized[port], memory_order_acquire) ||
+        !buf || len <= 0)
         return 0;
-    uint32_t written = 0;
-    uart_hal_write_txfifo(&uart_ctx[port], buf, (uint32_t)len, &written);
-    return (int32_t)written;
+    size_t available = 0;
+    if (uart_get_tx_buffer_free_size((uart_port_t)port, &available) != ESP_OK)
+        return -1;
+    if ((size_t)len > available)
+        len = (int32_t)available;
+    return len > 0 ? uart_write_bytes((uart_port_t)port, buf, (size_t)len) : 0;
+}
+
+void ow_uart_poll(unsigned port)
+{
+    (void)port;
 }
 
 int32_t ow_uart_rx_pending(unsigned port)
 {
-    if (port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS ||
+        !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
         return 0;
-    return (int32_t)uart_ll_get_rxfifo_len(uart_ctx[port].dev);
+    size_t available = 0;
+    return uart_get_buffered_data_len((uart_port_t)port, &available) == ESP_OK
+        ? (int32_t)available : 0;
 }
 
 int ow_uart_tx_idle(unsigned port)
 {
-    if (port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS ||
+        !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
         return 1;
-    return uart_ll_is_tx_idle(uart_ctx[port].dev) ? 1 : 0;
+    return uart_wait_tx_done((uart_port_t)port, 0) == ESP_OK;
 }
 
 int32_t ow_uart_flush(unsigned port)
 {
-    if (port >= NUM_UARTS || !uart_initialized[port])
+    if (port >= NUM_UARTS ||
+        !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
         return 0;
-    while (!uart_ll_is_tx_idle(uart_ctx[port].dev))
-    {}
-    return 0;
+    return uart_wait_tx_done((uart_port_t)port, portMAX_DELAY) == ESP_OK ? 0 : -1;
+}
+
+int ow_uart_check_errors(unsigned port)
+{
+    if (port >= NUM_UARTS ||
+        !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
+        return 0;
+    return (int)atomic_exchange_explicit(&uart_errors[port], 0,
+                                          memory_order_relaxed);
 }
 
 // -- WiFi wrappers --

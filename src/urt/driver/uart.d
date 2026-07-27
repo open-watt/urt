@@ -33,6 +33,11 @@ enum UartError : ubyte
     break_   = 1 << 4,
 }
 
+static assert(UartError.framing == 1 << 0);
+static assert(UartError.parity == 1 << 1);
+static assert(UartError.overrun == 1 << 2);
+static assert(UartError.break_ == 1 << 4);
+
 enum StopBits : ubyte
 {
     half,
@@ -94,9 +99,20 @@ struct UartConfig
     Rs485Config rs485;
 }
 
-// Called from ISR/DMA when received data is available in the RX buffer.
-// rx_avail: number of bytes ready to read.
-alias UartRxCallback = void function(Uart uart, size_t rx_avail) nothrow @nogc;
+enum UartCallbackContext : ubyte
+{
+    task,
+    interrupt,
+}
+
+// Called when received data is available in the driver's RX buffer, or with
+// rx_avail == 0 when status/error state changes. rx_avail is a snapshot; the
+// callback only signals the consumer and uart_read() owns delivery/draining.
+// It must be non-blocking and must not call back into the UART driver.
+// Interrupt-context callbacks return whether the interrupted platform should
+// yield to a woken task. Task-context backends ignore the return value.
+alias UartRxCallback = bool function(Uart uart, size_t rx_avail,
+                                     UartCallbackContext context) nothrow @nogc;
 
 // Called from ISR/DMA when TX buffer space becomes available (e.g. FIFO
 // drains below threshold). The callee should feed more data via uart_write.
@@ -193,7 +209,16 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, size_t buf
         if (port >= num_uarts)
             return InternalResult.invalid_parameter;
 
-        if (!uart_hw_open(port, cfg))
+        static if (__traits(compiles, uart_hw_open(port, cfg, rx_cb)))
+            bool opened = uart_hw_open(port, cfg, rx_cb);
+        else
+        {
+            if (rx_cb !is null)
+                return InternalResult.unsupported;
+            bool opened = uart_hw_open(port, cfg);
+        }
+
+        if (!opened)
             return InternalResult.failed;
 
         uart.port = port;
@@ -396,7 +421,13 @@ UartError uart_check_errors(ref Uart uart)
     static if (num_uarts == 0)
         assert(false, "no UART on this platform");
     else
-        return uart_hw_check_errors(uart.port) ? UartError.framing : UartError.none;
+    {
+        auto error = uart_hw_check_errors(uart.port);
+        static if (is(typeof(error) == UartError))
+            return error;
+        else
+            return error ? UartError.framing : UartError.none;
+    }
 }
 
 void uart_poll(ref Uart uart)

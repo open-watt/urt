@@ -336,6 +336,8 @@ template enum_info(E)
 
     enum ubyte num_items = enum_members.length;
     static assert(num_items <= ubyte.max, "Too many enum items!");
+    // keys and display names are reached by ushort offsets carrying ushort length prefixes
+    static assert(total_strings <= ushort.max, "Enum key and display name data too large: " ~ E.stringof);
 
     __gshared immutable enum_info = immutable(EnumInfo!E)(
         num_items,
@@ -557,6 +559,8 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
                 total_string += 2 + d.length + (d.length & 1);
         }
     }
+    // keys and display names are reached by ushort offsets carrying ushort length prefixes
+    assert(total_string <= ushort.max, "Enum key and display name data too large");
 
     // calculate the total size
     size_t total_size = VoidEnumInfo.sizeof + T.sizeof*count;

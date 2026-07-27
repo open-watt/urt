@@ -12,7 +12,7 @@ module urt.driver.windows.ble;
 
 version (Windows):
 
-import urt.atomic : atomicFetchAdd, atomicFetchSub, atomicLoad, atomicStore;
+import urt.atomic : MemoryOrder, atomicFetchAdd, atomicFetchSub, atomicLoad, atomicStore;
 import urt.log;
 import urt.mem.allocator : defaultAllocator;
 import urt.sync.mpmc : ThreadSafeQueue;
@@ -74,7 +74,6 @@ void ble_hw_close(uint port)
     _read_cb = null;
     _write_cb = null;
     _notify_cb = null;
-    _wake_cb = null;
 }
 
 // --- Scanning ---
@@ -436,7 +435,10 @@ void ble_hw_set_discover_callback(uint port, BLEDiscoverCallback cb) { _discover
 void ble_hw_set_read_callback(uint port, BLEReadCallback cb)       { _read_cb = cb; }
 void ble_hw_set_write_callback(uint port, BLEWriteCallback cb)     { _write_cb = cb; }
 void ble_hw_set_notify_callback(uint port, BLENotifyCallback cb)   { _notify_cb = cb; }
-void ble_hw_set_wake_callback(uint port, BLEWakeCallback cb)       { _wake_cb = cb; }
+void ble_hw_set_ready_callback(BLEReadyCallback cb)
+{
+    atomicStore!(MemoryOrder.seq)(_ready_callback_bits, cast(size_t)cb);
+}
 
 // --- Poll ---
 
@@ -584,13 +586,16 @@ __gshared BLEDiscoverCallback _discover_cb;
 __gshared BLEReadCallback _read_cb;
 __gshared BLEWriteCallback _write_cb;
 __gshared BLENotifyCallback _notify_cb;
-__gshared BLEWakeCallback _wake_cb;
+shared size_t _ready_callback_bits;
 __gshared AsyncCompletedHandler _completed_handler;
+
+static assert(BLEReadyCallback.sizeof == size_t.sizeof);
 
 void signal_wake()
 {
-    if (_wake_cb !is null)
-        _wake_cb();
+    auto callback = cast(BLEReadyCallback)atomicLoad!(MemoryOrder.seq)(_ready_callback_bits);
+    if (callback !is null)
+        callback();
 }
 
 void register_completion(IInspectable async_op)

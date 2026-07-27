@@ -244,8 +244,8 @@ private:
 
     const(char)[] get_display(size_t i) const pure
     {
-        // entries without a display name hold the null-string sentinel at offset 2
-        if (_display is null)
+        // offset 0 marks no display name; a real string never starts there, it needs its length prefix first
+        if (_display is null || _display[i] == 0)
             return null;
         const(char)* s = _string_buffer + _display[i];
         return s[0 .. s.key_length];
@@ -359,7 +359,7 @@ private:
     // keys are stored as offsets info the string buffer
     __gshared immutable ushort[num_items] _keys = () {
         ushort[num_items] key_offsets;
-        size_t offset = 4; // the buffer leads with the null-string sentinel
+        size_t offset = 2;
         foreach (i; 0 .. num_items)
         {
             const(char)[] key = by_key[i].k;
@@ -371,7 +371,7 @@ private:
         return key_offsets;
     }();
 
-    // display names are stored in sorted-key order; members without one hold the null-string sentinel
+    // display names are stored in sorted-key order; members without one are left at offset 0
     enum size_t num_display = has_display ? num_items : 0;
     __gshared immutable ushort[num_display] _display = () {
         ushort[num_display] offsets;
@@ -381,9 +381,7 @@ private:
             foreach (i; 0 .. num_items)
             {
                 string d = display_by_sorted[i];
-                if (d.length == 0)
-                    offsets[i] = 2; // null-string sentinel
-                else
+                if (d.length != 0)
                 {
                     offsets[i] = cast(ushort)offset;
                     offset += 2 + d.length + (d.length & 1);
@@ -397,8 +395,6 @@ private:
     __gshared immutable char[total_strings] _strings = () {
         char[total_strings] str_data;
         char* ptr = str_data.ptr;
-        *ptr++ = 0; // null-string sentinel
-        *ptr++ = 0;
         foreach (i; 0 .. num_items)
         {
             const(char)[] key = by_key[i].k;
@@ -470,7 +466,7 @@ private:
 
     // must measure the trimmed keys; this is where the display strings begin, not just a buffer bound
     enum total_key_strings = () {
-        size_t total = 2; // null-string sentinel
+        size_t total = 0;
         foreach (i; 0 .. num_items)
         {
             size_t l = by_key[i].k.length;
@@ -550,7 +546,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         inv_v[vi.i] = cast(ubyte)i;
 
     // count the string memory
-    size_t total_string = 2; // null-string sentinel
+    size_t total_string;
     foreach (i; 0 .. count)
         total_string += 2 + keys[i].length + (keys[i].length & 1);
     if (any_display)
@@ -580,9 +576,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     str_data = cast(char*)&lookup[count*3];
     if (cast(size_t)str_data & 1)
         *str_data++ = 0; // align to 2 bytes
-    str_data[0] = 0; // null-string sentinel
-    str_data[1] = 0;
-    char* str_ptr = str_data + 4;
+    char* str_ptr = str_data + 2;
 
     // populate the enum info data
     foreach (i; 0 .. count)
@@ -601,7 +595,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         {
             const(char)[] d = display_names[ksort[i].i];
             if (d.length == 0)
-                disp_ptr[i] = 2; // null-string sentinel
+                disp_ptr[i] = 0;
             else
             {
                 disp_ptr[i] = cast(ushort)(str_ptr - str_data);
@@ -623,7 +617,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
 
 size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc
 {
-    size_t total_string = 2; // null-string sentinel
+    size_t total_string;
     foreach (i; 0 .. info.count)
     {
         size_t l = info.key_by_sorted_index(i).length;
@@ -725,12 +719,12 @@ unittest
     // an empty display name is no display name at all
     enum TestEmptyDisplay { @display_name("") nothing, plain }
     assert(!enum_info!TestEmptyDisplay.has_display_names);
-    assert(enum_info!TestEmptyDisplay.display_by_decl_index(0).length == 0);
+    assert(enum_info!TestEmptyDisplay.display_by_decl_index(0) is null);
 
     auto dinfo = &enum_info!TestDisplay;
     assert(dinfo.has_display_names);
     assert(dinfo.display_for(TestDisplay.first) == "First Thing");
-    assert(dinfo.display_for(TestDisplay.second).length == 0);
+    assert(dinfo.display_for(TestDisplay.second) is null);  // unlabelled member of a labelled enum
     assert(dinfo.display_by_decl_index(2) == "Third Thing");
     assert(dinfo.key_for(TestDisplay.first) == "first");
 
@@ -744,7 +738,7 @@ unittest
     assert(named.value_for("beta").asLong == 2);
     assert(named.key_for_raw(3) == "gamma");
     assert(named.display_by_decl_index(0) == "Alpha!");
-    assert(named.display_by_decl_index(1).length == 0);
+    assert(named.display_by_decl_index(1) is null);
     assert(named.display_by_decl_index(2) == "Gamma!");
     assert(enum_info_equal(*named, *named) && !enum_info_equal(*plain, *named));
     assert(enum_info_size(*named) > enum_info_size(*plain));

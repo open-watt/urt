@@ -11,6 +11,12 @@ nothrow @nogc:
 // UDA for bitfield declarations
 struct bitfield {}
 
+// UDA to attach a human-readable display name to an enum member
+struct display_name
+{
+    string name;
+}
+
 template is_bitfield_enum(E)
     if (is(E == enum))
 {
@@ -25,6 +31,16 @@ private template has_bitfield_attr(Attrs...)
         enum has_bitfield_attr = true;
     else
         enum has_bitfield_attr = has_bitfield_attr!(Attrs[1 .. $]);
+}
+
+private template get_display_attr(Attrs...)
+{
+    static if (Attrs.length == 0)
+        enum string get_display_attr = null;
+    else static if (is(typeof(Attrs[0]) == display_name))
+        enum get_display_attr = Attrs[0].name;
+    else
+        enum get_display_attr = get_display_attr!(Attrs[1 .. $]);
 }
 
 const(E)* enum_from_key(E)(const(char)[] key) pure
@@ -76,6 +92,21 @@ nothrow @nogc:
     {
         assert(i < count, "Declaration index out of range");
         return get_key(i);
+    }
+
+    bool has_display_names() const pure
+        => _display !is null;
+
+    const(char)[] display_by_decl_index(size_t i) const pure
+    {
+        assert(i < count, "Declaration index out of range");
+        return get_display(_lookup_tables[count*2 + i]);
+    }
+
+    const(char)[] display_by_sorted_index(size_t i) const pure
+    {
+        assert(i < count, "Declaration index out of range");
+        return get_display(i);
     }
 
     Variant value_for(const(char)[] key) const pure
@@ -183,6 +214,7 @@ private:
 
     const void* _values;
     const ushort* _keys;
+    const ushort* _display;
     const char* _string_buffer;
 
     // these tables map between indices of keys and values
@@ -190,13 +222,14 @@ private:
 
     const GetFun _get_value;
 
-    this(ubyte count, ushort stride, uint type_hash, inout void* values, inout ushort* keys, inout char* strings, inout ubyte* lookup, GetFun get_value, bool bitfield = false) inout pure
+    this(ubyte count, ushort stride, uint type_hash, inout void* values, inout ushort* keys, inout ushort* display, inout char* strings, inout ubyte* lookup, GetFun get_value, bool bitfield = false) inout pure
     {
         this.count = count;
         this.stride = stride;
         this.type_hash = type_hash;
         this.bitfield = bitfield;
         this._keys = keys;
+        this._display = display;
         this._values = values;
         this._string_buffer = strings;
         this._lookup_tables = lookup;
@@ -206,6 +239,15 @@ private:
     const(char)[] get_key(size_t i) const pure
     {
         const(char)* s = _string_buffer + _keys[i];
+        return s[0 .. s.key_length];
+    }
+
+    const(char)[] get_display(size_t i) const pure
+    {
+        // entries without a display name hold the null-string sentinel at offset 2
+        if (!_display)
+            return null;
+        const(char)* s = _string_buffer + _display[i];
         return s[0 .. s.key_length];
     }
 }
@@ -243,9 +285,9 @@ template EnumInfo(E)
             inout(VoidEnumInfo*) make_void() inout pure
                 => &_base;
 
-            this(ubyte count, uint type_hash, inout(E)* values, inout ushort* keys, inout char* strings, inout ubyte* lookup, bool bitfield = false) inout pure
+            this(ubyte count, uint type_hash, inout(E)* values, inout ushort* keys, inout ushort* display, inout char* strings, inout ubyte* lookup, bool bitfield = false) inout pure
             {
-                _base = inout(VoidEnumInfo)(count, E.sizeof, type_hash, values, keys, strings, lookup, cast(GetFun)&get_value!V, bitfield);
+                _base = inout(VoidEnumInfo)(count, E.sizeof, type_hash, values, keys, display, strings, lookup, cast(GetFun)&get_value!V, bitfield);
             }
 
             const(E)[] values() const pure
@@ -256,6 +298,14 @@ template EnumInfo(E)
                 size_t i = binary_search(values[0 .. count], value);
                 if (i < count)
                     return get_key(_lookup_tables[count + i]);
+                return null;
+            }
+
+            const(char)[] display_for(V value) const pure
+            {
+                size_t i = binary_search(values[0 .. count], value);
+                if (i < count)
+                    return get_display(_lookup_tables[count + i]);
                 return null;
             }
 
@@ -292,6 +342,7 @@ template enum_info(E)
         fnv1a(cast(ubyte[])E.stringof),
         _values.ptr,
         _keys.ptr,
+        has_display ? _display.ptr : null,
         _strings.ptr,
         _lookup.ptr,
         is_bitfield_enum!E
@@ -308,7 +359,7 @@ private:
     // keys are stored as offsets info the string buffer
     __gshared immutable ushort[num_items] _keys = () {
         ushort[num_items] key_offsets;
-        size_t offset = 2;
+        size_t offset = 4; // the buffer leads with the null-string sentinel
         foreach (i; 0 .. num_items)
         {
             const(char)[] key = by_key[i].k;
@@ -320,10 +371,34 @@ private:
         return key_offsets;
     }();
 
+    // display names are stored in sorted-key order; members without one hold the null-string sentinel
+    enum size_t num_display = has_display ? num_items : 0;
+    __gshared immutable ushort[num_display] _display = () {
+        ushort[num_display] offsets;
+        static if (has_display)
+        {
+            size_t offset = total_key_strings + 2;
+            foreach (i; 0 .. num_items)
+            {
+                string d = display_by_sorted[i];
+                if (d is null)
+                    offsets[i] = 2; // null-string sentinel
+                else
+                {
+                    offsets[i] = cast(ushort)offset;
+                    offset += 2 + d.length + (d.length & 1);
+                }
+            }
+        }
+        return offsets;
+    }();
+
     // build the string buffer
     __gshared immutable char[total_strings] _strings = () {
         char[total_strings] str_data;
         char* ptr = str_data.ptr;
+        *ptr++ = 0; // null-string sentinel
+        *ptr++ = 0;
         foreach (i; 0 .. num_items)
         {
             const(char)[] key = by_key[i].k;
@@ -340,6 +415,26 @@ private:
             ptr[0 .. key.length] = key[];
             ptr += key.length;
             if (key.length & 1)
+                *ptr++ = 0; // align to 2 bytes
+        }
+        foreach (i; 0 .. num_items)
+        {
+            string d = display_by_sorted[i];
+            if (d is null)
+                continue;
+            version (LittleEndian)
+            {
+                *ptr++ = d.length & 0xFF;
+                *ptr++ = (d.length >> 8) & 0xFF;
+            }
+            else
+            {
+                *ptr++ = (d.length >> 8) & 0xFF;
+                *ptr++ = d.length & 0xFF;
+            }
+            ptr[0 .. d.length] = d[];
+            ptr += d.length;
+            if (d.length & 1)
                 *ptr++ = 0; // align to 2 bytes
         }
         return str_data;
@@ -369,23 +464,38 @@ private:
     enum inv_key = (){ KI[num_items] bk = by_key; ubyte[num_items] r; foreach (ubyte i, ref ki; bk) r[ki.i] = i; return r; }();
     enum inv_val = (){ VI[num_items] bv = by_value; ubyte[num_items] r; foreach (ubyte i, ref vi; bv) r[vi.i] = i; return r; }();
 
+    enum string[num_items] displays = [ STATIC_MAP!(GetDisplay, iota) ];
+    enum display_by_sorted = (){ string[num_items] r; foreach (i; 0 .. num_items) r[i] = displays[by_key[i].i]; return r; }();
+    enum has_display = (){ foreach (d; display_by_sorted) { if (d !is null) return true; } return false; }();
+
     // calculate the total size of the string buffer
-    enum total_strings = () {
-        size_t total = 0;
+    enum total_key_strings = () {
+        size_t total = 2; // null-string sentinel
         static foreach (k; enum_members)
             total += 2 + k.length + (k.length & 1);
         return total;
     }();
 
+    enum total_strings = () {
+        size_t total = total_key_strings;
+        foreach (d; display_by_sorted)
+        {
+            if (d !is null)
+                total += 2 + d.length + (d.length & 1);
+        }
+        return total;
+    }();
+
     enum MakeKI(ushort i) = KI(trim_key!(enum_members[i]), i);
     enum MakeVI(ushort i) = VI(__traits(getMember, E, enum_members[i]), i);
+    enum GetDisplay(size_t i) = get_display_attr!(__traits(getAttributes, __traits(getMember, E, enum_members[i])));
     enum GetValue(size_t i) = by_value[i].v;
     enum GetKeyRedirect(size_t i) = inv_val[by_key[i].i];
     enum GetValRedirect(size_t i) = inv_key[by_value[i].i];
     enum GetKeyOrig(size_t i) = inv_key[i];
 }
 
-VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] values)
+VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] values, const(char)[][] display_names = null)
 {
     import urt.algorithm;
     import urt.hash : fnv1a;
@@ -395,7 +505,18 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     import urt.util;
 
     assert(keys.length == values.length, "keys and values must have the same length");
+    assert(display_names is null || display_names.length == keys.length, "keys and display_names must have the same length");
     assert(keys.length <= ubyte.max, "Too many enum items!");
+
+    bool any_display = false;
+    foreach (d; display_names)
+    {
+        if (d.length)
+        {
+            any_display = true;
+            break;
+        }
+    }
 
     size_t count = keys.length;
 
@@ -426,13 +547,21 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         inv_v[vi.i] = cast(ubyte)i;
 
     // count the string memory
-    size_t total_string;
+    size_t total_string = 2; // null-string sentinel
     foreach (i; 0 .. count)
         total_string += 2 + keys[i].length + (keys[i].length & 1);
+    if (any_display)
+    {
+        foreach (d; display_names)
+        {
+            if (d.length)
+                total_string += 2 + d.length + (d.length & 1);
+        }
+    }
 
     // calculate the total size
     size_t total_size = VoidEnumInfo.sizeof + T.sizeof*count;
-    total_size += (total_size & 1) + ushort.sizeof*count + count*3;
+    total_size += (total_size & 1) + ushort.sizeof*count*(any_display ? 2 : 1) + count*3;
     total_size += (total_size & 1) + total_string;
 
     // allocate a buffer and assign all the sub-buffers
@@ -443,11 +572,14 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     if (cast(size_t)str_data & 1)
         *str_data++ = 0; // align to 2 bytes
     ushort* key_ptr = cast(ushort*)str_data;
-    ubyte* lookup = cast(ubyte*)&key_ptr[count];
+    ushort* disp_ptr = any_display ? &key_ptr[count] : null;
+    ubyte* lookup = any_display ? cast(ubyte*)&disp_ptr[count] : cast(ubyte*)&key_ptr[count];
     str_data = cast(char*)&lookup[count*3];
     if (cast(size_t)str_data & 1)
         *str_data++ = 0; // align to 2 bytes
-    char* str_ptr = str_data + 2;
+    str_data[0] = 0; // null-string sentinel
+    str_data[1] = 0;
+    char* str_ptr = str_data + 4;
 
     // populate the enum info data
     foreach (i; 0 .. count)
@@ -462,25 +594,43 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
             (str_ptr++)[key.length] = 0; // align to 2 bytes
         str_ptr += 2 + key.length;
 
+        if (disp_ptr)
+        {
+            const(char)[] d = display_names[ksort[i].i];
+            if (!d.length)
+                disp_ptr[i] = 2; // null-string sentinel
+            else
+            {
+                disp_ptr[i] = cast(ushort)(str_ptr - str_data);
+                writeString(str_ptr, d);
+                if (d.length & 1)
+                    (str_ptr++)[d.length] = 0; // align to 2 bytes
+                str_ptr += 2 + d.length;
+            }
+        }
+
         lookup[i] = inv_v[ksort[i].i];
         lookup[count + i] = inv_k[vsort[i].i];
         lookup[count*2 + i] = inv_k[i];
     }
 
     // build and return the object
-    return new(*result) VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), value_ptr, key_ptr, str_data, lookup, cast(GetFun)&get_value!T);
+    return new(*result) VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), value_ptr, key_ptr, disp_ptr, str_data, lookup, cast(GetFun)&get_value!T);
 }
 
 size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc
 {
-    size_t total_string;
+    size_t total_string = 2; // null-string sentinel
     foreach (i; 0 .. info.count)
     {
         size_t l = info.key_by_sorted_index(i).length;
         total_string += 2 + l + (l & 1);
+        size_t dl = info.display_by_sorted_index(i).length;
+        if (dl)
+            total_string += 2 + dl + (dl & 1);
     }
     size_t total = VoidEnumInfo.sizeof + info.stride*info.count;
-    total += (total & 1) + ushort.sizeof*info.count + info.count*3;
+    total += (total & 1) + ushort.sizeof*info.count*(info._display ? 2 : 1) + info.count*3;
     total += (total & 1) + total_string;
     return total;
 }
@@ -494,6 +644,8 @@ bool enum_info_equal(ref const VoidEnumInfo a, ref const VoidEnumInfo b) pure no
     foreach (i; 0 .. a.count)
     {
         if (a.key_by_sorted_index(i) != b.key_by_sorted_index(i))
+            return false;
+        if (a.display_by_sorted_index(i) != b.display_by_sorted_index(i))
             return false;
     }
     return true;
@@ -556,4 +708,33 @@ unittest
     assert(info.parse_flags("a|b", ok) == 3 && ok);
     assert(info.parse_flags("a | 0x8", ok) == 9 && ok);
     assert(info.parse_flags("a|nope", ok) == 0 && !ok);
+
+    enum TestDisplay { @display_name("First Thing") first, second, @display_name("Third Thing") third }
+
+    assert(!enum_info!TestPlain.has_display_names);
+    assert(enum_info!TestPlain.display_by_decl_index(0) is null);
+
+    auto dinfo = &enum_info!TestDisplay;
+    assert(dinfo.has_display_names);
+    assert(dinfo.display_for(TestDisplay.first) == "First Thing");
+    assert(dinfo.display_for(TestDisplay.second).length == 0);
+    assert(dinfo.display_by_decl_index(2) == "Third Thing");
+    assert(dinfo.key_for(TestDisplay.first) == "first");
+
+    import urt.mem.allocator : defaultAllocator;
+    const(char)[][3] keys = [ "alpha", "beta", "gamma" ];
+    int[3] vals = [ 1, 2, 3 ];
+    const(char)[][3] disp = [ "Alpha!", null, "Gamma!" ];
+    VoidEnumInfo* plain = make_enum_info("RT", keys[], vals[]);
+    VoidEnumInfo* named = make_enum_info("RT", keys[], vals[], disp[]);
+    assert(!plain.has_display_names && named.has_display_names);
+    assert(named.value_for("beta").asLong == 2);
+    assert(named.key_for_raw(3) == "gamma");
+    assert(named.display_by_decl_index(0) == "Alpha!");
+    assert(named.display_by_decl_index(1).length == 0);
+    assert(named.display_by_decl_index(2) == "Gamma!");
+    assert(enum_info_equal(*named, *named) && !enum_info_equal(*plain, *named));
+    assert(enum_info_size(*named) > enum_info_size(*plain));
+    defaultAllocator().free((cast(void*)plain)[0 .. enum_info_size(*plain)]);
+    defaultAllocator().free((cast(void*)named)[0 .. enum_info_size(*named)]);
 }

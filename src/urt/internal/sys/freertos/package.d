@@ -69,6 +69,7 @@ extern(C)
     void         vTaskDelete(TaskHandle_t xTaskToDelete);
     TaskHandle_t xTaskGetCurrentTaskHandle();
     UBaseType_t  uxTaskPriorityGet(TaskHandle_t xTask);
+    void         vTaskGenericNotifyGiveFromISR(TaskHandle_t xTaskToNotify, UBaseType_t uxIndexToNotify, BaseType_t* pxHigherPriorityTaskWoken);
 
     // task notifications -- generic forms (the macros xTaskNotifyGive and
     // ulTaskNotifyTake expand to these with default index/value args).
@@ -96,6 +97,10 @@ BaseType_t xTaskNotifyGive(TaskHandle_t task)
 pragma(inline, true)
 uint ulTaskNotifyTake(BaseType_t clear_on_exit, TickType_t ticks)
     => ulTaskGenericNotifyTake(tskDEFAULT_INDEX_TO_NOTIFY, clear_on_exit, ticks);
+
+pragma(inline, true)
+void vTaskNotifyGiveFromISR(TaskHandle_t task, BaseType_t* higher_priority_task_woken)
+    => vTaskGenericNotifyGiveFromISR(task, tskDEFAULT_INDEX_TO_NOTIFY, higher_priority_task_woken);
 
 enum BaseType_t tskNO_AFFINITY = -1;
 

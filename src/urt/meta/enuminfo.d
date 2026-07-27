@@ -11,7 +11,7 @@ nothrow @nogc:
 // UDA for bitfield declarations
 struct bitfield {}
 
-// UDA to attach a human-readable display name to an enum member
+// UDA to attach a human-readable display name to an enum member; an empty name is no display name
 struct display_name
 {
     string name;
@@ -245,7 +245,7 @@ private:
     const(char)[] get_display(size_t i) const pure
     {
         // entries without a display name hold the null-string sentinel at offset 2
-        if (!_display)
+        if (_display is null)
             return null;
         const(char)* s = _string_buffer + _display[i];
         return s[0 .. s.key_length];
@@ -381,7 +381,7 @@ private:
             foreach (i; 0 .. num_items)
             {
                 string d = display_by_sorted[i];
-                if (d is null)
+                if (d.length == 0)
                     offsets[i] = 2; // null-string sentinel
                 else
                 {
@@ -420,7 +420,7 @@ private:
         foreach (i; 0 .. num_items)
         {
             string d = display_by_sorted[i];
-            if (d is null)
+            if (d.length == 0)
                 continue;
             version (LittleEndian)
             {
@@ -466,13 +466,16 @@ private:
 
     enum string[num_items] displays = [ STATIC_MAP!(GetDisplay, iota) ];
     enum display_by_sorted = (){ string[num_items] r; foreach (i; 0 .. num_items) r[i] = displays[by_key[i].i]; return r; }();
-    enum has_display = (){ foreach (d; display_by_sorted) { if (d !is null) return true; } return false; }();
+    enum has_display = (){ foreach (d; display_by_sorted) { if (d.length != 0) return true; } return false; }();
 
-    // calculate the total size of the string buffer
+    // must measure the trimmed keys; this is where the display strings begin, not just a buffer bound
     enum total_key_strings = () {
         size_t total = 2; // null-string sentinel
-        static foreach (k; enum_members)
-            total += 2 + k.length + (k.length & 1);
+        foreach (i; 0 .. num_items)
+        {
+            size_t l = by_key[i].k.length;
+            total += 2 + l + (l & 1);
+        }
         return total;
     }();
 
@@ -480,7 +483,7 @@ private:
         size_t total = total_key_strings;
         foreach (d; display_by_sorted)
         {
-            if (d !is null)
+            if (d.length != 0)
                 total += 2 + d.length + (d.length & 1);
         }
         return total;
@@ -511,7 +514,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     bool any_display = false;
     foreach (d; display_names)
     {
-        if (d.length)
+        if (d.length != 0)
         {
             any_display = true;
             break;
@@ -554,7 +557,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     {
         foreach (d; display_names)
         {
-            if (d.length)
+            if (d.length != 0)
                 total_string += 2 + d.length + (d.length & 1);
         }
     }
@@ -594,10 +597,10 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
             (str_ptr++)[key.length] = 0; // align to 2 bytes
         str_ptr += 2 + key.length;
 
-        if (disp_ptr)
+        if (disp_ptr !is null)
         {
             const(char)[] d = display_names[ksort[i].i];
-            if (!d.length)
+            if (d.length == 0)
                 disp_ptr[i] = 2; // null-string sentinel
             else
             {
@@ -626,7 +629,7 @@ size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc
         size_t l = info.key_by_sorted_index(i).length;
         total_string += 2 + l + (l & 1);
         size_t dl = info.display_by_sorted_index(i).length;
-        if (dl)
+        if (dl != 0)
             total_string += 2 + dl + (dl & 1);
     }
     size_t total = VoidEnumInfo.sizeof + info.stride*info.count;
@@ -713,6 +716,16 @@ unittest
 
     assert(!enum_info!TestPlain.has_display_names);
     assert(enum_info!TestPlain.display_by_decl_index(0) is null);
+
+    // trimmed keys must not desynchronise the display offsets from the packed strings
+    enum TestTrimmed { _alpha_, @display_name("Beta Name") beta }
+    assert(enum_info!TestTrimmed.key_by_decl_index(0) == "alpha");
+    assert(enum_info!TestTrimmed.display_by_decl_index(1) == "Beta Name");
+
+    // an empty display name is no display name at all
+    enum TestEmptyDisplay { @display_name("") nothing, plain }
+    assert(!enum_info!TestEmptyDisplay.has_display_names);
+    assert(enum_info!TestEmptyDisplay.display_by_decl_index(0).length == 0);
 
     auto dinfo = &enum_info!TestDisplay;
     assert(dinfo.has_display_names);

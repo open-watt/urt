@@ -96,6 +96,210 @@ uint32_t ow_gpio_count(void)
     return SOC_GPIO_PIN_COUNT;
 }
 
+// -- I2C master wrappers --
+
+#include "driver/i2c_master.h"
+
+#ifdef SOC_HP_I2C_NUM
+#define OW_I2C_COUNT SOC_HP_I2C_NUM
+#else
+#define OW_I2C_COUNT SOC_I2C_NUM
+#endif
+#define I2C_REQUEST_QUEUE_SIZE 1
+#define I2C_WORKER_STACK 3072
+
+typedef bool (*ow_i2c_callback_t)(void *context, int result);
+
+typedef struct {
+    uint16_t address;
+    uint32_t frequency;
+    uint8_t address_mode;
+    const void *write_data;
+    size_t write_length;
+    void *read_data;
+    size_t read_length;
+    int timeout_ms;
+    ow_i2c_callback_t callback;
+    void *callback_context;
+} ow_i2c_request_t;
+
+typedef struct {
+    i2c_master_bus_handle_t bus;
+    i2c_master_dev_handle_t device;
+    uint16_t address;
+    uint32_t frequency;
+    uint8_t address_mode;
+    QueueHandle_t queue;
+    TaskHandle_t worker;
+    SemaphoreHandle_t worker_done;
+    StaticSemaphore_t worker_done_storage;
+    atomic_bool initialized;
+} ow_i2c_context_t;
+
+static ow_i2c_context_t i2c_contexts[OW_I2C_COUNT];
+
+static bool ow_i2c_configure_device(ow_i2c_context_t *context, uint16_t address, uint8_t address_mode, uint32_t frequency)
+{
+    if (context->device && context->address == address && context->address_mode == address_mode && context->frequency == frequency)
+        return true;
+
+    if (context->device) {
+        if (i2c_master_bus_rm_device(context->device) != ESP_OK)
+            return false;
+        context->device = NULL;
+    }
+
+    i2c_device_config_t device_config = {
+        .dev_addr_length = address_mode ? I2C_ADDR_BIT_LEN_10 : I2C_ADDR_BIT_LEN_7,
+        .device_address = address,
+        .scl_speed_hz = frequency,
+    };
+    if (i2c_master_bus_add_device(context->bus, &device_config, &context->device) != ESP_OK)
+        return false;
+
+    context->address = address;
+    context->address_mode = address_mode;
+    context->frequency = frequency;
+    return true;
+}
+
+static int ow_i2c_result(esp_err_t result)
+{
+    if (result == ESP_OK)
+        return 0;
+    // ESP-IDF 6.0 i2c_master_transmit(), i2c_master_receive(), and i2c_master_transmit_receive() return this result when a transaction receives NACK.
+    if (result == ESP_ERR_INVALID_RESPONSE)
+        return 1;
+    if (result == ESP_ERR_TIMEOUT)
+        return 2;
+    return 4;
+}
+
+static void ow_i2c_worker(void *argument)
+{
+    ow_i2c_context_t *context = argument;
+    ow_i2c_request_t request;
+
+    while (xQueueReceive(context->queue, &request, portMAX_DELAY) == pdTRUE) {
+        if (!request.callback)
+            break;
+
+        esp_err_t result = ESP_FAIL;
+        if (ow_i2c_configure_device(context, request.address, request.address_mode, request.frequency)) {
+            if (request.write_length && request.read_length)
+                result = i2c_master_transmit_receive(context->device, request.write_data, request.write_length,
+                                                     request.read_data, request.read_length, request.timeout_ms);
+            else if (request.write_length)
+                result = i2c_master_transmit(context->device, request.write_data, request.write_length, request.timeout_ms);
+            else
+                result = i2c_master_receive(context->device, request.read_data, request.read_length, request.timeout_ms);
+        }
+        request.callback(request.callback_context, ow_i2c_result(result));
+    }
+
+    xSemaphoreGive(context->worker_done);
+    vTaskDelete(NULL);
+}
+
+uint32_t ow_i2c_count(void)
+{
+    return OW_I2C_COUNT;
+}
+
+void *ow_i2c_open(unsigned port, int sda_gpio, int scl_gpio, bool internal_pullups)
+{
+    if (port >= OW_I2C_COUNT)
+        return NULL;
+
+    ow_i2c_context_t *context = &i2c_contexts[port];
+    if (atomic_exchange_explicit(&context->initialized, true, memory_order_acq_rel))
+        return NULL;
+
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = port,
+        .sda_io_num = sda_gpio,
+        .scl_io_num = scl_gpio,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = internal_pullups,
+    };
+    if (i2c_new_master_bus(&bus_config, &context->bus) != ESP_OK)
+        goto fail;
+
+    context->queue = xQueueCreate(I2C_REQUEST_QUEUE_SIZE, sizeof(ow_i2c_request_t));
+    if (!context->queue)
+        goto fail;
+
+    if (!context->worker_done)
+        context->worker_done = xSemaphoreCreateBinaryStatic(&context->worker_done_storage);
+    if (!context->worker_done)
+        goto fail;
+    xSemaphoreTake(context->worker_done, 0);
+
+    if (xTaskCreate(ow_i2c_worker, "ow-i2c", I2C_WORKER_STACK, context, tskIDLE_PRIORITY + 2, &context->worker) != pdPASS)
+        goto fail;
+    return context;
+
+fail:
+    if (context->queue) {
+        vQueueDelete(context->queue);
+        context->queue = NULL;
+    }
+    if (context->bus) {
+        i2c_del_master_bus(context->bus);
+        context->bus = NULL;
+    }
+    atomic_store_explicit(&context->initialized, false, memory_order_release);
+    return NULL;
+}
+
+void ow_i2c_close(void *context_ptr)
+{
+    ow_i2c_context_t *context = context_ptr;
+    if (!context || !atomic_exchange_explicit(&context->initialized, false, memory_order_acq_rel))
+        return;
+
+    configASSERT(xTaskGetCurrentTaskHandle() != context->worker);
+    ow_i2c_request_t request = {0};
+    xQueueSend(context->queue, &request, portMAX_DELAY);
+    xSemaphoreTake(context->worker_done, portMAX_DELAY);
+    context->worker = NULL;
+
+    if (context->device) {
+        i2c_master_bus_rm_device(context->device);
+        context->device = NULL;
+    }
+    if (context->bus) {
+        i2c_del_master_bus(context->bus);
+        context->bus = NULL;
+    }
+    vQueueDelete(context->queue);
+    context->queue = NULL;
+}
+
+int ow_i2c_submit(void *context_ptr, uint16_t address, uint8_t address_mode, uint32_t frequency, const void *write_data, size_t write_length,
+                  void *read_data, size_t read_length, int timeout_ms, ow_i2c_callback_t callback, void *callback_context)
+{
+    ow_i2c_context_t *context = context_ptr;
+    if (!context || !atomic_load_explicit(&context->initialized, memory_order_acquire) || !callback ||
+        (write_length == 0 && read_length == 0))
+        return -1;
+
+    ow_i2c_request_t request = {
+        .address = address,
+        .frequency = frequency,
+        .address_mode = address_mode,
+        .write_data = write_data,
+        .write_length = write_length,
+        .read_data = read_data,
+        .read_length = read_length,
+        .timeout_ms = timeout_ms,
+        .callback = callback,
+        .callback_context = callback_context,
+    };
+    return xQueueSend(context->queue, &request, 0) == pdTRUE ? 0 : -1;
+}
+
 
 // -- UART driver wrappers --
 

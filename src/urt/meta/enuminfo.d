@@ -118,6 +118,20 @@ nothrow @nogc:
         return _get_value(_values + i*stride, &this);
     }
 
+    // display names are stored in key order, so this scans where value_for can binary search
+    Variant value_for_display(const(char)[] display) const pure
+    {
+        // an empty name is no name; it must not match every unlabelled entry
+        if (_display is null || display.length == 0)
+            return Variant();
+        foreach (i; 0 .. count)
+        {
+            if (get_display(i) == display)
+                return _get_value(_values + _lookup_tables[i]*stride, &this);
+        }
+        return Variant();
+    }
+
     bool contains(const(char)[] key) const pure
     {
         size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
@@ -321,6 +335,20 @@ template EnumInfo(E)
                 if (i == count)
                     return null;
                 return _values + _lookup_tables[i];
+            }
+
+            // display names are stored in key order, so this scans where value_for can binary search
+            const(E)* value_for_display(const(char)[] display) const pure
+            {
+                // an empty name is no name; it must not match every unlabelled entry
+                if (_display is null || display.length == 0)
+                    return null;
+                foreach (i; 0 .. count)
+                {
+                    if (get_display(i) == display)
+                        return _values + _lookup_tables[i];
+                }
+                return null;
             }
 
             bool contains(const(char)[] key) const pure
@@ -732,6 +760,19 @@ unittest
     assert(dinfo.display_by_decl_index(2) == "Third Thing");
     assert(dinfo.key_for(TestDisplay.first) == "first");
 
+    assert(*dinfo.value_for_display("First Thing") == TestDisplay.first);
+    assert(*dinfo.value_for_display("Third Thing") == TestDisplay.third);
+    assert(dinfo.value_for_display("first") is null);        // the key is not a display name
+    assert(dinfo.value_for_display("Nope") is null);
+    assert(dinfo.value_for_display("") is null);             // must not match the unlabelled member
+    assert(dinfo.value_for_display(null) is null);
+    assert(enum_info!TestPlain.value_for_display("x") is null);
+
+    // key order and value order disagree here, so an identity index mapping would return the wrong member
+    enum TestOrder { @display_name("Zed Label") zed = 1, @display_name("Ay Label") ay = 9 }
+    assert(*enum_info!TestOrder.value_for_display("Ay Label") == TestOrder.ay);
+    assert(*enum_info!TestOrder.value_for_display("Zed Label") == TestOrder.zed);
+
     import urt.mem.allocator : defaultAllocator;
     const(char)[][3] keys = [ "alpha", "beta", "gamma" ];
     int[3] vals = [ 1, 2, 3 ];
@@ -744,6 +785,11 @@ unittest
     assert(named.display_by_decl_index(0) == "Alpha!");
     assert(named.display_by_decl_index(1) is null);
     assert(named.display_by_decl_index(2) == "Gamma!");
+    assert(named.value_for_display("Gamma!").asLong == 3);
+    assert(named.value_for_display("Alpha!").asLong == 1);
+    assert(named.value_for_display("beta").isNull);          // the key is not a display name
+    assert(named.value_for_display("").isNull);
+    assert(plain.value_for_display("Alpha!").isNull);        // no display names at all
     assert(enum_info_equal(*named, *named) && !enum_info_equal(*plain, *named));
     assert(enum_info_size(*named) > enum_info_size(*plain));
     defaultAllocator().free((cast(void*)plain)[0 .. enum_info_size(*plain)]);

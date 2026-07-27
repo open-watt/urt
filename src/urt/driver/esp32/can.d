@@ -1,26 +1,29 @@
-// ESP32 CAN (TWAI) driver -- thin D layer over ESP-IDF _v2 handle API
+// ESP32 CAN (TWAI) driver.
 //
-// Only ow_can_open is a C shim (bitrate table + config construction).
-// All other calls go directly to the ESP-IDF twai_*_v2 functions.
+// ESP-IDF v6 exposes received frames only from its ISR callback. The C shim copies them into a bounded ring there, then this layer presents the
+// portable can_receive() API to main-thread consumers.
 //
 // Controller count per chip (ESP-IDF v6.0):
-//   ESP32, S3, C3, H2: 1    C5, C6: 2    P4: 3    S2, C2, C61: 0
+//   ESP32, S2, S3, C3, H2: 1    C5, C6: 2    P4: 3    C2, C61: 0
 module urt.driver.esp32.can;
 
-import urt.driver.can : CanConfig, CanFrame, CanError, CanBusState;
+import urt.atomic : atomicLoad, atomicStore, MemoryOrder;
+import urt.driver.can : Can, CanBusState, CanCallbackContext, CanConfig, CanError, CanFrame, CanRxCallback;
+import urt.result : Result, InternalResult;
 
 nothrow @nogc:
 
 
 // SOC_TWAI_CONTROLLER_NUM per chip variant (ESP-IDF v6.0 soc_caps.h)
 version (ESP32)         enum uint num_can = 1;
+else version (ESP32_S2) enum uint num_can = 1;
 else version (ESP32_S3) enum uint num_can = 1;
 else version (ESP32_P4) enum uint num_can = 3;
 else version (ESP32_C3) enum uint num_can = 1;
 else version (ESP32_C5) enum uint num_can = 2;
 else version (ESP32_C6) enum uint num_can = 2;
 else version (ESP32_H2) enum uint num_can = 1;
-else                    enum uint num_can = 0; // S2, C2, C61
+else                    enum uint num_can = 0; // C2, C61
 
 // SOC_TWAI_FD_SUPPORTED (ESP-IDF v6.0 soc_caps.h)
 version (ESP32_C5) enum bool has_can_fd = true;
@@ -30,54 +33,61 @@ else               enum bool has_can_fd = false;
 static if (num_can > 0):
 
 
-bool can_hw_open(uint port, ref const CanConfig cfg)
+Result can_hw_open(uint port, ref const CanConfig cfg, CanRxCallback rx_cb)
 {
-    if (port >= num_can)
-        return false;
+    if (port >= num_can || cfg.tx_gpio == ubyte.max || cfg.rx_gpio == ubyte.max)
+        return InternalResult.invalid_parameter;
     if (_handles[port] !is null)
-        return true;
-    int tx = cfg.tx_gpio == ubyte.max ? -1 : cast(int)cfg.tx_gpio;
-    int rx = cfg.rx_gpio == ubyte.max ? -1 : cast(int)cfg.rx_gpio;
-    _handles[port] = ow_can_open(port, cfg.bitrate, tx, rx,
-        cfg.sjw, cfg.tseg1, cfg.tseg2, cfg.brp);
-    return _handles[port] !is null;
+    {
+        if (_configs[port] != cfg)
+            return InternalResult.already_exists;
+        can_hw_set_rx_callback(port, rx_cb);
+        return Result.success;
+    }
+    can_hw_set_rx_callback(port, rx_cb);
+    _handles[port] = ow_can_open(port, cfg.bitrate, cfg.tx_gpio, cfg.rx_gpio, cfg.sjw, cfg.tseg1, cfg.tseg2, cfg.brp, &rx_ready_trampoline);
+    if (_handles[port] is null)
+    {
+        can_hw_set_rx_callback(port, null);
+        return InternalResult.failed;
+    }
+    _configs[port] = cfg;
+    return Result.success;
 }
 
 void can_hw_close(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return;
-    twai_stop_v2(_handles[port]);
-    twai_driver_uninstall_v2(_handles[port]);
+    can_hw_set_rx_callback(port, null);
+    ow_can_close(_handles[port]);
     _handles[port] = null;
+    _configs[port] = CanConfig.init;
 }
 
 bool can_hw_transmit(uint port, ref const CanFrame frame)
 {
-    if (port >= num_can || _handles[port] is null)
+    if (port >= num_can || _handles[port] is null || frame.dlc > 8)
         return false;
-    twai_message_t msg;
-    msg.flags = cast(uint)frame.extended | (cast(uint)frame.rtr << 1);
-    msg.identifier = frame.id;
-    msg.data_length_code = frame.dlc;
-    if (frame.dlc > 0)
-        msg.data[0 .. frame.dlc] = frame.data[0 .. frame.dlc];
-    return twai_transmit_v2(_handles[port], &msg, 0) == ESP_OK;
+    ubyte flags = (frame.extended ? 1 : 0) | (frame.rtr ? 2 : 0) | (frame.fd ? 4 : 0) | (frame.brs ? 8 : 0);
+    return ow_can_transmit(_handles[port], frame.id, flags, frame.dlc, frame.data.ptr);
 }
 
 bool can_hw_receive(uint port, out CanFrame frame)
 {
     if (port >= num_can || _handles[port] is null)
         return false;
-    twai_message_t msg;
-    if (twai_receive_v2(_handles[port], &msg, 0) != ESP_OK)
+    OwCanFrame raw;
+    if (!ow_can_receive(_handles[port], &raw))
         return false;
-    frame.id = msg.identifier;
-    frame.extended = (msg.flags & 1) != 0;
-    frame.rtr = (msg.flags & 2) != 0;
-    frame.dlc = msg.data_length_code;
-    if (msg.data_length_code > 0)
-        frame.data[0 .. msg.data_length_code] = msg.data[0 .. msg.data_length_code];
+    frame.id = raw.id;
+    frame.extended = (raw.flags & 1) != 0;
+    frame.rtr = (raw.flags & 2) != 0;
+    frame.fd = (raw.flags & 4) != 0;
+    frame.brs = (raw.flags & 8) != 0;
+    frame.dlc = raw.dlc;
+    if (raw.dlc > 0)
+        frame.data[0 .. raw.dlc] = raw.data[0 .. raw.dlc];
     return true;
 }
 
@@ -85,138 +95,114 @@ CanError can_hw_check_errors(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return CanError.none;
-    uint alerts;
-    twai_read_alerts_v2(_handles[port], &alerts, 0);
-    CanError err = CanError.none;
-    if (alerts & 0x0200) // TWAI_ALERT_BUS_ERROR
-        err |= CanError.bit;
-    if (alerts & 0x4800) // TWAI_ALERT_RX_FIFO_OVERRUN | RX_QUEUE_FULL
-        err |= CanError.overrun;
-    if (alerts & 0x0400) // TWAI_ALERT_TX_FAILED
-        err |= CanError.ack;
-    return err;
+    return cast(CanError)ow_can_check_errors(_handles[port]);
+}
+
+uint can_hw_take_rx_drops(uint port)
+{
+    if (port >= num_can || _handles[port] is null)
+        return 0;
+    return ow_can_take_rx_drops(_handles[port]);
 }
 
 CanBusState can_hw_bus_state(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return CanBusState.bus_off;
-    twai_status_info_t info;
-    if (twai_get_status_info_v2(_handles[port], &info) != ESP_OK)
-        return CanBusState.bus_off;
-    if (info.state >= 2) // BUS_OFF or RECOVERING
-        return CanBusState.bus_off;
-    if (info.tx_error_counter >= 128 || info.rx_error_counter >= 128)
-        return CanBusState.error_passive;
-    if (info.tx_error_counter >= 96 || info.rx_error_counter >= 96)
-        return CanBusState.error_warning;
-    return CanBusState.error_active;
+    return cast(CanBusState)ow_can_bus_state(_handles[port]);
 }
 
 ubyte can_hw_tx_error_count(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    twai_status_info_t info;
-    if (twai_get_status_info_v2(_handles[port], &info) != ESP_OK)
-        return 0;
-    return info.tx_error_counter > 255 ? 255 : cast(ubyte)info.tx_error_counter;
+    uint count = ow_can_tx_error_count(_handles[port]);
+    return count > 255 ? 255 : cast(ubyte)count;
 }
 
 ubyte can_hw_rx_error_count(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    twai_status_info_t info;
-    if (twai_get_status_info_v2(_handles[port], &info) != ESP_OK)
-        return 0;
-    return info.rx_error_counter > 255 ? 255 : cast(ubyte)info.rx_error_counter;
+    uint count = ow_can_rx_error_count(_handles[port]);
+    return count > 255 ? 255 : cast(ubyte)count;
 }
 
 size_t can_hw_rx_available(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    twai_status_info_t info;
-    if (twai_get_status_info_v2(_handles[port], &info) != ESP_OK)
-        return 0;
-    return cast(size_t)info.msgs_to_rx;
+    return ow_can_rx_available(_handles[port]);
 }
 
 void can_hw_rx_flush(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return;
-    twai_clear_receive_queue_v2(_handles[port]);
+    ow_can_rx_flush(_handles[port]);
 }
 
-void can_hw_tx_abort(uint port)
+Result can_hw_tx_abort(uint port)
 {
     if (port >= num_can || _handles[port] is null)
-        return;
-    twai_clear_transmit_queue_v2(_handles[port]);
+        return InternalResult.invalid_parameter;
+
+    // ESP-IDF's node API has no queue-clear operation. Disabling and re-enabling preserves queued frame pointers, so releasing their
+    // caller-owned slots here would permit the driver to transmit through reused storage.
+    return InternalResult.unsupported;
 }
 
 bool can_hw_bus_recover(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return false;
-    return twai_initiate_recovery_v2(_handles[port]) == ESP_OK;
+    return ow_can_bus_recover(_handles[port]);
 }
 
-void can_hw_poll(uint port)
+void can_hw_set_rx_callback(uint port, CanRxCallback cb)
 {
-    // TWAI driver buffers RX internally
+    if (port < num_can)
+        atomicStore!(MemoryOrder.release)(_rx_callback_bits[port], cast(size_t)cb);
 }
-
 
 private:
 
-enum int ESP_OK = 0;
+struct twai_node_t {}
+alias twai_node_handle_t = twai_node_t*;
 
-// Opaque ESP-IDF TWAI handle
-struct twai_obj_t {}
-alias twai_handle_t = twai_obj_t*;
-
-// ESP-IDF twai_message_t (flags union flattened to uint)
-struct twai_message_t
+struct OwCanFrame
 {
-    uint flags;             // bit 0: extd, bit 1: rtr, bit 2: ss, bit 3: self
-    uint identifier;
-    ubyte data_length_code;
+    uint id;
+    ubyte flags;
+    ubyte dlc;
     ubyte[8] data;
 }
 
-// ESP-IDF twai_status_info_t
-struct twai_status_info_t
-{
-    int state;              // 0=STOPPED, 1=RUNNING, 2=BUS_OFF, 3=RECOVERING
-    uint msgs_to_tx;
-    uint msgs_to_rx;
-    uint tx_error_counter;
-    uint rx_error_counter;
-    uint tx_failed_count;
-    uint rx_missed_count;
-    uint rx_overrun_count;
-    uint arb_lost_count;
-    uint bus_error_count;
-}
+__gshared twai_node_handle_t[num_can] _handles;
+__gshared CanConfig[num_can] _configs;
+shared size_t[num_can] _rx_callback_bits;
 
-__gshared twai_handle_t[num_can] _handles;
+extern(C) bool rx_ready_trampoline(uint port) nothrow @nogc
+{
+    if (port >= num_can)
+        return false;
+    auto cb = cast(CanRxCallback)atomicLoad!(MemoryOrder.acquire)(_rx_callback_bits[port]);
+    return cb !is null ? cb(Can(cast(ubyte)port), CanCallbackContext.interrupt) : false;
+}
 
 extern(C) nothrow @nogc
 {
-    // Shim -- bitrate table + config construction + install + start
-    twai_handle_t ow_can_open(uint port, uint bitrate, int tx_gpio, int rx_gpio, ubyte sjw, ubyte tseg1, ubyte tseg2, ushort brp);
-
-    // Direct ESP-IDF v2 calls
-    int twai_stop_v2(twai_handle_t handle);
-    int twai_driver_uninstall_v2(twai_handle_t handle);
-    int twai_transmit_v2(twai_handle_t handle, const(twai_message_t)* message, uint ticks_to_wait);
-    int twai_receive_v2(twai_handle_t handle, twai_message_t* message, uint ticks_to_wait);
-    int twai_read_alerts_v2(twai_handle_t handle, uint* alerts, uint ticks_to_wait);
-    int twai_get_status_info_v2(twai_handle_t handle, twai_status_info_t* status_info);
-    int twai_initiate_recovery_v2(twai_handle_t handle);
-    int twai_clear_receive_queue_v2(twai_handle_t handle);
-    int twai_clear_transmit_queue_v2(twai_handle_t handle);
+    twai_node_handle_t ow_can_open(uint port, uint bitrate, int tx_gpio, int rx_gpio, ubyte sjw, ubyte tseg1, ubyte tseg2, ushort brp,
+                                   bool function(uint) nothrow @nogc rx_cb);
+    void ow_can_close(twai_node_handle_t handle);
+    bool ow_can_transmit(twai_node_handle_t handle, uint id, ubyte flags, ubyte dlc, const(ubyte)* data);
+    bool ow_can_receive(twai_node_handle_t handle, OwCanFrame* frame);
+    uint ow_can_check_errors(twai_node_handle_t handle);
+    uint ow_can_take_rx_drops(twai_node_handle_t handle);
+    uint ow_can_bus_state(twai_node_handle_t handle);
+    uint ow_can_tx_error_count(twai_node_handle_t handle);
+    uint ow_can_rx_error_count(twai_node_handle_t handle);
+    size_t ow_can_rx_available(twai_node_handle_t handle);
+    void ow_can_rx_flush(twai_node_handle_t handle);
+    bool ow_can_bus_recover(twai_node_handle_t handle);
 }

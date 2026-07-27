@@ -9,7 +9,9 @@
 #include "driver/uart.h"
 #include "esp_rom_serial_output.h"
 #include "soc/soc_caps.h"
+#include <stdbool.h>
 #include <stdatomic.h>
+#include <string.h>
 #ifdef OW_USE_LWIP
 #include "lwip/netdb.h"
 #endif
@@ -891,84 +893,338 @@ int ow_ble_deinit(void) { return 0; }
 #endif // CONFIG_BT_NIMBLE_ENABLED
 
 // -- CAN (TWAI) driver --
-//
-// Only ow_can_open lives here -- it builds the timing/general/filter config
-// structs and does install+start.  Everything else is called directly from D
-// via the ESP-IDF _v2 handle API.
 
-#include "soc/soc_caps.h"
 #if SOC_TWAI_SUPPORTED
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcpp"
-#include "driver/twai.h"
-#pragma GCC diagnostic pop
+#include "esp_twai.h"
+#include "esp_twai_onchip.h"
 
-twai_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2, uint16_t brp)
+#define OW_CAN_RX_CAP 32
+#define OW_CAN_TX_CAP 16
+
+_Static_assert((OW_CAN_RX_CAP & (OW_CAN_RX_CAP - 1)) == 0, "CAN RX capacity must be a power of two");
+_Static_assert(OW_CAN_TX_CAP <= 32, "CAN TX capacity exceeds the ownership bitmap");
+
+typedef bool (*ow_can_rx_cb_t)(unsigned port);
+
+typedef struct {
+    uint32_t id;
+    uint8_t flags;
+    uint8_t dlc;
+    uint8_t data[8];
+} ow_can_frame_t;
+
+typedef struct {
+    twai_frame_t frame;
+    uint8_t data[8];
+} ow_can_tx_slot_t;
+
+typedef struct {
+    twai_node_handle_t handle;
+    unsigned port;
+    ow_can_rx_cb_t rx_cb;
+    _Atomic uint32_t rx_head;
+    _Atomic uint32_t rx_tail;
+    _Atomic uint32_t rx_drops;
+    _Atomic uint32_t errors;
+    _Atomic uint32_t tx_used;
+    ow_can_frame_t rx[OW_CAN_RX_CAP];
+    ow_can_tx_slot_t tx[OW_CAN_TX_CAP];
+} ow_can_context_t;
+
+static ow_can_context_t ow_can_contexts[SOC_TWAI_CONTROLLER_NUM];
+
+static ow_can_context_t *ow_can_find(twai_node_handle_t handle)
 {
-    if (port >= SOC_TWAI_CONTROLLER_NUM)
+    if (!handle)
+        return NULL;
+    for (unsigned i = 0; i < SOC_TWAI_CONTROLLER_NUM; ++i)
+        if (ow_can_contexts[i].handle == handle)
+            return &ow_can_contexts[i];
+    return NULL;
+}
+
+static bool ow_can_rx_done(twai_node_handle_t handle, const twai_rx_done_event_data_t *edata, void *user_ctx)
+{
+    (void)edata;
+    ow_can_context_t *ctx = (ow_can_context_t *)user_ctx;
+    uint8_t data[64];
+    twai_frame_t frame = {
+        .buffer = data,
+        .buffer_len = sizeof(data),
+    };
+    if (twai_node_receive_from_isr(handle, &frame) != ESP_OK)
+        return false;
+
+    uint16_t length = twaifd_dlc2len(frame.header.dlc);
+    uint32_t head = atomic_load_explicit(&ctx->rx_head, memory_order_relaxed);
+    uint32_t tail = atomic_load_explicit(&ctx->rx_tail, memory_order_acquire);
+    if (length > sizeof(ctx->rx[0].data))
+    {
+        // The portable frame carries only classic-CAN payloads. Account unsupported FD frames as drops, not queue overruns.
+        atomic_fetch_add_explicit(&ctx->rx_drops, 1, memory_order_relaxed);
+        return false;
+    }
+    if (head - tail >= OW_CAN_RX_CAP)
+    {
+        atomic_fetch_add_explicit(&ctx->rx_drops, 1, memory_order_relaxed);
+        atomic_fetch_or_explicit(&ctx->errors, 1u << 5, memory_order_relaxed);
+        return false;
+    }
+
+    ow_can_frame_t *slot = &ctx->rx[head & (OW_CAN_RX_CAP - 1)];
+    slot->id = frame.header.id;
+    slot->flags = (frame.header.ide ? 1 : 0) | (frame.header.rtr ? 2 : 0) | (frame.header.fdf ? 4 : 0) | (frame.header.brs ? 8 : 0);
+    slot->dlc = (uint8_t)length;
+    if (frame.header.rtr)
+        memset(slot->data, 0, sizeof(slot->data));
+    else if (length > 0)
+        memcpy(slot->data, data, length);
+    atomic_store_explicit(&ctx->rx_head, head + 1, memory_order_release);
+    return ctx->rx_cb ? ctx->rx_cb(ctx->port) : false;
+}
+
+static bool ow_can_tx_done(twai_node_handle_t handle, const twai_tx_done_event_data_t *edata, void *user_ctx)
+{
+    (void)handle;
+    ow_can_context_t *ctx = (ow_can_context_t *)user_ctx;
+    if (!edata->is_tx_success)
+        atomic_fetch_or_explicit(&ctx->errors, 1u << 4, memory_order_relaxed);
+    if (edata->done_tx_frame)
+    {
+        ow_can_tx_slot_t *slot = (ow_can_tx_slot_t *)edata->done_tx_frame;
+        unsigned index = (unsigned)(slot - ctx->tx);
+        if (index < OW_CAN_TX_CAP)
+            atomic_fetch_and_explicit(&ctx->tx_used, ~(1u << index), memory_order_release);
+    }
+    return false;
+}
+
+static bool ow_can_error(twai_node_handle_t handle, const twai_error_event_data_t *edata, void *user_ctx)
+{
+    (void)handle;
+    ow_can_context_t *ctx = (ow_can_context_t *)user_ctx;
+    uint32_t errors = 0;
+    // ESP-IDF 6.0 exposes arbitration, bit, form, stuff, and ACK flags here, but no CRC flag.
+    if (edata->err_flags.bit_err)
+        errors |= 1u << 0;
+    if (edata->err_flags.stuff_err)
+        errors |= 1u << 1;
+    if (edata->err_flags.form_err)
+        errors |= 1u << 3;
+    if (edata->err_flags.ack_err)
+        errors |= 1u << 4;
+    atomic_fetch_or_explicit(&ctx->errors, errors, memory_order_relaxed);
+    return false;
+}
+
+twai_node_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2,
+                               uint16_t brp, ow_can_rx_cb_t rx_cb)
+{
+    if (port >= SOC_TWAI_CONTROLLER_NUM || bitrate == 0 || tx_gpio < 0 || rx_gpio < 0)
         return NULL;
 
-    twai_timing_config_t timing;
+    ow_can_context_t *ctx = &ow_can_contexts[port];
+    if (ctx->handle)
+        return ctx->handle;
+
+    twai_onchip_node_config_t config = {
+        .io_cfg = {
+            .tx = tx_gpio,
+            .rx = rx_gpio,
+            .quanta_clk_out = -1,
+            .bus_off_indicator = -1,
+        },
+        .bit_timing = {
+            .bitrate = bitrate,
+        },
+        .fail_retry_cnt = -1,
+        .tx_queue_depth = OW_CAN_TX_CAP,
+    };
+
+    twai_node_handle_t handle = NULL;
+    if (twai_new_node_onchip(&config, &handle) != ESP_OK)
+        return NULL;
+
     if (brp > 0)
     {
-        memset(&timing, 0, sizeof(timing));
-        timing.clk_src = TWAI_CLK_SRC_DEFAULT;
-        timing.brp = brp;
-        timing.tseg_1 = tseg1;
-        timing.tseg_2 = tseg2;
-        timing.sjw = sjw;
-    }
-    else
-    {
-        switch (bitrate)
+        twai_timing_advanced_config_t timing = {
+            .brp = brp,
+            .tseg_1 = tseg1,
+            .tseg_2 = tseg2,
+            .sjw = sjw,
+        };
+        if (twai_node_reconfig_timing(handle, &timing, NULL) != ESP_OK)
         {
-        case 1000:    timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_1KBITS();     break;
-        case 5000:    timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_5KBITS();     break;
-        case 10000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_10KBITS();    break;
-        case 12500:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_12_5KBITS();  break;
-        case 16000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_16KBITS();    break;
-        case 20000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_20KBITS();    break;
-        case 25000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_25KBITS();    break;
-        case 50000:   timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_50KBITS();    break;
-        case 100000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_100KBITS();   break;
-        case 125000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_125KBITS();   break;
-        case 250000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_250KBITS();   break;
-        case 500000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_500KBITS();   break;
-        case 800000:  timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_800KBITS();   break;
-        case 1000000: timing = (twai_timing_config_t)TWAI_TIMING_CONFIG_1MBITS();     break;
-        default: return NULL;
+            twai_node_delete(handle);
+            return NULL;
         }
     }
 
-    twai_general_config_t general = TWAI_GENERAL_CONFIG_DEFAULT_V2(
-        port, tx_gpio, rx_gpio, TWAI_MODE_NORMAL);
-    general.alerts_enabled = TWAI_ALERT_BUS_ERROR | TWAI_ALERT_ERR_PASS
-        | TWAI_ALERT_ERR_ACTIVE | TWAI_ALERT_BUS_OFF | TWAI_ALERT_ABOVE_ERR_WARN
-        | TWAI_ALERT_BELOW_ERR_WARN | TWAI_ALERT_RX_FIFO_OVERRUN
-        | TWAI_ALERT_RX_QUEUE_FULL | TWAI_ALERT_ARB_LOST | TWAI_ALERT_TX_FAILED;
-    twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->handle = handle;
+    ctx->port = port;
+    ctx->rx_cb = rx_cb;
 
-    twai_handle_t handle = NULL;
-    if (twai_driver_install_v2(&general, &timing, &filter, &handle) != ESP_OK)
-        return NULL;
-
-    if (twai_start_v2(handle) != ESP_OK)
+    const twai_event_callbacks_t callbacks = {
+        .on_tx_done = &ow_can_tx_done,
+        .on_rx_done = &ow_can_rx_done,
+        .on_error = &ow_can_error,
+    };
+    if (twai_node_register_event_callbacks(handle, &callbacks, ctx) != ESP_OK || twai_node_enable(handle) != ESP_OK)
     {
-        twai_driver_uninstall_v2(handle);
+        ctx->handle = NULL;
+        twai_node_delete(handle);
         return NULL;
     }
-
     return handle;
+}
+
+void ow_can_close(twai_node_handle_t handle)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    if (!ctx)
+        return;
+    twai_node_disable(handle);
+    twai_node_delete(handle);
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+bool ow_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint8_t dlc, const uint8_t *data)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    if (!ctx || dlc > 8 || (!data && dlc > 0))
+        return false;
+
+    uint32_t used = atomic_load_explicit(&ctx->tx_used, memory_order_relaxed);
+    unsigned index;
+    for (;;)
+    {
+        for (index = 0; index < OW_CAN_TX_CAP; ++index)
+            if (!(used & (1u << index)))
+                break;
+        if (index == OW_CAN_TX_CAP)
+            return false;
+        uint32_t desired = used | (1u << index);
+        if (atomic_compare_exchange_weak_explicit(&ctx->tx_used, &used, desired, memory_order_acquire, memory_order_relaxed))
+            break;
+    }
+
+    ow_can_tx_slot_t *slot = &ctx->tx[index];
+    memset(slot, 0, sizeof(*slot));
+    slot->frame.header.id = id;
+    slot->frame.header.dlc = dlc;
+    slot->frame.header.ide = (flags & 1) != 0;
+    slot->frame.header.rtr = (flags & 2) != 0;
+    slot->frame.header.fdf = (flags & 4) != 0;
+    slot->frame.header.brs = (flags & 8) != 0;
+    slot->frame.buffer = slot->data;
+    slot->frame.buffer_len = dlc;
+    if (!(flags & 2) && dlc > 0)
+        memcpy(slot->data, data, dlc);
+
+    if (twai_node_transmit(handle, &slot->frame, 0) != ESP_OK)
+    {
+        atomic_fetch_and_explicit(&ctx->tx_used, ~(1u << index), memory_order_release);
+        return false;
+    }
+    return true;
+}
+
+bool ow_can_receive(twai_node_handle_t handle, ow_can_frame_t *frame)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    if (!ctx || !frame)
+        return false;
+    uint32_t tail = atomic_load_explicit(&ctx->rx_tail, memory_order_relaxed);
+    uint32_t head = atomic_load_explicit(&ctx->rx_head, memory_order_acquire);
+    if (tail == head)
+        return false;
+    *frame = ctx->rx[tail & (OW_CAN_RX_CAP - 1)];
+    atomic_store_explicit(&ctx->rx_tail, tail + 1, memory_order_release);
+    return true;
+}
+
+uint32_t ow_can_check_errors(twai_node_handle_t handle)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    return ctx ? atomic_exchange_explicit(&ctx->errors, 0, memory_order_relaxed) : 0;
+}
+
+uint32_t ow_can_take_rx_drops(twai_node_handle_t handle)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    return ctx ? atomic_exchange_explicit(&ctx->rx_drops, 0, memory_order_relaxed) : 0;
+}
+
+uint32_t ow_can_bus_state(twai_node_handle_t handle)
+{
+    twai_node_status_t status;
+    return twai_node_get_info(handle, &status, NULL) == ESP_OK ? (uint32_t)status.state : (uint32_t)TWAI_ERROR_BUS_OFF;
+}
+
+uint32_t ow_can_tx_error_count(twai_node_handle_t handle)
+{
+    twai_node_status_t status;
+    return twai_node_get_info(handle, &status, NULL) == ESP_OK ? status.tx_error_count : 0;
+}
+
+uint32_t ow_can_rx_error_count(twai_node_handle_t handle)
+{
+    twai_node_status_t status;
+    return twai_node_get_info(handle, &status, NULL) == ESP_OK ? status.rx_error_count : 0;
+}
+
+size_t ow_can_rx_available(twai_node_handle_t handle)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    if (!ctx)
+        return 0;
+    uint32_t head = atomic_load_explicit(&ctx->rx_head, memory_order_acquire);
+    uint32_t tail = atomic_load_explicit(&ctx->rx_tail, memory_order_relaxed);
+    return head - tail;
+}
+
+void ow_can_rx_flush(twai_node_handle_t handle)
+{
+    ow_can_context_t *ctx = ow_can_find(handle);
+    if (!ctx)
+        return;
+    uint32_t head = atomic_load_explicit(&ctx->rx_head, memory_order_acquire);
+    atomic_store_explicit(&ctx->rx_tail, head, memory_order_release);
+}
+
+bool ow_can_bus_recover(twai_node_handle_t handle)
+{
+    return twai_node_recover(handle) == ESP_OK;
 }
 
 #else // !SOC_TWAI_SUPPORTED
 
-typedef struct twai_obj_t *twai_handle_t;
+typedef struct twai_node_base *twai_node_handle_t;
+typedef bool (*ow_can_rx_cb_t)(unsigned);
+typedef struct {
+    uint32_t id;
+    uint8_t flags;
+    uint8_t dlc;
+    uint8_t data[8];
+} ow_can_frame_t;
 
-twai_handle_t ow_can_open(unsigned, uint32_t, int, int, uint8_t, uint8_t, uint8_t, uint16_t)
+twai_node_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2,
+                               uint16_t brp, ow_can_rx_cb_t rx_cb)
 {
-    return (twai_handle_t)0;
+    return NULL;
 }
+void ow_can_close(twai_node_handle_t handle) {}
+bool ow_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint8_t dlc, const uint8_t *data) { return false; }
+bool ow_can_receive(twai_node_handle_t handle, ow_can_frame_t *frame) { return false; }
+uint32_t ow_can_check_errors(twai_node_handle_t handle) { return 0; }
+uint32_t ow_can_take_rx_drops(twai_node_handle_t handle) { return 0; }
+uint32_t ow_can_bus_state(twai_node_handle_t handle) { return 3; } // CanBusState.bus_off
+uint32_t ow_can_tx_error_count(twai_node_handle_t handle) { return 0; }
+uint32_t ow_can_rx_error_count(twai_node_handle_t handle) { return 0; }
+size_t ow_can_rx_available(twai_node_handle_t handle) { return 0; }
+void ow_can_rx_flush(twai_node_handle_t handle) {}
+bool ow_can_bus_recover(twai_node_handle_t handle) { return false; }
 
 #endif // SOC_TWAI_SUPPORTED
 

@@ -36,8 +36,9 @@ struct CanConfig
 {
     uint bitrate = 500_000;     // nominal bitrate (bits/s)
     uint data_bitrate;          // FD data phase bitrate (0 = classic CAN only)
-    ubyte tx_gpio = ubyte.max;  // GPIO pin for TX (max = platform default)
-    ubyte rx_gpio = ubyte.max;  // GPIO pin for RX (max = platform default)
+    // ubyte.max requests a platform default and is rejected by backends that do not define one.
+    ubyte tx_gpio = ubyte.max;  // GPIO pin for TX
+    ubyte rx_gpio = ubyte.max;  // GPIO pin for RX
 
     // Bit timing (0 = auto-calculate from bitrate)
     ubyte sjw;          // synchronization jump width (1-4 TQ)
@@ -66,8 +67,16 @@ struct CanFilter
     bool match_all;     // ignore id/mask, accept everything (default)
 }
 
-// Called from ISR when a frame has been received.
-alias CanRxCallback = void function(Can can, ref const CanFrame frame) nothrow @nogc;
+enum CanCallbackContext : ubyte
+{
+    task,
+    interrupt,
+}
+
+// Called immediately after a frame has been queued for can_receive(). The receiver must marshal work that is unsafe in the reported context, and the
+// callback must not block or call back into the CAN driver. Interrupt callbacks return whether the platform should yield to a task woken by the
+// callback; task-context backends ignore the result.
+alias CanRxCallback = bool function(Can can, CanCallbackContext context) nothrow @nogc;
 
 // Called from ISR when a TX mailbox becomes free.
 alias CanTxCallback = void function(Can can) nothrow @nogc;
@@ -153,8 +162,9 @@ Result can_open(ref Can can, ubyte port, ref const CanConfig cfg, CanRxCallback 
         if (port >= num_can)
             return InternalResult.invalid_parameter;
 
-        if (!can_hw_open(port, cfg))
-            return InternalResult.failed;
+        Result result = can_hw_open(port, cfg, rx_cb);
+        if (!result)
+            return result;
 
         can.port = port;
         return Result.success;
@@ -196,19 +206,22 @@ Result can_transmit(ref Can can, ref const CanFrame frame, CanTxOp* op = null)
     }
 }
 
-void can_tx_abort(ref Can can, CanTxOp* op)
+Result can_tx_abort(ref Can can, CanTxOp* op)
 {
     static if (num_can == 0)
         assert(false, "no CAN on this platform");
     else
     {
-        can_hw_tx_abort(can.port);
+        Result result = can_hw_tx_abort(can.port);
+        if (!result)
+            return result;
         if (op !is null)
         {
             op.status = CanTxOp.Status.cancelled;
             if (op.cb !is null)
                 op.cb(&can, *op);
         }
+        return Result.success;
     }
 }
 
@@ -289,6 +302,14 @@ CanError can_check_errors(ref Can can)
         return can_hw_check_errors(can.port);
 }
 
+uint can_take_rx_drops(ref Can can)
+{
+    static if (num_can == 0)
+        assert(false, "no CAN on this platform");
+    else
+        return can_hw_take_rx_drops(can.port);
+}
+
 // Bus recovery
 
 Result can_bus_recover(ref Can can)
@@ -307,7 +328,10 @@ Result can_bus_recover(ref Can can)
 
 void can_set_rx_callback(ref Can can, CanRxCallback cb)
 {
-    assert(false, "TODO: can_set_rx_callback");
+    static if (num_can == 0)
+        assert(false, "no CAN on this platform");
+    else
+        can_hw_set_rx_callback(can.port, cb);
 }
 
 void can_set_tx_callback(ref Can can, CanTxCallback cb)
@@ -319,17 +343,6 @@ void can_set_bus_state_callback(ref Can can, CanBusStateCallback cb)
 {
     assert(false, "TODO: can_set_bus_state_callback");
 }
-
-// Poll (for polled mode - check HW FIFOs and invoke callbacks)
-
-void can_poll(ref Can can)
-{
-    static if (num_can == 0)
-        assert(false, "no CAN on this platform");
-    else
-        can_hw_poll(can.port);
-}
-
 
 // ════════════════════════════════════════════════════════════════════
 // Tests
@@ -357,8 +370,6 @@ unittest
             assert(r2, "can_open failed");
             assert(port.is_open);
             assert(port.port == p);
-
-            can_poll(port);
 
             assert(can_check_errors(port) == CanError.none);
 

@@ -67,9 +67,10 @@ struct I2cTransfer
 struct I2cOperation
 {
 nothrow @nogc:
-    // Completion runs in the reported backend context and must not block. An interrupt callback returns whether the platform should yield to a task
-    // woken by the callback; task-context backends ignore the result. The callback may reset and reuse the operation immediately. Other threads
-    // must first observe is_done, which performs an acquire load, before reading the result or reusing the operation, its buffers, or its bus.
+    // Completion is published and the callback runs immediately in the backend's completion context. The receiver must marshal work that is unsafe in
+    // that context, and the callback must not block. An interrupt callback returns whether the platform should yield to a task woken by the callback;
+    // task-context backends ignore the result. Other threads must first observe is_done, which performs an acquire load, before reading the result or
+    // reusing the operation, its buffers, or its bus. Completion state is published and bus ownership is released before the callback begins.
     alias Callback = bool function(ref I2cOperation operation, I2cCallbackContext context) nothrow @nogc;
 
     void* user_data;

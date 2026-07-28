@@ -311,8 +311,19 @@ ubyte wifi_hw_get_channel(uint port)
 
 byte wifi_hw_get_rssi(uint port)
 {
-    // TODO: esp_wifi_sta_get_ap_info -> rssi
-    return -127;
+    WifiStaLinkInfo info;
+    return wifi_hw_get_sta_link_info(port, info) ? info.rssi : 0;
+}
+
+bool wifi_hw_get_sta_link_info(uint port, ref WifiStaLinkInfo info)
+{
+    if (port >= num_wifi)
+        return false;
+    int rssi;
+    if (ow_wifi_sta_get_ap_info(info.bssid.ptr, &rssi) == 0)
+        return false;
+    info.rssi = cast(byte)rssi;
+    return true;
 }
 
 bool wifi_hw_set_tx_power(uint port, byte power_dbm)
@@ -824,6 +835,7 @@ extern(C) nothrow @nogc
                       const(ubyte)* payload) nothrow @nogc cb);
     int ow_wifi_set_channel(int primary, int secondary);
     int ow_wifi_raw_tx(int ifx, const(ubyte)* frame, int len, int en_sys_seq);
+    int ow_wifi_sta_get_ap_info(ubyte* bssid, int* rssi);
 }
 
 // Direct ESP-IDF calls

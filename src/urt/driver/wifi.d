@@ -171,6 +171,12 @@ struct WifiStaInfo
     byte rssi;
 }
 
+struct WifiStaLinkInfo
+{
+    ubyte[6] bssid;
+    byte rssi;
+}
+
 // Delivered by wifi_service() when an Ethernet frame is received on a virtual
 // interface. Data includes the 14-byte Ethernet header and remains valid only
 // until the callback returns.
@@ -507,6 +513,16 @@ byte wifi_get_rssi(ref Wifi wifi)
         assert(false, "no WiFi on this platform");
     else
         return wifi_hw_get_rssi(wifi.port);
+}
+
+bool wifi_get_sta_link_info(ref Wifi wifi, ref WifiStaLinkInfo info)
+{
+    static if (num_wifi == 0)
+        return false;
+    else static if (__traits(compiles, wifi_hw_get_sta_link_info(wifi.port, info)))
+        return wifi_hw_get_sta_link_info(wifi.port, info);
+    else
+        return false;
 }
 
 Result wifi_set_tx_power(ref Wifi wifi, byte power_dbm)

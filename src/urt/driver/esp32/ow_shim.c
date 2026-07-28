@@ -710,6 +710,19 @@ int ow_wifi_ap_set_max_clients(uint8_t max_conn)
     return esp_wifi_set_config(WIFI_IF_AP, &cfg) == ESP_OK ? 1 : 0;
 }
 
+int ow_wifi_sta_get_ap_info(uint8_t *bssid, int *rssi)
+{
+    wifi_ap_record_t record;
+    if (esp_wifi_sta_get_ap_info(&record) != ESP_OK)
+        return 0;
+
+    if (bssid)
+        memcpy(bssid, record.bssid, sizeof(record.bssid));
+    if (rssi)
+        *rssi = record.rssi;
+    return 1;
+}
+
 // Ethernet frame RX callbacks -- one per netif (STA=0, AP=1).
 // esp_wifi_internal_reg_rxcb gives us raw Ethernet frames before lwIP,
 // so the bridge/routing layer sees all traffic.
@@ -842,6 +855,7 @@ void ow_wifi_deinit(void) {}
 int ow_wifi_sta_config(const char *s, const char *p, const uint8_t *b) { (void)s;(void)p;(void)b; return 0; }
 int ow_wifi_ap_config(const char *s, const char *p, uint8_t c, uint8_t m, uint8_t h) { (void)s;(void)p;(void)c;(void)m;(void)h; return 0; }
 int ow_wifi_ap_set_max_clients(uint8_t m) { (void)m; return 0; }
+int ow_wifi_sta_get_ap_info(uint8_t *b, int *r) { (void)b; (void)r; return 0; }
 int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb) { (void)cb; return 0; }
 void ow_wifi_set_sta_callback(ow_wifi_event_cb_t cb) { (void)cb; }
 void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb) { (void)cb; }

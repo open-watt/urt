@@ -8,6 +8,12 @@
 //
 // Windows has one BLE radio (port 0). Multiple radios are not
 // distinguished by WinRT -- it uses the system default adapter.
+//
+// TODO: ble_hw_connect ignores addr_type. FromBluetoothAddressAsync assumes a
+// public address, so connecting to a random-address peer (Tesla vehicles) likely
+// only works when Windows still has the device in its scan cache. Switch to
+// IBluetoothLEDeviceStatics2.FromBluetoothAddressWithBluetoothAddressTypeAsync;
+// needs testing against the car before landing.
 module urt.driver.windows.ble;
 
 version (Windows):
@@ -225,15 +231,18 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
     ulong ble_addr = mac_to_ble_addr(peer_addr);
 
     IInspectable async_op;
-    if (_device_statics.FromBluetoothAddressAsync(ble_addr, &async_op) < 0 || async_op is null)
+    // TODO: pass addr_type via the IBluetoothLEDeviceStatics2 overload (see module header)
+    HRESULT hr = _device_statics.FromBluetoothAddressAsync(ble_addr, &async_op);
+    if (hr < 0 || async_op is null)
     {
-        log.error("FromBluetoothAddressAsync failed");
+        log.errorf("FromBluetoothAddressAsync failed: hr=x{0,08x}", cast(uint)hr);
         return false;
     }
 
     register_completion(async_op);
     _pending_connect.async_op = async_op;
     _pending_connect.peer_addr = peer_addr;
+    _pending_connect.addr_type = addr_type;
     return true;
 }
 
@@ -314,37 +323,74 @@ bool ble_hw_gatt_write(uint port, BLEConn conn, ushort handle, const(ubyte)[] da
     if (gc is null || gc.characteristic is null)
         return false;
 
-    auto buf = defaultAllocator().allocT!MemoryBuffer;
-    if (buf is null)
+    // we hold our ref only until the call returns; WinRT keeps its own for the async
+    IBuffer ibuf = make_winrt_buffer(data);
+    if (ibuf is null)
         return false;
-
-    // clone data -- packet payload may be freed before async completes
-    ubyte* data_copy = cast(ubyte*)defaultAllocator().alloc(data.length).ptr;
-    if (data_copy is null && data.length > 0)
-    {
-        defaultAllocator().freeT(buf);
-        return false;
-    }
-    data_copy[0 .. data.length] = data[];
-    buf.set(data_copy[0 .. data.length]);
+    scope(exit) ibuf.Release();
 
     IInspectable async_op;
     if (with_response)
-        gc.characteristic.WriteValueAsync(cast(IBuffer)buf, &async_op);
+        gc.characteristic.WriteValueAsync(ibuf, &async_op);
     else
-        gc.characteristic.WriteValueWithOptionAsync(cast(IBuffer)buf, 1, &async_op); // WriteWithoutResponse
+        gc.characteristic.WriteValueWithOptionAsync(ibuf, 1, &async_op); // WriteWithoutResponse
 
     if (async_op is null)
-    {
-        buf.Release(); // frees both MemoryBuffer and data_copy
         return false;
-    }
 
     register_completion(async_op);
     _pending_gatt[_num_pending_gatt++] = PendingGattOp(
         async_op, conn.id, handle,
         with_response ? GattOpType.write : GattOpType.write_no_response);
     return true;
+}
+
+// Build a real Windows.Storage.Streams.Buffer holding a copy of `data`; returns a
+// reference owned by the caller (Release when done). WinRT must marshal the value
+// buffer to the Bluetooth service process, which needs the runtime Buffer's
+// marshaler; a hand-rolled IBuffer has none and the write faults (AsyncStatus.error).
+IBuffer make_winrt_buffer(const(ubyte)[] data)
+{
+    if (_buffer_factory is null)
+    {
+        HSTRING cls = g_winrt.make_string("Windows.Storage.Streams.Buffer"w);
+        if (cls is null)
+            return null;
+        scope(exit) g_winrt.WindowsDeleteString(cls);
+
+        void* result;
+        HRESULT hr = g_winrt.RoGetActivationFactory(cls, &IID_IBufferFactory, &result);
+        if (hr < 0 || result is null)
+        {
+            log.errorf("RoGetActivationFactory(Windows.Storage.Streams.Buffer) failed: hr=x{0,08x}", cast(uint)hr);
+            return null;
+        }
+        _buffer_factory = cast(IBufferFactory)result;
+    }
+
+    uint cap = cast(uint)data.length;
+    IBuffer ibuf;
+    if (_buffer_factory.Create(cap, &ibuf) < 0 || ibuf is null)
+        return null;
+
+    auto access = qi!IBufferByteAccess(ibuf, &IID_IBufferByteAccess);
+    if (access is null)
+    {
+        ibuf.Release();
+        return null;
+    }
+    scope(exit) access.Release();
+
+    ubyte* ptr;
+    if (access.Buffer(&ptr) < 0 || (ptr is null && cap > 0))
+    {
+        ibuf.Release();
+        return null;
+    }
+    if (cap > 0)
+        ptr[0 .. cap] = data[];
+    ibuf.put_Length(cap);
+    return ibuf;
 }
 
 // --- Notifications ---
@@ -541,6 +587,7 @@ struct PendingConnect
 {
     IInspectable async_op;
     ubyte[6] peer_addr;
+    BLEAddrType addr_type;
 }
 
 struct PendingDiscover
@@ -621,6 +668,7 @@ __gshared ubyte _next_adv_id;
 
 // device factory
 __gshared IBluetoothLEDeviceStatics _device_statics;
+__gshared IBufferFactory _buffer_factory;
 
 // pending connect
 __gshared PendingConnect _pending_connect;
@@ -780,6 +828,10 @@ void poll_connect(BLE ble)
 
     if (status != AsyncStatus.completed)
     {
+        HRESULT error_code;
+        async_info.get_ErrorCode(&error_code);
+        log.errorf("BluetoothLEDevice lookup failed: address_type={0} status={1} hr=x{2,08x}",
+                   cast(int)_pending_connect.addr_type, cast(int)status, cast(uint)error_code);
         cleanup_connect();
         if (_conn_cb !is null)
             _conn_cb(ble, BLEConn(ubyte.max), false, BLEError.not_found);
@@ -788,13 +840,14 @@ void poll_connect(BLE ble)
 
     auto async_op = cast(IAsyncOperation_BluetoothLEDevice)cast(void*)_pending_connect.async_op;
     IBluetoothLEDevice device;
-    async_op.GetResults(&device);
+    HRESULT result = async_op.GetResults(&device);
 
     auto peer_addr = _pending_connect.peer_addr;
     cleanup_connect();
 
-    if (device is null)
+    if (result < 0 || device is null)
     {
+        log.errorf("BluetoothLEDevice GetResults failed: hr=x{0,08x}", cast(uint)result);
         if (_conn_cb !is null)
             _conn_cb(ble, BLEConn(ubyte.max), false, BLEError.not_found);
         return;
@@ -1098,8 +1151,12 @@ void poll_gatt(BLE ble)
                 GattCommunicationStatus gatt_status;
                 async_op.GetResults(&gatt_status);
                 success = gatt_status == GattCommunicationStatus.success;
+                if (!success)
+                    log.warning("GATT write handle=", pg.handle, " failed: ", gatt_status);
             }
         }
+        else if (pg.op_type != GattOpType.read)
+            log.warning("GATT write handle=", pg.handle, " did not complete: ", status);
 
         // fire callback
         if (pg.op_type == GattOpType.read)
@@ -1130,11 +1187,12 @@ void poll_gatt(BLE ble)
 // WinRT thread callbacks (fire on thread pool)
 // ====================================================================
 
-void on_advertisement_received(ubyte[6] addr, byte rssi, bool connectable, bool is_scan_response, const(ubyte)[] ad_payload)
+void on_advertisement_received(ubyte[6] addr, BLEAddrType addr_type, byte rssi,
+    bool connectable, bool is_scan_response, const(ubyte)[] ad_payload)
 {
     BLEAdvReport report = void;
     report.addr = addr;
-    report.addr_type = BLEAddrType.public_;
+    report.addr_type = addr_type;
     report.adv_type = connectable ? BLEAdvType.connectable : BLEAdvType.nonconnectable;
     report.rssi = rssi;
     report.tx_power = -128;
@@ -1372,6 +1430,7 @@ struct EventRegistrationToken { long value; }
 
 enum AsyncStatus : int { started = 0, completed = 1, canceled = 2, error = 3 }
 enum BluetoothLEScanningMode : int { passive = 0, active = 1 }
+enum BluetoothAddressType : int { public_ = 0, random_ = 1, unspecified = 2 }
 enum GattCommunicationStatus : int { success = 0, unreachable = 1, protocol_error = 2, access_denied = 3 }
 
 enum GattCharacteristicProperties : uint
@@ -1403,6 +1462,7 @@ static immutable IID_IGattCharacteristic                         = GUID(0x59CB50
 static immutable IID_IGattReadResult                             = GUID(0x63A66F08, 0x1AEA, 0x4C4C, [0xA5,0x0F,0x97,0xBA,0xE4,0x74,0xB3,0x48]);
 static immutable IID_IBluetoothLEAdvertisementPublisher          = GUID(0xCDE820F9, 0xD9FA, 0x43D6, [0xA2,0x64,0xDD,0xD8,0xB7,0xDA,0x8B,0x78]);
 static immutable IID_IBufferByteAccess                           = GUID(0x905A0FEF, 0xBC53, 0x11DF, [0x8C,0x49,0x00,0x1E,0x4F,0xC6,0x86,0xDA]);
+static immutable IID_IBufferFactory                              = GUID(0x71AF914D, 0xC10F, 0x484B, [0xBC,0x50,0x14,0xBC,0x62,0x3B,0x3A,0x27]);
 static immutable IID_TypedEventHandler_Watcher_Received          = GUID(0x90EB4ECA, 0xD465, 0x5EA0, [0xA6,0x1C,0x03,0x3C,0x8C,0x5E,0xCE,0xF2]);
 static immutable IID_TypedEventHandler_Gatt_ValueChanged         = GUID(0xC1F420F6, 0x6292, 0x5760, [0xA2,0xC9,0x9D,0xDF,0x98,0x68,0x3C,0xFC]);
 static immutable IID_TypedEventHandler_Device_ConnectionStatus   = GUID(0x24A901AD, 0x910F, 0x5C29, [0xB2,0x36,0x80,0x3C,0xC0,0x30,0x60,0xFE]);
@@ -1559,6 +1619,12 @@ nothrow @nogc:
     HRESULT get_Capacity(uint* value);
     HRESULT get_Length(uint* value);
     HRESULT put_Length(uint value);
+}
+
+interface IBufferFactory : IInspectable
+{
+nothrow @nogc:
+    HRESULT Create(uint capacity, IBuffer* value);
 }
 
 interface IBufferByteAccess : IUnknown
@@ -1738,55 +1804,11 @@ nothrow @nogc:
 }
 
 
-class MemoryBuffer : ComObject, IBuffer, IBufferByteAccess
-{
-nothrow @nogc:
-    private ubyte* _data;
-    private uint _length;
-    private uint _capacity;
-
-    void set(const(ubyte)[] data)
-    {
-        _data = cast(ubyte*)data.ptr;
-        _length = cast(uint)data.length;
-        _capacity = cast(uint)data.length;
-    }
-
-    override ULONG Release()
-    {
-        auto prev = atomicFetchSub(_ref_count, 1);
-        if (prev == 1)
-        {
-            if (_data !is null)
-                defaultAllocator().free(_data[0 .. _capacity]);
-            defaultAllocator().freeT(this);
-            return 0;
-        }
-        return prev - 1;
-    }
-
-    override HRESULT QueryInterface(const(GUID)* riid, void** ppv)
-    {
-        if (*riid == IID_IBufferByteAccess)
-        {
-            *ppv = cast(void*)cast(IBufferByteAccess)this;
-            AddRef();
-            return 0;
-        }
-        return super.QueryInterface(riid, ppv);
-    }
-
-    HRESULT get_Capacity(uint* value) { *value = _capacity; return 0; }
-    HRESULT get_Length(uint* value) { *value = _length; return 0; }
-    HRESULT put_Length(uint value) { _length = value; return 0; }
-    HRESULT Buffer(ubyte** value) { *value = _data; return 0; }
-}
-
-
 class AdvertisementReceivedHandler : ComObject, IAdvertisementReceivedHandler
 {
 nothrow @nogc:
-    extern(D) void function(ubyte[6] addr, byte rssi, bool connectable, bool is_scan_response, const(ubyte)[] ad_payload) nothrow @nogc callback;
+    extern(D) void function(ubyte[6] addr, BLEAddrType addr_type, byte rssi,
+        bool connectable, bool is_scan_response, const(ubyte)[] ad_payload) nothrow @nogc callback;
 
     override HRESULT QueryInterface(const(GUID)* riid, void** ppv)
     {
@@ -1818,12 +1840,17 @@ nothrow @nogc:
 
         bool connectable = false;
         bool is_scan_response = false;
+        BLEAddrType addr_type = BLEAddrType.public_;
         auto args2 = qi!IBluetoothLEAdvertisementReceivedEventArgs2(args_raw, &IID_IBluetoothLEAdvertisementReceivedEventArgs2);
         if (args2 !is null)
         {
+            int windows_addr_type;
             BOOL conn, scan_rsp;
+            args2.get_BluetoothAddressType(&windows_addr_type);
             args2.get_IsConnectable(&conn);
             args2.get_IsScanResponse(&scan_rsp);
+            if (windows_addr_type == BluetoothAddressType.random_)
+                addr_type = BLEAddrType.random_static;
             connectable = conn != 0;
             is_scan_response = scan_rsp != 0;
             args2.Release();
@@ -1838,7 +1865,7 @@ nothrow @nogc:
         if (adv !is null)
             adv.Release();
 
-        callback(mac, cast(byte)rssi, connectable, is_scan_response, payload[0 .. payload_len]);
+        callback(mac, addr_type, cast(byte)rssi, connectable, is_scan_response, payload[0 .. payload_len]);
         return 0;
     }
 }

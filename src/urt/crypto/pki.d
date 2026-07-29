@@ -851,7 +851,7 @@ Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
 
         // Build BCRYPT_ECCKEY_BLOB: { magic(4), cbKey(4)=32 } X[32] Y[32] d[32]
         ubyte[104] blob = void;
-        (cast(uint[])blob[0 .. 8])[0] = 0x34534345; // BCRYPT_ECDSA_PRIVATE_P256_MAGIC
+        (cast(uint[])blob[0 .. 8])[0] = 0x32534345; // BCRYPT_ECDSA_PRIVATE_P256_MAGIC ("ECS2")
         (cast(uint[])blob[0 .. 8])[1] = 32;          // cbKey
         blob[8 .. 40] = x[];
         blob[40 .. 72] = y[];

@@ -8,6 +8,12 @@
 //
 // Windows has one BLE radio (port 0). Multiple radios are not
 // distinguished by WinRT -- it uses the system default adapter.
+//
+// TODO: ble_hw_connect ignores addr_type. FromBluetoothAddressAsync assumes a
+// public address, so connecting to a random-address peer (Tesla vehicles) likely
+// only works when Windows still has the device in its scan cache. Switch to
+// IBluetoothLEDeviceStatics2.FromBluetoothAddressWithBluetoothAddressTypeAsync;
+// needs testing against the car before landing.
 module urt.driver.windows.ble;
 
 version (Windows):
@@ -225,6 +231,7 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
     ulong ble_addr = mac_to_ble_addr(peer_addr);
 
     IInspectable async_op;
+    // TODO: pass addr_type via the IBluetoothLEDeviceStatics2 overload (see module header)
     HRESULT hr = _device_statics.FromBluetoothAddressAsync(ble_addr, &async_op);
     if (hr < 0 || async_op is null)
     {

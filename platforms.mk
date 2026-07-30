@@ -257,6 +257,10 @@ ifdef PROCESSOR
   else ifeq ($(PROCESSOR),lx6)
       ARCH  = xtensa
       MATTR = +fp,+loop,+mac16,+dfpaccel
+      # ESP32 IDF libc omits 1/2/4-byte __atomic helpers because LX6 has S32C1I; Espressif llc knows this feature but upstream LDC does not.
+      XTENSA_LLC_EXTRA_MATTR := +s32c1i
+      # Espressif LLVM 20 crashes while releasing its assumption cache when tail duplication and S32C1I atomic lowering are both enabled.
+      XTENSA_LLC_EXTRA_FLAGS := --disable-tail-duplicate
   else ifeq ($(PROCESSOR),lx7)
       ARCH  = xtensa
   else ifeq ($(PROCESSOR),k210)
@@ -642,6 +646,9 @@ ifeq ($(COMPILER),ldc)
         DFLAGS := $(DFLAGS) -mtriple=xtensa-none-elf --thread-model=single -emulated-tls \
             --align-all-functions=2 $(XTENSA_MATTR) \
             -gcc=$(XTENSA_GCC_DIR)$(XTENSA_GCC)
+        ifdef XTENSA_LLC_EXTRA_MATTR
+            XTENSA_MATTR := $(XTENSA_MATTR) -mattr=$(XTENSA_LLC_EXTRA_MATTR)
+        endif
         ESPRESSIF_LLC := $(lastword $(sort $(wildcard $(HOME)/.espressif/tools/esp-clang/*/esp-clang/bin/llc)))
         XTENSA_TWO_STAGE := 1
     else

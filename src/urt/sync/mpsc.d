@@ -107,7 +107,7 @@ private:
         shared uint sequence;
     }
 
-    Slot[N] _slots;
+    Slot[N] _slots = void;
     shared uint _tail;     // producer claim cursor
     uint _head;            // consumer read cursor (single consumer; non-atomic)
 }
@@ -115,7 +115,7 @@ private:
 
 unittest
 {
-    MpscQueue!(int, 4) q;
+    MpscQueue!(int, 4) q = void;
     q.init();
 
     int v;

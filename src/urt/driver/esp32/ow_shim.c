@@ -13,6 +13,8 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <sys/types.h>
+#include <reent.h>
 #ifdef OW_USE_LWIP
 #include "lwip/netdb.h"
 #endif
@@ -30,6 +32,38 @@ void esp_rom_uart_putc(char c) { esp_rom_output_tx_one_char(c); }
 int *ow_errno_location(void)
 {
     return &errno;
+}
+
+// IDF's no-VFS syscall adapter also dispatches high file descriptors to lwIP.
+// Internal-IP builds wrap those entry points so ordinary C stdio stays on the
+// console without retaining the socket adapter and, through it, the full stack.
+extern ssize_t _write_r_console(struct _reent *r, int fd, const void *data, size_t size);
+extern ssize_t _read_r_console(struct _reent *r, int fd, void *data, size_t size);
+
+ssize_t __wrap__write_r(struct _reent *r, int fd, const void *data, size_t size)
+{
+    return _write_r_console(r, fd, data, size);
+}
+
+ssize_t __wrap__read_r(struct _reent *r, int fd, void *data, size_t size)
+{
+    return _read_r_console(r, fd, data, size);
+}
+
+int __wrap__close_r(struct _reent *r, int fd)
+{
+    (void)fd;
+    __errno_r(r) = ENOSYS;
+    return -1;
+}
+
+int __wrap__fcntl_r(struct _reent *r, int fd, int cmd, int arg)
+{
+    (void)fd;
+    (void)cmd;
+    (void)arg;
+    __errno_r(r) = ENOSYS;
+    return -1;
 }
 
 // -- WFI shim --

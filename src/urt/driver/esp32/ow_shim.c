@@ -176,6 +176,202 @@ void ow_pwm_close(unsigned port)
         ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)port, 0);
 }
 
+// -- Counter wrappers --
+
+#include "driver/gptimer.h"
+
+#if defined(CONFIG_IDF_TARGET_ESP32)
+
+#if !CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM || !CONFIG_GPTIMER_ISR_CACHE_SAFE
+#error "counter alarms rearm from interrupt context; enable CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM and CONFIG_GPTIMER_ISR_CACHE_SAFE"
+#endif
+
+#define OW_COUNTERS 4
+
+typedef struct {
+    bool (*callback)(unsigned port);
+    gptimer_handle_t timer;
+    gptimer_alarm_config_t alarm;
+    portMUX_TYPE lock;
+    unsigned port;
+    bool started;
+    bool enabled;
+    bool open;
+} ow_counter_t;
+
+static ow_counter_t counters[OW_COUNTERS] = {
+    { .lock = portMUX_INITIALIZER_UNLOCKED },
+    { .lock = portMUX_INITIALIZER_UNLOCKED },
+    { .lock = portMUX_INITIALIZER_UNLOCKED },
+    { .lock = portMUX_INITIALIZER_UNLOCKED },
+};
+
+static bool IRAM_ATTR counter_alarm(gptimer_handle_t timer, const gptimer_alarm_event_data_t *event, void *context)
+{
+    (void)timer;
+    (void)event;
+    ow_counter_t *counter = context;
+    bool (*callback)(unsigned);
+    portENTER_CRITICAL_ISR(&counter->lock);
+    callback = counter->callback;
+    portEXIT_CRITICAL_ISR(&counter->lock);
+    return callback ? callback(counter->port) : false;
+}
+
+void ow_counter_close(unsigned port);
+
+int ow_counter_open(unsigned port, unsigned resolution_hz)
+{
+    if (port >= OW_COUNTERS || !resolution_hz)
+        return -1;
+    ow_counter_t *counter = &counters[port];
+    if (counter->open)
+        return -1;
+
+    gptimer_config_t config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = resolution_hz,
+    };
+    gptimer_event_callbacks_t callbacks = {
+        .on_alarm = counter_alarm,
+    };
+    counter->port = port;
+    counter->open = true;
+    if (gptimer_new_timer(&config, &counter->timer) != ESP_OK ||
+        gptimer_register_event_callbacks(counter->timer, &callbacks, counter) != ESP_OK)
+        goto failed;
+    if (gptimer_enable(counter->timer) != ESP_OK)
+        goto failed;
+    counter->enabled = true;
+    return 0;
+
+failed:
+    ow_counter_close(port);
+    return -1;
+}
+
+int ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+{
+    if (port >= OW_COUNTERS || !ticks)
+        return -1;
+    ow_counter_t *counter = &counters[port];
+    if (!counter->open)
+        return -1;
+
+    portENTER_CRITICAL(&counter->lock);
+    counter->alarm = (gptimer_alarm_config_t) {
+        .alarm_count = ticks,
+        .reload_count = 0,
+        .flags.auto_reload_on_alarm = periodic,
+    };
+    gptimer_set_raw_count(counter->timer, 0);
+    esp_err_t result = gptimer_set_alarm_action(counter->timer, &counter->alarm);
+    portEXIT_CRITICAL(&counter->lock);
+    if (result != ESP_OK)
+        return -1;
+    if (!counter->started) {
+        if (gptimer_start(counter->timer) != ESP_OK)
+            return -1;
+        counter->started = true;
+    }
+    return 0;
+}
+
+void IRAM_ATTR ow_counter_reload(unsigned port)
+{
+    if (port >= OW_COUNTERS)
+        return;
+    ow_counter_t *counter = &counters[port];
+    portENTER_CRITICAL_SAFE(&counter->lock);
+    if (counter->started) {
+        gptimer_set_raw_count(counter->timer, 0);
+        gptimer_set_alarm_action(counter->timer, &counter->alarm);
+    }
+    portEXIT_CRITICAL_SAFE(&counter->lock);
+}
+
+uint64_t ow_counter_read(unsigned port)
+{
+    uint64_t value = 0;
+    if (port < OW_COUNTERS && counters[port].open)
+        gptimer_get_raw_count(counters[port].timer, &value);
+    return value;
+}
+
+void ow_counter_set_callback(unsigned port, bool (*callback)(unsigned port))
+{
+    if (port >= OW_COUNTERS)
+        return;
+    ow_counter_t *counter = &counters[port];
+    portENTER_CRITICAL(&counter->lock);
+    counter->callback = callback;
+    portEXIT_CRITICAL(&counter->lock);
+}
+
+void ow_counter_close(unsigned port)
+{
+    if (port >= OW_COUNTERS)
+        return;
+    ow_counter_t *counter = &counters[port];
+    if (counter->timer) {
+        if (counter->started)
+            gptimer_stop(counter->timer);
+        if (counter->enabled)
+            gptimer_disable(counter->timer);
+        gptimer_del_timer(counter->timer);
+    }
+    portENTER_CRITICAL(&counter->lock);
+    counter->callback = NULL;
+    counter->timer = NULL;
+    counter->alarm = (gptimer_alarm_config_t) { 0 };
+    counter->started = false;
+    counter->enabled = false;
+    counter->open = false;
+    portEXIT_CRITICAL(&counter->lock);
+}
+
+#else
+
+int ow_counter_open(unsigned port, unsigned resolution_hz)
+{
+    (void)port;
+    (void)resolution_hz;
+    return -1;
+}
+
+int ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+{
+    (void)port;
+    (void)ticks;
+    (void)periodic;
+    return -1;
+}
+
+void ow_counter_reload(unsigned port)
+{
+    (void)port;
+}
+
+uint64_t ow_counter_read(unsigned port)
+{
+    (void)port;
+    return 0;
+}
+
+void ow_counter_set_callback(unsigned port, bool (*callback)(unsigned port))
+{
+    (void)port;
+    (void)callback;
+}
+
+void ow_counter_close(unsigned port)
+{
+    (void)port;
+}
+
+#endif
+
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"

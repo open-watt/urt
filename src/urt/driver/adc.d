@@ -1,5 +1,6 @@
 module urt.driver.adc;
 
+import urt.attribute : critical;
 import urt.result : InternalResult, Result;
 
 version (Espressif)
@@ -121,6 +122,29 @@ Result adc_read_mv(ref Adc adc, ref const AdcInput input, out uint millivolts)
     if (!result)
         return result;
     return adc_raw_to_mv(input, raw, millivolts);
+}
+
+// True when adc_read_critical works for this unit on this platform.
+bool adc_can_read_critical(ref const Adc adc)
+{
+    static if (num_adc == 0)
+        return false;
+    else
+        return adc.is_open && adc_hw_can_read_critical(adc);
+}
+
+// Raw conversion, safe from interrupt context. No calibration here:
+// adc_raw_to_mv is not critical-safe, convert later in task context.
+@critical Result adc_read_critical(ref Adc adc, ref const AdcInput input, out uint value)
+{
+    static if (num_adc == 0)
+        return InternalResult.unsupported;
+    else
+    {
+        if (!adc.is_open || !input.is_open)
+            return InternalResult.invalid_parameter;
+        return adc_hw_read_critical(adc, input, value);
+    }
 }
 
 void adc_input_close(ref AdcInput input)

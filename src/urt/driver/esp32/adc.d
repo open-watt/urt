@@ -1,5 +1,6 @@
 module urt.driver.esp32.adc;
 
+import urt.attribute : critical;
 import urt.driver.adc;
 import urt.result : InternalResult, Result;
 
@@ -47,6 +48,19 @@ Result adc_hw_raw_to_mv(ref const AdcInput input, uint raw, out uint millivolts)
     return ow_adc_raw_to_mv(input.calibration, raw, &millivolts) == 0 ? Result.success : InternalResult.failed;
 }
 
+// Unit 1 only: unit 2 routes through the IDF oneshot driver, which locks.
+bool adc_hw_can_read_critical(ref const Adc adc)
+{
+    return adc.unit == 0;
+}
+
+@critical Result adc_hw_read_critical(ref Adc adc, ref const AdcInput input, out uint value)
+{
+    if (adc.unit != 0)
+        return InternalResult.unsupported;
+    return ow_adc_read_critical(input.channel, &value) == 0 ? Result.success : InternalResult.failed;
+}
+
 void adc_hw_input_close(ref AdcInput input)
 {
     ow_adc_input_close(input.calibration);
@@ -65,6 +79,7 @@ extern(C) nothrow @nogc
     int ow_adc_open(uint unit, void** handle);
     int ow_adc_input_open(void* handle, uint unit, uint channel, AdcAttenuation attenuation, uint bit_width, uint default_reference_mv, void** calibration, int* calibration_source);
     int ow_adc_read(void* handle, uint unit, uint channel, uint* raw);
+    int ow_adc_read_critical(uint channel, uint* raw);
     int ow_adc_raw_to_mv(const(void)* calibration, uint raw, uint* millivolts);
     void ow_adc_input_close(void* calibration);
     void ow_adc_close(void* handle);

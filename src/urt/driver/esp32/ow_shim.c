@@ -487,6 +487,15 @@ int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
     return 0;
 }
 
+int IRAM_ATTR ow_adc_read_critical(unsigned channel, unsigned *raw)
+{
+    portENTER_CRITICAL_SAFE(&adc_locks[0]);
+    uint16_t value = adc1_read_isr(channel);
+    portEXIT_CRITICAL_SAFE(&adc_locks[0]);
+    *raw = value;
+    return 0;
+}
+
 int ow_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
 {
     int value;
@@ -618,6 +627,13 @@ int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
 {
     (void)handle;
     (void)unit;
+    (void)channel;
+    (void)raw;
+    return -1;
+}
+
+int ow_adc_read_critical(unsigned channel, unsigned *raw)
+{
     (void)channel;
     (void)raw;
     return -1;

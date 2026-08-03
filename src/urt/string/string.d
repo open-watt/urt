@@ -570,10 +570,36 @@ nothrow @nogc:
 
     size_t find_first(const(char)[] s) const pure
     {
-        foreach (i; 0 .. n)
+        if (__ctfe)
         {
-            if (opIndex(i) == s)
-                return i;
+            foreach (i; 0 .. n)
+            {
+                size_t offset = cast(size_t)offsets[i] << offset_shift;
+                if (offset == 0)
+                {
+                    if (s.length == 0)
+                        return i;
+                    continue;
+                }
+
+                ushort len;
+                version (LittleEndian)
+                    len = cast(ushort)(cast(ubyte)cache[offset - 2]) |
+                        cast(ushort)(cast(ubyte)cache[offset - 1]) << 8;
+                else
+                    len = cast(ushort)(cast(ubyte)cache[offset - 1]) |
+                        cast(ushort)(cast(ubyte)cache[offset - 2]) << 8;
+                if (len == s.length && cache[offset .. offset + len] == s[])
+                    return i;
+            }
+        }
+        else
+        {
+            foreach (i; 0 .. n)
+            {
+                if (opIndex(i) == s)
+                    return i;
+            }
         }
         return n;
     }
@@ -710,6 +736,8 @@ unittest
     assert(words.find_first("one") == 1);
     assert(words.find_first("") == 2);
     assert(words.find_first("nope") == words.length);
+    static assert(words.find_first("three") == 3);
+    static assert(words.find_first("nope") == words.length);
 
     size_t visited = 0;
     foreach (String s; words)

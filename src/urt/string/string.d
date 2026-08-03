@@ -539,6 +539,219 @@ unittest
 }
 
 
+struct StringTable(size_t n, size_t data_len, size_t max_offset = data_len)
+{
+nothrow @nogc:
+
+    static assert(n > 0 && n <= ushort.max, "Invalid number of strings");
+    static assert(data_len <= ushort.max, "String cache too large");
+
+    // offsets are always even, so halving them doubles the reach of a byte
+    static if (max_offset <= ubyte.max)
+    {
+        alias Offset = ubyte;
+        enum offset_shift = 0;
+    }
+    else static if (max_offset <= ubyte.max * 2)
+    {
+        alias Offset = ubyte;
+        enum offset_shift = 1;
+    }
+    else
+    {
+        alias Offset = ushort;
+        enum offset_shift = 0;
+    }
+
+    enum length = n;
+
+    Offset[n] offsets;
+    align(2) char[data_len] cache = '\0';
+
+    size_t find_first(const(char)[] s) const pure
+    {
+        foreach (i; 0 .. n)
+        {
+            if (opIndex(i) == s)
+                return i;
+        }
+        return n;
+    }
+
+    String opIndex(size_t i) const pure
+    {
+        debug assert(i < n, "Range error");
+        return offsets[i] ? as_string(cache.ptr + (offsets[i] << offset_shift)) : String(null);
+    }
+
+    size_t opDollar() const pure
+        => n;
+
+    int opApply(scope int delegate(String) nothrow @nogc dg) const
+    {
+        foreach (i; 0 .. n)
+        {
+            int r = dg(opIndex(i));
+            if (r)
+                return r;
+        }
+        return 0;
+    }
+
+    int opApply(scope int delegate(size_t, String) nothrow @nogc dg) const
+    {
+        foreach (i; 0 .. n)
+        {
+            int r = dg(i, opIndex(i));
+            if (r)
+                return r;
+        }
+        return 0;
+    }
+}
+
+template make_table(const(char[])[] strings, bool dedupe = true)
+{
+    private enum packed = pack_strings(strings, dedupe);
+
+    enum make_table = fill_table!(StringTable!(packed.offsets.length, packed.cache.length, packed.max_offset))(packed);
+}
+
+private Table fill_table(Table)(PackedStrings packed)
+{
+    Table table;
+    foreach (i, o; packed.offsets)
+    {
+        assert((o >> Table.offset_shift) <= Table.Offset.max, "Offset out of range");
+        table.offsets[i] = cast(Table.Offset)(o >> Table.offset_shift);
+    }
+    table.cache[] = packed.cache[];
+    return table;
+}
+
+private struct PackedStrings
+{
+    ushort[] offsets;
+    char[] cache;
+    ushort max_offset;
+}
+
+private PackedStrings pack_strings(const(char[])[] strings, bool dedupe) nothrow
+{
+    assert(__ctfe, "only for compile-time use");
+
+    PackedStrings r;
+    r.offsets = new ushort[strings.length];
+    foreach (i, s; strings)
+    {
+        assert(s.length <= MaxStringLen, "String too long");
+        if (s.length == 0)
+            continue;
+
+        ushort at = 0;
+        if (dedupe)
+        {
+            foreach (j; 0 .. i)
+            {
+                if (strings[j][] == s[])
+                {
+                    at = r.offsets[j];
+                    break;
+                }
+            }
+        }
+        if (at == 0)
+        {
+            version (LittleEndian)
+                r.cache ~= [ char(s.length & 0xFF), cast(char)(s.length >> 8) ];
+            else
+                r.cache ~= [ cast(char)(s.length >> 8), char(s.length & 0xFF) ];
+            at = cast(ushort)r.cache.length;
+            r.cache ~= s[];
+            if (s.length & 1)
+                r.cache ~= '\0';
+        }
+        r.offsets[i] = at;
+        if (at > r.max_offset)
+            r.max_offset = at;
+    }
+    assert(r.cache.length <= ushort.max, "String cache too large");
+    return r;
+}
+
+unittest
+{
+    static immutable words = make_table!([ "zero", "one", "", "three", "one" ]);
+
+    assert(words.length == 5);
+    assert(words[0] == "zero");
+    assert(words[1] == "one");
+    assert(words[3] == "three");
+
+    assert(words[2] == "");
+    assert(words[2].ptr is null);
+
+    assert(words[4] == "one");
+    assert(words[4].ptr is words[1].ptr);
+
+    assert(words.cache.length == (2+4) + (2+3+1) + (2+5+1));
+    static assert((words.cache.offsetof & 1) == 0);
+    foreach (size_t i, String s; words)
+    {
+        assert(s.ptr is words[i].ptr);
+        assert((cast(size_t)s.ptr & 1) == 0);
+    }
+
+    static assert(words.offsets[0].sizeof == 1);
+    static assert(words.offset_shift == 0);
+    static assert(words.sizeof == 5 + 1 + (2+4) + (2+3+1) + (2+5+1));
+
+    assert(words.find_first("three") == 3);
+    assert(words.find_first("one") == 1);
+    assert(words.find_first("") == 2);
+    assert(words.find_first("nope") == words.length);
+
+    size_t visited = 0;
+    foreach (String s; words)
+        visited += s.length;
+    assert(visited == 4 + 3 + 0 + 5 + 3);
+
+    auto copy = words;
+    assert(copy[3] == "three");
+    assert(copy[3].ptr !is words[3].ptr);
+
+    static immutable dupes = make_table!([ "zero", "one", "", "three", "one" ], false);
+    assert(dupes[4] == "one");
+    assert(dupes[4].ptr !is dupes[1].ptr);
+    assert(dupes.cache.length == words.cache.length + (2+3+1));
+
+    enum k64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    enum k512 = k64 ~ k64 ~ k64 ~ k64 ~ k64 ~ k64 ~ k64 ~ k64;
+
+    static immutable big = make_table!([ "head", k64 ~ k64 ~ k64 ~ k64, "tail" ]);
+
+    static assert(big.offsets[0].sizeof == 1);
+    static assert(big.offset_shift == 1);
+    assert(big.cache.length == (2+4) + (2+256) + (2+4));
+    assert(big[1].length == 256 && big[1][0 .. 16] == "0123456789abcdef");
+    assert(big[2] == "tail");
+    assert((cast(size_t)big[2].ptr & 1) == 0);
+
+    static immutable tail_heavy = make_table!([ "head", k512 ]);
+
+    static assert(tail_heavy.offsets[0].sizeof == 1);
+    static assert(tail_heavy.offset_shift == 0);
+    assert(tail_heavy.cache.length == (2+4) + (2+512));
+    assert(tail_heavy[1].length == 512);
+
+    static immutable huge = make_table!([ "head", k512, "tail" ]);
+
+    static assert(huge.offsets[0].sizeof == 2);
+    static assert(huge.offset_shift == 0);
+    assert(huge[2] == "tail");
+}
+
+
 struct MutableString(size_t Embed = 0)
 {
 nothrow @nogc:

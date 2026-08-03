@@ -256,7 +256,9 @@ ifdef PROCESSOR
       ARCH  = xtensa
   else ifeq ($(PROCESSOR),lx6)
       ARCH  = xtensa
-      MATTR = +fp,+loop,+mac16,+dfpaccel
+      # +miscsr unlocks the MISC0-3 scratch registers the synthesized reflex NMI handler saves into;
+      # it must ride the per-function target-features LDC emits, which override llc's -mattr.
+      MATTR = +fp,+loop,+mac16,+dfpaccel,+miscsr
       # ESP32 IDF libc omits 1/2/4-byte __atomic helpers because LX6 has S32C1I; Espressif llc knows this feature but upstream LDC does not.
       XTENSA_LLC_EXTRA_MATTR := +s32c1i
       # Espressif LLVM 20 crashes while releasing its assumption cache when tail duplication and S32C1I atomic lowering are both enabled.

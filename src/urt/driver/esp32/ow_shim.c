@@ -88,6 +88,8 @@ void ow_irq_wait(void)
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
 #include "soc/gpio_num.h"
+#include "soc/gpio_struct.h"
+#include "soc/interrupts.h"
 #include <stdint.h>
 
 // pull: 0=none, 1=up, 2=down (matches D Pull enum encoding)
@@ -601,6 +603,93 @@ void ow_gpio_interrupt_close(unsigned port)
     gpio_isr_release();
 }
 
+// -- Link fabric gpio events (dispatcher lives in D: ow_link_fire) --
+
+extern bool ow_link_fire(unsigned slot);
+
+static void IRAM_ATTR link_gpio_handler(void *context)
+{
+    if (ow_link_fire((unsigned)(uintptr_t)context))
+        portYIELD_FROM_ISR();
+}
+
+int ow_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
+{
+    static const gpio_int_type_t types[] = {
+        GPIO_INTR_POSEDGE,
+        GPIO_INTR_NEGEDGE,
+        GPIO_INTR_ANYEDGE,
+    };
+    if (gpio >= SOC_GPIO_PIN_COUNT || trigger > 2)
+        return -1;
+    if (gpio_isr_acquire() != 0)
+        return -1;
+    // Input buffer explicitly: the pin may be muxed to a peripheral output (only the output path is
+    // routed), and edge detection needs GPIO_IN regardless of who drives the pad.
+    if (gpio_input_enable((gpio_num_t)gpio) != ESP_OK ||
+        gpio_set_intr_type((gpio_num_t)gpio, types[trigger]) != ESP_OK ||
+        gpio_isr_handler_add((gpio_num_t)gpio, link_gpio_handler, (void *)(uintptr_t)slot) != ESP_OK) {
+        gpio_isr_release();
+        return -1;
+    }
+    return 0;
+}
+
+void ow_link_gpio_close(unsigned slot, unsigned gpio)
+{
+    (void)slot;
+    if (gpio >= SOC_GPIO_PIN_COUNT)
+        return;
+    gpio_isr_handler_remove((gpio_num_t)gpio);
+    gpio_isr_release();
+}
+
+// -- Reflex NMI routing (the handler itself is synthesized in D: xt_nmi) --
+
+static intr_handle_t reflex_nmi_handle;
+static unsigned reflex_users;
+
+int ow_reflex_open(unsigned gpio, unsigned trigger)
+{
+    static const gpio_int_type_t types[] = {
+        GPIO_INTR_POSEDGE,
+        GPIO_INTR_NEGEDGE,
+        GPIO_INTR_ANYEDGE,
+    };
+    if (gpio >= 32 || trigger > 2)
+        return -1;
+    if (!reflex_users) {
+        // Route the GPIO NMI matrix source to CPU interrupt 14 (level 7). High-level
+        // allocation requires a NULL handler; the vector dispatches to xt_nmi directly.
+        if (esp_intr_alloc(ETS_GPIO_NMI_SOURCE, ESP_INTR_FLAG_NMI, NULL, NULL, &reflex_nmi_handle) != ESP_OK)
+            return -1;
+    }
+    if (gpio_input_enable((gpio_num_t)gpio) != ESP_OK ||
+        gpio_set_intr_type((gpio_num_t)gpio, types[trigger]) != ESP_OK) {
+        if (!reflex_users) {
+            esp_intr_free(reflex_nmi_handle);
+            reflex_nmi_handle = NULL;
+        }
+        return -1;
+    }
+    ++reflex_users;
+    // Per-pin register and the pin is claimed exclusively, so the RMW races nothing.
+    GPIO.pin[gpio].int_ena |= BIT(3);   /* PRO CPU NMI */
+    return 0;
+}
+
+void ow_reflex_close(unsigned gpio)
+{
+    if (gpio >= 32 || !reflex_users)
+        return;
+    GPIO.pin[gpio].int_ena &= ~BIT(3);
+    gpio_set_intr_type((gpio_num_t)gpio, GPIO_INTR_DISABLE);
+    if (--reflex_users == 0 && reflex_nmi_handle) {
+        esp_intr_free(reflex_nmi_handle);
+        reflex_nmi_handle = NULL;
+    }
+}
+
 #else
 
 int ow_adc_open(unsigned unit, void **handle)
@@ -674,6 +763,32 @@ void ow_gpio_interrupt_set_callback(unsigned port, bool (*callback)(unsigned por
 void ow_gpio_interrupt_close(unsigned port)
 {
     (void)port;
+}
+
+int ow_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
+{
+    (void)slot;
+    (void)gpio;
+    (void)trigger;
+    return -1;
+}
+
+void ow_link_gpio_close(unsigned slot, unsigned gpio)
+{
+    (void)slot;
+    (void)gpio;
+}
+
+int ow_reflex_open(unsigned gpio, unsigned trigger)
+{
+    (void)gpio;
+    (void)trigger;
+    return -1;
+}
+
+void ow_reflex_close(unsigned gpio)
+{
+    (void)gpio;
 }
 
 #endif

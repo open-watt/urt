@@ -40,6 +40,17 @@ else
 }
 
 
+// --- Execution contracts --------------------------------
+
+// @isr_safe - function upholds the interrupt-context contract: brief,
+// non-blocking, takes no lock a non-interrupt path holds without an
+// interrupt-safe critical section, and calls only driver functions
+// documented critical-safe. Pair with @critical for SRAM residency;
+// this marker is the contract, @critical is the placement.
+// Registration points that call into interrupt context require it.
+enum isr_safe;
+
+
 // --- Memory placement -----------------------------------
 
 // @critical - code that must execute from internal SRAM.

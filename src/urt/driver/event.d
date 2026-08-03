@@ -62,7 +62,7 @@ enum LinkTier : ubyte
 
 enum LinkContext : ubyte
 {
-    task,
+    thread,
     interrupt,
 }
 
@@ -198,7 +198,7 @@ void link_close(ref Link link)
 // The program's whole reflex set is declared in one ReflexGraph so the backend
 // can synthesize a single vector handler for whatever lands on the NMI rung,
 // disambiguating sources only when there is more than one. The graph provides:
-//   Result open();   // claim sources and arm; call once from task context
+//   Result open();   // claim sources and arm; call once from thread context
 //   void close();
 //   uint fired();    // read-and-clear latch of event pins observed to trip,
 //                    // as a gpio bitmask; poll from the main loop

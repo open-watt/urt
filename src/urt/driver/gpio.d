@@ -105,7 +105,7 @@ struct GpioInterrupt
 
 enum GpioCallbackContext : ubyte
 {
-    task,
+    thread,
     interrupt,
 }
 

@@ -64,7 +64,7 @@ extern(C) bool operation_complete(void* context, int result)
         case 3: error = I2cError.arbitration_lost; break;
         default: error = I2cError.bus; break;
     }
-    return i2c_complete(*cast(I2cOperation*)context, error, I2cCallbackContext.task);
+    return i2c_complete(*cast(I2cOperation*)context, error, I2cCallbackContext.thread);
 }
 
 extern(C)

@@ -134,7 +134,7 @@ bool adc_can_read_critical(ref const Adc adc)
 }
 
 // Raw conversion, safe from interrupt context. No calibration here:
-// adc_raw_to_mv is not critical-safe, convert later in task context.
+// adc_raw_to_mv is not critical-safe, convert later in thread context.
 @critical Result adc_read_critical(ref Adc adc, ref const AdcInput input, out uint value)
 {
     static if (num_adc == 0)

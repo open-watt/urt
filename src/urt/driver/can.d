@@ -69,13 +69,13 @@ struct CanFilter
 
 enum CanCallbackContext : ubyte
 {
-    task,
+    thread,
     interrupt,
 }
 
 // Called immediately after a frame has been queued for can_receive(). The receiver must marshal work that is unsafe in the reported context, and the
-// callback must not block or call back into the CAN driver. Interrupt callbacks return whether the platform should yield to a task woken by the
-// callback; task-context backends ignore the result.
+// callback must not block or call back into the CAN driver. Interrupt callbacks return whether the platform should yield to a thread woken by the
+// callback; thread-context backends ignore the result.
 alias CanRxCallback = bool function(Can can, CanCallbackContext context) nothrow @nogc;
 
 // Called from ISR when a TX mailbox becomes free.

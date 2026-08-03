@@ -151,7 +151,7 @@ nothrow @nogc:
     }
 
 private:
-    T[N] _buf;
+    T[N] _buf = void;
     shared uint _head;
     shared uint _tail;
     uint _pending_tail;     // producer-only; staging cursor for uncommitted writes

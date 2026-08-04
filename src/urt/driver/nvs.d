@@ -103,11 +103,8 @@ Result nvs_get(ref Nvs nvs, const(char)[] key, out Variant value)
         return nvs_result(NvsError.unsupported);
     else
     {
-        if (!valid_key(key))
-            return nvs_result(NvsError.invalid_name);
-        if (!nvs.is_open)
-            return nvs_result(NvsError.invalid_handle);
-        return nvs_hw_get(nvs, key, value);
+        Result result = validate_key(nvs, key);
+        return result ? nvs_hw_get(nvs, key, value) : result;
     }
 }
 
@@ -117,11 +114,8 @@ Result nvs_set(ref Nvs nvs, const(char)[] key, ref const Variant value)
         return nvs_result(NvsError.unsupported);
     else
     {
-        if (!valid_key(key))
-            return nvs_result(NvsError.invalid_name);
-        if (!nvs.is_open)
-            return nvs_result(NvsError.invalid_handle);
-        return nvs_hw_set(nvs, key, value);
+        Result result = validate_key(nvs, key);
+        return result ? nvs_hw_set(nvs, key, value) : result;
     }
 }
 
@@ -132,11 +126,8 @@ Result nvs_get_size(ref Nvs nvs, const(char)[] key, out size_t length)
         return nvs_result(NvsError.unsupported);
     else
     {
-        if (!valid_key(key))
-            return nvs_result(NvsError.invalid_name);
-        if (!nvs.is_open)
-            return nvs_result(NvsError.invalid_handle);
-        return nvs_hw_get_size(nvs, key, length);
+        Result result = validate_key(nvs, key);
+        return result ? nvs_hw_get_size(nvs, key, length) : result;
     }
 }
 
@@ -146,10 +137,9 @@ SizeResult nvs_read(ref Nvs nvs, const(char)[] key, void[] value)
         return SizeResult(nvs_result(NvsError.unsupported));
     else
     {
-        if (!valid_key(key))
-            return SizeResult(nvs_result(NvsError.invalid_name));
-        if (!nvs.is_open)
-            return SizeResult(nvs_result(NvsError.invalid_handle));
+        Result result = validate_key(nvs, key);
+        if (!result)
+            return SizeResult(result);
         return nvs_hw_read(nvs, key, value);
     }
 }
@@ -160,11 +150,8 @@ Result nvs_write(ref Nvs nvs, const(char)[] key, const(void)[] value)
         return nvs_result(NvsError.unsupported);
     else
     {
-        if (!valid_key(key))
-            return nvs_result(NvsError.invalid_name);
-        if (!nvs.is_open)
-            return nvs_result(NvsError.invalid_handle);
-        return nvs_hw_write(nvs, key, value);
+        Result result = validate_key(nvs, key);
+        return result ? nvs_hw_write(nvs, key, value) : result;
     }
 }
 
@@ -176,6 +163,14 @@ Result nvs_result(NvsError error)
     return Result(cast(uint)error);
 }
 
+Result validate_key(ref const Nvs nvs, const(char)[] key)
+{
+    assert(key.length <= nvs_max_key_length, "NVS key is too long");
+    if (!valid_name(key, nvs_max_key_length))
+        return nvs_result(NvsError.invalid_name);
+    return nvs.is_open ? Result.success : nvs_result(NvsError.invalid_handle);
+}
+
 bool valid_name(const(char)[] name, size_t max_length)
 {
     if (name.length == 0 || name.length > max_length)
@@ -185,13 +180,6 @@ bool valid_name(const(char)[] name, size_t max_length)
             return false;
     return true;
 }
-
-bool valid_key(const(char)[] key)
-{
-    assert(key.length <= nvs_max_key_length, "NVS key is too long");
-    return valid_name(key, nvs_max_key_length);
-}
-
 
 unittest
 {

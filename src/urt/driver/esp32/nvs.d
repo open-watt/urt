@@ -1,7 +1,7 @@
 module urt.driver.esp32.nvs;
 
 import urt.driver.nvs : Nvs, NvsError, NvsOpenMode;
-import urt.mem.allocator : defaultAllocator;
+import urt.mem.alloc : alloc, free, MemFlags;
 import urt.result : Result, SizeResult;
 import urt.si.unit : ScaledUnit;
 import urt.typereg : find_type_by_name, find_type_details, TypeDetails;
@@ -174,10 +174,10 @@ Result get_buffer(uint handle, ref const char[16] key, NvsType type, out Variant
         return Result.success;
     }
 
-    void[] bytes = defaultAllocator.alloc(length);
+    void[] bytes = alloc(length, MemFlags.fastest);
     if (!bytes.ptr)
         return nvs_result(NvsError.no_memory);
-    scope(exit) defaultAllocator.free(bytes);
+    scope(exit) free(bytes);
 
     result = map_result(get_buffer_native(handle, key.ptr, type, bytes.ptr, &length));
     if (!result)
@@ -237,10 +237,10 @@ Result get_blob(const(void)[] bytes, out Variant value)
 
 Result set_string(uint handle, ref const char[16] key, const(char)[] value)
 {
-    char[] terminated = cast(char[])defaultAllocator.alloc(value.length + 1);
+    char[] terminated = cast(char[])alloc(value.length + 1, MemFlags.fastest);
     if (!terminated.ptr)
         return nvs_result(NvsError.no_memory);
-    scope(exit) defaultAllocator.free(terminated);
+    scope(exit) free(terminated);
 
     foreach (size_t i, char character; value)
     {
@@ -299,10 +299,10 @@ Result set_user(uint handle, ref const char[16] key, ref const Variant value)
     if (details.name.length > ubyte.max)
         return nvs_result(NvsError.invalid_length);
 
-    void[] payload = defaultAllocator.alloc(details.name.length + details.size);
+    void[] payload = alloc(details.name.length + details.size, MemFlags.fastest);
     if (!payload.ptr)
         return nvs_result(NvsError.no_memory);
-    scope(exit) defaultAllocator.free(payload);
+    scope(exit) free(payload);
 
     payload[0 .. details.name.length] = cast(const(void)[])details.name;
     void[] image = payload[details.name.length .. $];
@@ -372,10 +372,10 @@ Result get_user(ubyte name_length, const(ubyte)[] payload, out Variant value)
         payload.length != name_length + details.size)
         return nvs_result(NvsError.incompatible_version);
 
-    void[] record = defaultAllocator.alloc(details.size, details.alignment);
+    void[] record = alloc(details.size, details.alignment, MemFlags.fastest);
     if (!record.ptr)
         return nvs_result(NvsError.no_memory);
-    scope(exit) defaultAllocator.free(record);
+    scope(exit) free(record);
 
     const(void)[] image = payload[name_length .. $];
     record[] = image[];
@@ -386,10 +386,10 @@ Result set_typed_blob(uint handle, ref const char[16] key, BlobType type, size_t
 {
     if (format > ubyte.max)
         return nvs_result(NvsError.invalid_length);
-    void[] bytes = defaultAllocator.alloc(blob_header_length + payload.length);
+    void[] bytes = alloc(blob_header_length + payload.length, MemFlags.fastest);
     if (!bytes.ptr)
         return nvs_result(NvsError.no_memory);
-    scope(exit) defaultAllocator.free(bytes);
+    scope(exit) free(bytes);
 
     write_header(bytes, type, cast(ubyte)format);
     bytes[blob_header_length .. $] = payload[];
@@ -440,19 +440,23 @@ EncodedNumber encode_number(ref const Variant value)
     }
 
     if (value.isUlong)
-    {
         result.bits = value.asUlong;
-        result.type = result.bits <= ubyte.max ? NvsType.u8 :
-                      result.bits <= ushort.max ? NvsType.u16 :
-                      value.isUint ? NvsType.u32 : NvsType.u64;
-        return result;
+    else
+    {
+        long number = value.asLong;
+        result.bits = cast(ulong)number;
+        if (number < 0)
+        {
+            result.type = number >= byte.min ? NvsType.i8 :
+                          number >= short.min ? NvsType.i16 :
+                          number >= int.min ? NvsType.i32 : NvsType.i64;
+            return result;
+        }
     }
 
-    long number = value.asLong;
-    result.bits = cast(ulong)number;
-    result.type = number >= byte.min ? NvsType.i8 :
-                  number >= short.min ? NvsType.i16 :
-                  value.isInt ? NvsType.i32 : NvsType.i64;
+    result.type = result.bits <= ubyte.max ? NvsType.u8 :
+                  result.bits <= ushort.max ? NvsType.u16 :
+                  result.bits <= uint.max ? NvsType.u32 : NvsType.u64;
     return result;
 }
 

@@ -23,11 +23,15 @@ void app_main(void)
 {
     // Initialize NVS -- required by WiFi for calibration data storage.
     esp_err_t ret = nvs_flash_init();
+#ifndef OW_PRESERVE_NVS
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
         nvs_flash_erase();
         nvs_flash_init();
     }
+#else
+    (void)ret;
+#endif
 
     // Event loop is required for WIFI_EVENT delivery.
     esp_event_loop_create_default();

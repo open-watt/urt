@@ -64,7 +64,7 @@ Result nvs_hw_set(ref Nvs nvs, const(char)[] key, ref const Variant value)
     if (value.isBool)
         return set_typed_blob(nvs.driver_handle, name, BlobType.boolean, value.asBool, null);
     if (value.isString)
-        return set_typed_blob(nvs.driver_handle, name, BlobType.string_, 0, value.asString);
+        return set_string(nvs.driver_handle, name, value.asString);
     if (value.isBuffer)
         return map_result(esp_nvs_set_blob(nvs.driver_handle, name.ptr, value.asBuffer.ptr, value.asBuffer.length));
     if (!value.isNumber)
@@ -123,12 +123,11 @@ enum NvsType : ubyte
 
 enum BlobType : ubyte
 {
-    boolean,
-    float_,
-    string_,
-    quantity,
-    user,
-    null_,
+    boolean = 0,
+    float_ = 1,
+    quantity = 3,
+    user = 4,
+    null_ = 5,
 }
 
 enum ubyte blob_guard = 0xa5;
@@ -227,11 +226,6 @@ Result get_blob(const(void)[] bytes, out Variant value)
             return Result.success;
         case BlobType.float_:
             return get_float(format, payload, value);
-        case BlobType.string_:
-            if (format)
-                return nvs_result(NvsError.corrupt);
-            value = Variant(cast(const(char)[])payload);
-            return Result.success;
         case BlobType.quantity:
             return get_quantity(format, payload, value);
         case BlobType.user:
@@ -239,6 +233,23 @@ Result get_blob(const(void)[] bytes, out Variant value)
         default:
             return nvs_result(NvsError.incompatible_version);
     }
+}
+
+Result set_string(uint handle, ref const char[16] key, const(char)[] value)
+{
+    char[] terminated = cast(char[])defaultAllocator.alloc(value.length + 1);
+    if (!terminated.ptr)
+        return nvs_result(NvsError.no_memory);
+    scope(exit) defaultAllocator.free(terminated);
+
+    foreach (size_t i, char character; value)
+    {
+        if (!character)
+            return nvs_result(NvsError.invalid_parameter);
+        terminated[i] = character;
+    }
+    terminated[$-1] = 0;
+    return map_result(esp_nvs_set_str(handle, key.ptr, terminated.ptr));
 }
 
 Result set_integer(uint handle, ref const char[16] key, ref const Variant value)
@@ -429,23 +440,19 @@ EncodedNumber encode_number(ref const Variant value)
     }
 
     if (value.isUlong)
-        result.bits = value.asUlong;
-    else
     {
-        long number = value.asLong;
-        result.bits = cast(ulong)number;
-        if (number < 0)
-        {
-            result.type = number >= byte.min ? NvsType.i8 :
-                          number >= short.min ? NvsType.i16 :
-                          number >= int.min ? NvsType.i32 : NvsType.i64;
-            return result;
-        }
+        result.bits = value.asUlong;
+        result.type = result.bits <= ubyte.max ? NvsType.u8 :
+                      result.bits <= ushort.max ? NvsType.u16 :
+                      value.isUint ? NvsType.u32 : NvsType.u64;
+        return result;
     }
 
-    result.type = result.bits <= ubyte.max ? NvsType.u8 :
-                  result.bits <= ushort.max ? NvsType.u16 :
-                  result.bits <= uint.max ? NvsType.u32 : NvsType.u64;
+    long number = value.asLong;
+    result.bits = cast(ulong)number;
+    result.type = number >= byte.min ? NvsType.i8 :
+                  number >= short.min ? NvsType.i16 :
+                  value.isInt ? NvsType.i32 : NvsType.i64;
     return result;
 }
 
@@ -572,6 +579,7 @@ extern(C) nothrow @nogc
     pragma(mangle, "nvs_set_u32") int esp_nvs_set_u32(uint handle, const(char)* key, uint value);
     pragma(mangle, "nvs_set_i64") int esp_nvs_set_i64(uint handle, const(char)* key, long value);
     pragma(mangle, "nvs_set_u64") int esp_nvs_set_u64(uint handle, const(char)* key, ulong value);
+    pragma(mangle, "nvs_set_str") int esp_nvs_set_str(uint handle, const(char)* key, const(char)* value);
     pragma(mangle, "nvs_set_blob") int esp_nvs_set_blob(uint handle, const(char)* key, const(void)* value, size_t length);
     pragma(mangle, "nvs_erase_key") int esp_nvs_erase_key(uint handle, const(char)* key);
 }

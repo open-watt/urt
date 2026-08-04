@@ -1,7 +1,6 @@
 module urt.driver.esp32.nvs;
 
 import urt.driver.nvs : Nvs, NvsError, NvsOpenMode;
-import urt.endian : littleEndianToNative, nativeToLittleEndian;
 import urt.mem.allocator : defaultAllocator;
 import urt.result : Result, SizeResult;
 import urt.si.unit : ScaledUnit;
@@ -42,18 +41,15 @@ Result nvs_hw_get(ref Nvs nvs, const(char)[] key, out Variant value)
     if (!result)
         return result;
 
-    switch (cast(NvsType)raw_type)
+    NvsType type = cast(NvsType)raw_type;
+    if (is_integer_type(type))
+        return get_integer(nvs.driver_handle, name, type, value);
+
+    switch (type)
     {
-        case NvsType.i8:  return get_integer!byte(nvs.driver_handle, name, value);
-        case NvsType.u8:  return get_integer!ubyte(nvs.driver_handle, name, value);
-        case NvsType.i16: return get_integer!short(nvs.driver_handle, name, value);
-        case NvsType.u16: return get_integer!ushort(nvs.driver_handle, name, value);
-        case NvsType.i32: return get_integer!int(nvs.driver_handle, name, value);
-        case NvsType.u32: return get_integer!uint(nvs.driver_handle, name, value);
-        case NvsType.i64: return get_integer!long(nvs.driver_handle, name, value);
-        case NvsType.u64: return get_integer!ulong(nvs.driver_handle, name, value);
-        case NvsType.string_: return get_string(nvs.driver_handle, name, value);
-        case NvsType.blob: return get_blob(nvs.driver_handle, name, value);
+        case NvsType.string_:
+        case NvsType.blob:
+            return get_buffer(nvs.driver_handle, name, type, value);
         default: return nvs_result(NvsError.type_mismatch);
     }
 }
@@ -78,10 +74,8 @@ Result nvs_hw_set(ref Nvs nvs, const(char)[] key, ref const Variant value)
     if (value.isQuantity)
         return set_quantity(nvs.driver_handle, name, value);
     if (value.isDouble)
-        return value.isFloat ? set_float(nvs.driver_handle, name, value.asFloat)
-                             : set_float(nvs.driver_handle, name, value.asDouble);
-    return value.isUlong ? set_integer(nvs.driver_handle, name, value.asUlong)
-                         : set_integer(nvs.driver_handle, name, value.asLong);
+        return set_float(nvs.driver_handle, name, value);
+    return set_integer(nvs.driver_handle, name, value);
 }
 
 Result nvs_hw_get_size(ref Nvs nvs, const(char)[] key, out size_t length)
@@ -140,47 +134,44 @@ enum BlobType : ubyte
 enum ubyte blob_guard = 0xa5;
 enum size_t blob_header_length = 8;
 
-Result get_integer(T)(uint handle, ref const char[16] key, out Variant value)
+struct EncodedNumber
 {
-    T number;
-    Result result = get_native(handle, key.ptr, number);
-    if (result)
-        value = Variant(number);
-    return result;
+    ulong bits;
+    NvsType type;
 }
 
-Result get_string(uint handle, ref const char[16] key, out Variant value)
+Result get_integer(uint handle, ref const char[16] key, NvsType type, out Variant value)
 {
-    size_t length;
-    Result result = map_result(esp_nvs_get_str(handle, key.ptr, null, &length));
-    if (!result)
-        return result;
-    if (length == 0)
-        return nvs_result(NvsError.corrupt);
+    ulong bits;
+    int result;
+    switch (type)
+    {
+        case NvsType.i8:  result = esp_nvs_get_i8(handle, key.ptr, cast(byte*)&bits); break;
+        case NvsType.u8:  result = esp_nvs_get_u8(handle, key.ptr, cast(ubyte*)&bits); break;
+        case NvsType.i16: result = esp_nvs_get_i16(handle, key.ptr, cast(short*)&bits); break;
+        case NvsType.u16: result = esp_nvs_get_u16(handle, key.ptr, cast(ushort*)&bits); break;
+        case NvsType.i32: result = esp_nvs_get_i32(handle, key.ptr, cast(int*)&bits); break;
+        case NvsType.u32: result = esp_nvs_get_u32(handle, key.ptr, cast(uint*)&bits); break;
+        case NvsType.i64: result = esp_nvs_get_i64(handle, key.ptr, cast(long*)&bits); break;
+        case NvsType.u64: result = esp_nvs_get_u64(handle, key.ptr, &bits); break;
+        default: return nvs_result(NvsError.type_mismatch);
+    }
+    if (result != ESP_OK)
+        return map_result(result);
 
-    void[] bytes = defaultAllocator.alloc(length);
-    if (!bytes.ptr)
-        return nvs_result(NvsError.no_memory);
-    scope(exit) defaultAllocator.free(bytes);
-
-    result = map_result(esp_nvs_get_str(handle, key.ptr, cast(char*)bytes.ptr, &length));
-    if (!result)
-        return result;
-    if (length == 0 || (cast(char*)bytes.ptr)[length - 1] != 0)
-        return nvs_result(NvsError.corrupt);
-    value = Variant(cast(const(char)[])bytes[0 .. length - 1]);
-    return Result.success;
+    return decode_number(type, bits, value);
 }
 
-Result get_blob(uint handle, ref const char[16] key, out Variant value)
+Result get_buffer(uint handle, ref const char[16] key, NvsType type, out Variant value)
 {
     size_t length;
-    Result result = map_result(esp_nvs_get_blob(handle, key.ptr, null, &length));
+    Result result = map_result(get_buffer_native(handle, key.ptr, type, null, &length));
     if (!result)
         return result;
     if (length == 0)
     {
-        value = Variant();
+        if (type == NvsType.string_)
+            return nvs_result(NvsError.corrupt);
         return Result.success;
     }
 
@@ -189,14 +180,33 @@ Result get_blob(uint handle, ref const char[16] key, out Variant value)
         return nvs_result(NvsError.no_memory);
     scope(exit) defaultAllocator.free(bytes);
 
-    result = map_result(esp_nvs_get_blob(handle, key.ptr, bytes.ptr, &length));
+    result = map_result(get_buffer_native(handle, key.ptr, type, bytes.ptr, &length));
     if (!result)
         return result;
-    if (length != bytes.length)
+    if (length == 0 || length > bytes.length)
         return nvs_result(NvsError.corrupt);
+    const(void)[] record = bytes[0 .. length];
+    if (type == NvsType.string_)
+    {
+        if ((cast(const(char)[])record)[$-1] != 0)
+            return nvs_result(NvsError.corrupt);
+        value = Variant(cast(const(char)[])record[0 .. $-1]);
+        return Result.success;
+    }
+    return get_blob(record, value);
+}
+
+int get_buffer_native(uint handle, const(char)* key, NvsType type, void* value, size_t* length)
+{
+    return type == NvsType.string_ ? esp_nvs_get_str(handle, key, cast(char*)value, length)
+                                   : esp_nvs_get_blob(handle, key, value, length);
+}
+
+Result get_blob(const(void)[] bytes, out Variant value)
+{
     if (!valid_header(bytes))
     {
-        value = Variant(cast(const(void)[])bytes);
+        value = Variant(bytes);
         return Result.success;
     }
 
@@ -231,54 +241,43 @@ Result get_blob(uint handle, ref const char[16] key, out Variant value)
     }
 }
 
-Result set_integer(T)(uint handle, ref const char[16] key, T number)
+Result set_integer(uint handle, ref const char[16] key, ref const Variant value)
 {
-    static if (is(T == long))
+    EncodedNumber number = encode_number(value);
+    int result;
+    switch (number.type)
     {
-        if (number < 0)
-        {
-            if (number >= byte.min)
-                return set_native(handle, key.ptr, cast(byte)number);
-            if (number >= short.min)
-                return set_native(handle, key.ptr, cast(short)number);
-            if (number >= int.min)
-                return set_native(handle, key.ptr, cast(int)number);
-            return set_native(handle, key.ptr, number);
-        }
+        case NvsType.i8:  result = esp_nvs_set_i8(handle, key.ptr, cast(byte)number.bits); break;
+        case NvsType.u8:  result = esp_nvs_set_u8(handle, key.ptr, cast(ubyte)number.bits); break;
+        case NvsType.i16: result = esp_nvs_set_i16(handle, key.ptr, cast(short)number.bits); break;
+        case NvsType.u16: result = esp_nvs_set_u16(handle, key.ptr, cast(ushort)number.bits); break;
+        case NvsType.i32: result = esp_nvs_set_i32(handle, key.ptr, cast(int)number.bits); break;
+        case NvsType.u32: result = esp_nvs_set_u32(handle, key.ptr, cast(uint)number.bits); break;
+        case NvsType.i64: result = esp_nvs_set_i64(handle, key.ptr, cast(long)number.bits); break;
+        case NvsType.u64: result = esp_nvs_set_u64(handle, key.ptr, number.bits); break;
+        default: return nvs_result(NvsError.type_mismatch);
     }
-
-    ulong unsigned_number = cast(ulong)number;
-    if (unsigned_number <= ubyte.max)
-        return set_native(handle, key.ptr, cast(ubyte)unsigned_number);
-    if (unsigned_number <= ushort.max)
-        return set_native(handle, key.ptr, cast(ushort)unsigned_number);
-    if (unsigned_number <= uint.max)
-        return set_native(handle, key.ptr, cast(uint)unsigned_number);
-    return set_native(handle, key.ptr, unsigned_number);
+    return map_result(result);
 }
 
-Result set_float(T)(uint handle, ref const char[16] key, T number)
-    if (is(T == float) || is(T == double))
+Result set_float(uint handle, ref const char[16] key, ref const Variant value)
 {
-    ubyte[T.sizeof] encoded = nativeToLittleEndian(number);
-    return set_typed_blob(handle, key, BlobType.float_, T.sizeof, encoded[]);
+    EncodedNumber number = encode_number(value);
+    ubyte[ulong.sizeof] encoded = void;
+    size_t size = number_size(number.type);
+    write_little_endian(number.bits, encoded[0 .. size]);
+    return set_typed_blob(handle, key, BlobType.float_, size, encoded[0 .. size]);
 }
 
 Result set_quantity(uint handle, ref const char[16] key, ref const Variant value)
 {
-    if (value.isDouble)
-        return set_quantity_number(handle, key, value.asQuantity.unit, value.isFloat ? value.asFloat : value.asDouble);
-    return value.isUlong ? set_quantity_number(handle, key, value.asQuantity.unit, value.asUlong)
-                         : set_quantity_number(handle, key, value.asQuantity.unit, value.asLong);
-}
-
-Result set_quantity_number(T)(uint handle, ref const char[16] key, ScaledUnit unit, T number)
-{
-    enum NvsType type = nvs_type!T;
-    ubyte[uint.sizeof + T.sizeof] payload = void;
-    payload[0 .. uint.sizeof] = nativeToLittleEndian(unit.pack)[];
-    payload[uint.sizeof .. $] = nativeToLittleEndian(number)[];
-    return set_typed_blob(handle, key, BlobType.quantity, type, payload[]);
+    EncodedNumber number = encode_number(value);
+    size_t size = number_size(number.type);
+    ubyte[uint.sizeof + ulong.sizeof] payload = void;
+    write_little_endian(value.asQuantity.unit.pack, payload[0 .. uint.sizeof]);
+    write_little_endian(number.bits, payload[uint.sizeof .. uint.sizeof + size]);
+    return set_typed_blob(handle, key, BlobType.quantity, number.type,
+                          payload[0 .. uint.sizeof + size]);
 }
 
 Result set_user(uint handle, ref const char[16] key, ref const Variant value)
@@ -302,21 +301,10 @@ Result set_user(uint handle, ref const char[16] key, ref const Variant value)
 
 Result get_float(ubyte format, const(ubyte)[] payload, out Variant value)
 {
-    if (format == float.sizeof && payload.length == float.sizeof)
-    {
-        ubyte[float.sizeof] encoded = void;
-        encoded[] = payload[];
-        value = Variant(littleEndianToNative!float(encoded));
-        return Result.success;
-    }
-    if (format == double.sizeof && payload.length == double.sizeof)
-    {
-        ubyte[double.sizeof] encoded = void;
-        encoded[] = payload[];
-        value = Variant(littleEndianToNative!double(encoded));
-        return Result.success;
-    }
-    return nvs_result(NvsError.corrupt);
+    NvsType type = format == float.sizeof ? NvsType.f32 : NvsType.f64;
+    if (format != float.sizeof && format != double.sizeof)
+        return nvs_result(NvsError.corrupt);
+    return get_number(type, payload, value);
 }
 
 Result get_quantity(ubyte format, const(ubyte)[] payload, out Variant value)
@@ -324,38 +312,42 @@ Result get_quantity(ubyte format, const(ubyte)[] payload, out Variant value)
     if (payload.length < uint.sizeof)
         return nvs_result(NvsError.corrupt);
 
-    ubyte[uint.sizeof] encoded_unit = void;
-    encoded_unit[] = payload[0 .. uint.sizeof];
     ScaledUnit unit;
-    unit.pack = littleEndianToNative!uint(encoded_unit);
+    unit.pack = cast(uint)read_little_endian(payload[0 .. uint.sizeof]);
 
-    Result result;
-    switch (cast(NvsType)format)
-    {
-        case NvsType.i8:  result = get_quantity_number!byte(payload[4 .. $], value); break;
-        case NvsType.u8:  result = get_quantity_number!ubyte(payload[4 .. $], value); break;
-        case NvsType.i16: result = get_quantity_number!short(payload[4 .. $], value); break;
-        case NvsType.u16: result = get_quantity_number!ushort(payload[4 .. $], value); break;
-        case NvsType.i32: result = get_quantity_number!int(payload[4 .. $], value); break;
-        case NvsType.u32: result = get_quantity_number!uint(payload[4 .. $], value); break;
-        case NvsType.i64: result = get_quantity_number!long(payload[4 .. $], value); break;
-        case NvsType.u64: result = get_quantity_number!ulong(payload[4 .. $], value); break;
-        case NvsType.f32: result = get_quantity_number!float(payload[4 .. $], value); break;
-        case NvsType.f64: result = get_quantity_number!double(payload[4 .. $], value); break;
-        default: return nvs_result(NvsError.corrupt);
-    }
+    Result result = get_number(cast(NvsType)format, payload[uint.sizeof .. $], value);
     if (result)
         value.set_unit(unit);
     return result;
 }
 
-Result get_quantity_number(T)(const(ubyte)[] payload, out Variant value)
+Result get_number(NvsType type, const(ubyte)[] payload, out Variant value)
 {
-    if (payload.length != T.sizeof)
+    size_t size = number_size(type);
+    if (!valid_number_type(type) || payload.length != size)
         return nvs_result(NvsError.corrupt);
-    ubyte[T.sizeof] encoded = void;
-    encoded[] = payload[];
-    value = Variant(littleEndianToNative!T(encoded));
+
+    return decode_number(type, read_little_endian(payload), value);
+}
+
+Result decode_number(NvsType type, ulong bits, out Variant value)
+{
+    size_t size = number_size(type);
+    ubyte kind = cast(ubyte)type & 0xf0;
+    if (kind == 0x00)
+        value = Variant(bits);
+    else if (kind == 0x10)
+    {
+        uint shift = cast(uint)((ulong.sizeof - size) * 8);
+        value = Variant(cast(long)(bits << shift) >> shift);
+    }
+    else if (type == NvsType.f32)
+    {
+        uint float_bits = cast(uint)bits;
+        value = Variant(*cast(float*)&float_bits);
+    }
+    else
+        value = Variant(*cast(double*)&bits);
     return Result.success;
 }
 
@@ -416,71 +408,81 @@ bool valid_header(const(void)[] bytes)
            header[7] == (header[4] ^ header[5] ^ header[6]);
 }
 
-template nvs_type(T)
+EncodedNumber encode_number(ref const Variant value)
 {
-    static if (is(T == byte))
-        enum NvsType nvs_type = NvsType.i8;
-    else static if (is(T == ubyte))
-        enum NvsType nvs_type = NvsType.u8;
-    else static if (is(T == short))
-        enum NvsType nvs_type = NvsType.i16;
-    else static if (is(T == ushort))
-        enum NvsType nvs_type = NvsType.u16;
-    else static if (is(T == int))
-        enum NvsType nvs_type = NvsType.i32;
-    else static if (is(T == uint))
-        enum NvsType nvs_type = NvsType.u32;
-    else static if (is(T == long))
-        enum NvsType nvs_type = NvsType.i64;
-    else static if (is(T == ulong))
-        enum NvsType nvs_type = NvsType.u64;
-    else static if (is(T == float))
-        enum NvsType nvs_type = NvsType.f32;
-    else static if (is(T == double))
-        enum NvsType nvs_type = NvsType.f64;
-    else static assert(false, "unsupported NVS number type");
+    EncodedNumber result;
+    if (value.isDouble)
+    {
+        if (value.isFloat)
+        {
+            float number = value.asFloat;
+            result.bits = *cast(uint*)&number;
+            result.type = NvsType.f32;
+        }
+        else
+        {
+            double number = value.asDouble;
+            result.bits = *cast(ulong*)&number;
+            result.type = NvsType.f64;
+        }
+        return result;
+    }
+
+    if (value.isUlong)
+        result.bits = value.asUlong;
+    else
+    {
+        long number = value.asLong;
+        result.bits = cast(ulong)number;
+        if (number < 0)
+        {
+            result.type = number >= byte.min ? NvsType.i8 :
+                          number >= short.min ? NvsType.i16 :
+                          number >= int.min ? NvsType.i32 : NvsType.i64;
+            return result;
+        }
+    }
+
+    result.type = result.bits <= ubyte.max ? NvsType.u8 :
+                  result.bits <= ushort.max ? NvsType.u16 :
+                  result.bits <= uint.max ? NvsType.u32 : NvsType.u64;
+    return result;
 }
 
-Result get_native(T)(uint handle, const(char)* key, out T value)
+size_t number_size(NvsType type)
 {
-    static if (is(T == byte))
-        return map_result(esp_nvs_get_i8(handle, key, &value));
-    else static if (is(T == ubyte))
-        return map_result(esp_nvs_get_u8(handle, key, &value));
-    else static if (is(T == short))
-        return map_result(esp_nvs_get_i16(handle, key, &value));
-    else static if (is(T == ushort))
-        return map_result(esp_nvs_get_u16(handle, key, &value));
-    else static if (is(T == int))
-        return map_result(esp_nvs_get_i32(handle, key, &value));
-    else static if (is(T == uint))
-        return map_result(esp_nvs_get_u32(handle, key, &value));
-    else static if (is(T == long))
-        return map_result(esp_nvs_get_i64(handle, key, &value));
-    else static if (is(T == ulong))
-        return map_result(esp_nvs_get_u64(handle, key, &value));
-    else static assert(false, "unsupported NVS number type");
+    return cast(ubyte)type & 0x0f;
 }
 
-Result set_native(T)(uint handle, const(char)* key, T value)
+bool is_integer_type(NvsType type)
 {
-    static if (is(T == byte))
-        return map_result(esp_nvs_set_i8(handle, key, value));
-    else static if (is(T == ubyte))
-        return map_result(esp_nvs_set_u8(handle, key, value));
-    else static if (is(T == short))
-        return map_result(esp_nvs_set_i16(handle, key, value));
-    else static if (is(T == ushort))
-        return map_result(esp_nvs_set_u16(handle, key, value));
-    else static if (is(T == int))
-        return map_result(esp_nvs_set_i32(handle, key, value));
-    else static if (is(T == uint))
-        return map_result(esp_nvs_set_u32(handle, key, value));
-    else static if (is(T == long))
-        return map_result(esp_nvs_set_i64(handle, key, value));
-    else static if (is(T == ulong))
-        return map_result(esp_nvs_set_u64(handle, key, value));
-    else static assert(false, "unsupported NVS number type");
+    ubyte code = cast(ubyte)type;
+    ubyte size = code & 0x0f;
+    ubyte kind = code & 0xf0;
+    return (kind == 0x00 || kind == 0x10) &&
+           (size == 1 || size == 2 || size == 4 || size == 8);
+}
+
+bool valid_number_type(NvsType type)
+{
+    return is_integer_type(type) || type == NvsType.f32 || type == NvsType.f64;
+}
+
+ulong read_little_endian(const(ubyte)[] value)
+{
+    ulong result;
+    foreach_reverse (ubyte byte_; value)
+        result = (result << 8) | byte_;
+    return result;
+}
+
+void write_little_endian(ulong bits, ubyte[] value)
+{
+    foreach (ref ubyte byte_; value)
+    {
+        byte_ = cast(ubyte)bits;
+        bits >>= 8;
+    }
 }
 
 enum int ESP_OK = 0;

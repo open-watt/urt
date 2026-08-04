@@ -32,7 +32,7 @@ Result nvs_hw_commit(ref Nvs nvs)
     return map_result(esp_nvs_commit(nvs.driver_handle));
 }
 
-Result nvs_hw_get(ref Nvs nvs, const(char)[] key, ref Variant value)
+Result nvs_hw_get(ref Nvs nvs, const(char)[] key, out Variant value)
 {
     char[16] name = void;
     terminate(key, name);
@@ -140,7 +140,7 @@ enum BlobType : ubyte
 enum ubyte blob_guard = 0xa5;
 enum size_t blob_header_length = 8;
 
-Result get_integer(T)(uint handle, ref const char[16] key, ref Variant value)
+Result get_integer(T)(uint handle, ref const char[16] key, out Variant value)
 {
     T number;
     Result result = get_native(handle, key.ptr, number);
@@ -149,7 +149,7 @@ Result get_integer(T)(uint handle, ref const char[16] key, ref Variant value)
     return result;
 }
 
-Result get_string(uint handle, ref const char[16] key, ref Variant value)
+Result get_string(uint handle, ref const char[16] key, out Variant value)
 {
     size_t length;
     Result result = map_result(esp_nvs_get_str(handle, key.ptr, null, &length));
@@ -172,7 +172,7 @@ Result get_string(uint handle, ref const char[16] key, ref Variant value)
     return Result.success;
 }
 
-Result get_blob(uint handle, ref const char[16] key, ref Variant value)
+Result get_blob(uint handle, ref const char[16] key, out Variant value)
 {
     size_t length;
     Result result = map_result(esp_nvs_get_blob(handle, key.ptr, null, &length));
@@ -300,7 +300,7 @@ Result set_user(uint handle, ref const char[16] key, ref const Variant value)
     return set_typed_blob(handle, key, BlobType.user, details.name.length, payload);
 }
 
-Result get_float(ubyte format, const(ubyte)[] payload, ref Variant value)
+Result get_float(ubyte format, const(ubyte)[] payload, out Variant value)
 {
     if (format == float.sizeof && payload.length == float.sizeof)
     {
@@ -319,7 +319,7 @@ Result get_float(ubyte format, const(ubyte)[] payload, ref Variant value)
     return nvs_result(NvsError.corrupt);
 }
 
-Result get_quantity(ubyte format, const(ubyte)[] payload, ref Variant value)
+Result get_quantity(ubyte format, const(ubyte)[] payload, out Variant value)
 {
     if (payload.length < uint.sizeof)
         return nvs_result(NvsError.corrupt);
@@ -349,7 +349,7 @@ Result get_quantity(ubyte format, const(ubyte)[] payload, ref Variant value)
     return result;
 }
 
-Result get_quantity_number(T)(const(ubyte)[] payload, ref Variant value)
+Result get_quantity_number(T)(const(ubyte)[] payload, out Variant value)
 {
     if (payload.length != T.sizeof)
         return nvs_result(NvsError.corrupt);
@@ -359,7 +359,7 @@ Result get_quantity_number(T)(const(ubyte)[] payload, ref Variant value)
     return Result.success;
 }
 
-Result get_user(ubyte name_length, const(ubyte)[] payload, ref Variant value)
+Result get_user(ubyte name_length, const(ubyte)[] payload, out Variant value)
 {
     if (payload.length < name_length)
         return nvs_result(NvsError.corrupt);

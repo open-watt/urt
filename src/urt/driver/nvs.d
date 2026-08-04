@@ -97,7 +97,7 @@ Result nvs_commit(ref Nvs nvs)
         return nvs.is_open ? nvs_hw_commit(nvs) : nvs_result(NvsError.invalid_handle);
 }
 
-Result nvs_get(ref Nvs nvs, const(char)[] key, ref Variant value)
+Result nvs_get(ref Nvs nvs, const(char)[] key, out Variant value)
 {
     static if (!has_nvs)
         return nvs_result(NvsError.unsupported);

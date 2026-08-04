@@ -107,13 +107,7 @@ private:
 
 enum NvsType : ubyte
 {
-    u8 = 0x01,
-    u16 = 0x02,
-    u32 = 0x04,
     u64 = 0x08,
-    i8 = 0x11,
-    i16 = 0x12,
-    i32 = 0x14,
     i64 = 0x18,
     string_ = 0x21,
     blob = 0x42,
@@ -141,24 +135,26 @@ struct EncodedNumber
 
 Result get_integer(uint handle, ref const char[16] key, NvsType type, out Variant value)
 {
-    ulong bits;
-    int result;
     switch (type)
     {
-        case NvsType.i8:  result = esp_nvs_get_i8(handle, key.ptr, cast(byte*)&bits); break;
-        case NvsType.u8:  result = esp_nvs_get_u8(handle, key.ptr, cast(ubyte*)&bits); break;
-        case NvsType.i16: result = esp_nvs_get_i16(handle, key.ptr, cast(short*)&bits); break;
-        case NvsType.u16: result = esp_nvs_get_u16(handle, key.ptr, cast(ushort*)&bits); break;
-        case NvsType.i32: result = esp_nvs_get_i32(handle, key.ptr, cast(int*)&bits); break;
-        case NvsType.u32: result = esp_nvs_get_u32(handle, key.ptr, cast(uint*)&bits); break;
-        case NvsType.i64: result = esp_nvs_get_i64(handle, key.ptr, cast(long*)&bits); break;
-        case NvsType.u64: result = esp_nvs_get_u64(handle, key.ptr, &bits); break;
+        case NvsType.i64:
+        {
+            long number;
+            Result result = map_result(esp_nvs_get_i64(handle, key.ptr, &number));
+            if (result)
+                value = Variant(number);
+            return result;
+        }
+        case NvsType.u64:
+        {
+            ulong number;
+            Result result = map_result(esp_nvs_get_u64(handle, key.ptr, &number));
+            if (result)
+                value = Variant(number);
+            return result;
+        }
         default: return nvs_result(NvsError.type_mismatch);
     }
-    if (result != ESP_OK)
-        return map_result(result);
-
-    return decode_number(type, bits, value);
 }
 
 Result get_buffer(uint handle, ref const char[16] key, NvsType type, out Variant value)
@@ -254,21 +250,8 @@ Result set_string(uint handle, ref const char[16] key, const(char)[] value)
 
 Result set_integer(uint handle, ref const char[16] key, ref const Variant value)
 {
-    EncodedNumber number = encode_number(value);
-    int result;
-    switch (number.type)
-    {
-        case NvsType.i8:  result = esp_nvs_set_i8(handle, key.ptr, cast(byte)number.bits); break;
-        case NvsType.u8:  result = esp_nvs_set_u8(handle, key.ptr, cast(ubyte)number.bits); break;
-        case NvsType.i16: result = esp_nvs_set_i16(handle, key.ptr, cast(short)number.bits); break;
-        case NvsType.u16: result = esp_nvs_set_u16(handle, key.ptr, cast(ushort)number.bits); break;
-        case NvsType.i32: result = esp_nvs_set_i32(handle, key.ptr, cast(int)number.bits); break;
-        case NvsType.u32: result = esp_nvs_set_u32(handle, key.ptr, cast(uint)number.bits); break;
-        case NvsType.i64: result = esp_nvs_set_i64(handle, key.ptr, cast(long)number.bits); break;
-        case NvsType.u64: result = esp_nvs_set_u64(handle, key.ptr, number.bits); break;
-        default: return nvs_result(NvsError.type_mismatch);
-    }
-    return map_result(result);
+    return value.isUlong ? map_result(esp_nvs_set_u64(handle, key.ptr, value.asUlong))
+                         : map_result(esp_nvs_set_i64(handle, key.ptr, value.asLong));
 }
 
 Result set_float(uint handle, ref const char[16] key, ref const Variant value)
@@ -343,15 +326,10 @@ Result get_number(NvsType type, const(ubyte)[] payload, out Variant value)
 
 Result decode_number(NvsType type, ulong bits, out Variant value)
 {
-    size_t size = number_size(type);
-    ubyte kind = cast(ubyte)type & 0xf0;
-    if (kind == 0x00)
+    if (type == NvsType.u64)
         value = Variant(bits);
-    else if (kind == 0x10)
-    {
-        uint shift = cast(uint)((ulong.sizeof - size) * 8);
-        value = Variant(cast(long)(bits << shift) >> shift);
-    }
+    else if (type == NvsType.i64)
+        value = Variant(cast(long)bits);
     else if (type == NvsType.f32)
     {
         uint float_bits = cast(uint)bits;
@@ -440,23 +418,15 @@ EncodedNumber encode_number(ref const Variant value)
     }
 
     if (value.isUlong)
+    {
         result.bits = value.asUlong;
+        result.type = NvsType.u64;
+    }
     else
     {
-        long number = value.asLong;
-        result.bits = cast(ulong)number;
-        if (number < 0)
-        {
-            result.type = number >= byte.min ? NvsType.i8 :
-                          number >= short.min ? NvsType.i16 :
-                          number >= int.min ? NvsType.i32 : NvsType.i64;
-            return result;
-        }
+        result.bits = cast(ulong)value.asLong;
+        result.type = NvsType.i64;
     }
-
-    result.type = result.bits <= ubyte.max ? NvsType.u8 :
-                  result.bits <= ushort.max ? NvsType.u16 :
-                  result.bits <= uint.max ? NvsType.u32 : NvsType.u64;
     return result;
 }
 
@@ -467,11 +437,7 @@ size_t number_size(NvsType type)
 
 bool is_integer_type(NvsType type)
 {
-    ubyte code = cast(ubyte)type;
-    ubyte size = code & 0x0f;
-    ubyte kind = code & 0xf0;
-    return (kind == 0x00 || kind == 0x10) &&
-           (size == 1 || size == 2 || size == 4 || size == 8);
+    return type == NvsType.i64 || type == NvsType.u64;
 }
 
 bool valid_number_type(NvsType type)
@@ -565,22 +531,10 @@ extern(C) nothrow @nogc
     pragma(mangle, "nvs_close") void esp_nvs_close(uint handle);
     pragma(mangle, "nvs_commit") int esp_nvs_commit(uint handle);
     pragma(mangle, "nvs_find_key") int esp_nvs_find_key(uint handle, const(char)* key, int* type);
-    pragma(mangle, "nvs_get_i8") int esp_nvs_get_i8(uint handle, const(char)* key, byte* value);
-    pragma(mangle, "nvs_get_u8") int esp_nvs_get_u8(uint handle, const(char)* key, ubyte* value);
-    pragma(mangle, "nvs_get_i16") int esp_nvs_get_i16(uint handle, const(char)* key, short* value);
-    pragma(mangle, "nvs_get_u16") int esp_nvs_get_u16(uint handle, const(char)* key, ushort* value);
-    pragma(mangle, "nvs_get_i32") int esp_nvs_get_i32(uint handle, const(char)* key, int* value);
-    pragma(mangle, "nvs_get_u32") int esp_nvs_get_u32(uint handle, const(char)* key, uint* value);
     pragma(mangle, "nvs_get_i64") int esp_nvs_get_i64(uint handle, const(char)* key, long* value);
     pragma(mangle, "nvs_get_u64") int esp_nvs_get_u64(uint handle, const(char)* key, ulong* value);
     pragma(mangle, "nvs_get_str") int esp_nvs_get_str(uint handle, const(char)* key, char* value, size_t* length);
     pragma(mangle, "nvs_get_blob") int esp_nvs_get_blob(uint handle, const(char)* key, void* value, size_t* length);
-    pragma(mangle, "nvs_set_i8") int esp_nvs_set_i8(uint handle, const(char)* key, byte value);
-    pragma(mangle, "nvs_set_u8") int esp_nvs_set_u8(uint handle, const(char)* key, ubyte value);
-    pragma(mangle, "nvs_set_i16") int esp_nvs_set_i16(uint handle, const(char)* key, short value);
-    pragma(mangle, "nvs_set_u16") int esp_nvs_set_u16(uint handle, const(char)* key, ushort value);
-    pragma(mangle, "nvs_set_i32") int esp_nvs_set_i32(uint handle, const(char)* key, int value);
-    pragma(mangle, "nvs_set_u32") int esp_nvs_set_u32(uint handle, const(char)* key, uint value);
     pragma(mangle, "nvs_set_i64") int esp_nvs_set_i64(uint handle, const(char)* key, long value);
     pragma(mangle, "nvs_set_u64") int esp_nvs_set_u64(uint handle, const(char)* key, ulong value);
     pragma(mangle, "nvs_set_str") int esp_nvs_set_str(uint handle, const(char)* key, const(char)* value);

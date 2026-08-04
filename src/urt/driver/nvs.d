@@ -70,7 +70,6 @@ Result nvs_open(ref Nvs nvs, const(char)[] namespace_, NvsOpenMode mode = NvsOpe
         return nvs_result(NvsError.unsupported);
     else
     {
-        assert(namespace_.length <= nvs_max_namespace_length, "NVS namespace is too long");
         if (!valid_name(namespace_, nvs_max_namespace_length))
             return nvs_result(NvsError.invalid_name);
         if (nvs.is_open)
@@ -165,7 +164,6 @@ Result nvs_result(NvsError error)
 
 Result validate_key(ref const Nvs nvs, const(char)[] key)
 {
-    assert(key.length <= nvs_max_key_length, "NVS key is too long");
     if (!valid_name(key, nvs_max_key_length))
         return nvs_result(NvsError.invalid_name);
     return nvs.is_open ? Result.success : nvs_result(NvsError.invalid_handle);

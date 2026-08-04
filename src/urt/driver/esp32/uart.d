@@ -114,7 +114,7 @@ extern(C) void rx_ready(uint port, size_t available)
     auto callback = cast(UartRxCallback)
         atomicLoad!(MemoryOrder.acquire)(_rx_callback_bits[port]);
     if (callback !is null)
-        callback(Uart(cast(ubyte)port), available, UartCallbackContext.task);
+        callback(Uart(cast(ubyte)port), available, UartCallbackContext.thread);
 }
 
 extern(C) nothrow @nogc

@@ -19,6 +19,13 @@ struct SPSCRing(T, uint N)
 nothrow @nogc:
     static assert(N >= 2 && is_power_of_2(N), "N must be a power of two >= 2");
 
+    void init()
+    {
+        atomicStore!(MemoryOrder.relaxed)(_head, cast(uint)0);
+        atomicStore!(MemoryOrder.relaxed)(_tail, cast(uint)0);
+        _pending_tail = 0;
+    }
+
     size_t pending() const
     {
         uint h = atomicLoad!(MemoryOrder.relaxed)(_head);
@@ -155,4 +162,20 @@ private:
     shared uint _head;
     shared uint _tail;
     uint _pending_tail;     // producer-only; staging cursor for uncommitted writes
+}
+
+unittest
+{
+    SPSCRing!(double, 4) ring = void;
+    ring.init();
+    assert(ring.empty);
+
+    double* slot = ring.reserve();
+    assert(slot);
+    *slot = 1.5;
+    ring.commit();
+
+    assert(*ring.peek() == 1.5);
+    ring.pop(1);
+    assert(ring.empty);
 }

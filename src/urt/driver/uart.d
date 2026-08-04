@@ -101,7 +101,7 @@ struct UartConfig
 
 enum UartCallbackContext : ubyte
 {
-    task,
+    thread,
     interrupt,
 }
 
@@ -110,7 +110,7 @@ enum UartCallbackContext : ubyte
 // callback only signals the consumer and uart_read() owns delivery/draining.
 // It must be non-blocking and must not call back into the UART driver.
 // Interrupt-context callbacks return whether the interrupted platform should
-// yield to a woken task. Task-context backends ignore the return value.
+// yield to a woken thread. Thread-context backends ignore the return value.
 alias UartRxCallback = bool function(Uart uart, size_t rx_avail,
                                      UartCallbackContext context) nothrow @nogc;
 

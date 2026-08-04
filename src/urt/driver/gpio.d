@@ -37,6 +37,8 @@
 // implicit chip (chip == 0), line is the offset on it.
 module urt.driver.gpio;
 
+import urt.result : InternalResult, Result;
+
 version (Bouffalo)
     public import urt.driver.bl_common.gpio;
 else version (Beken)
@@ -57,6 +59,9 @@ else
     uint gpio_count() nothrow @nogc => 0;
 }
 
+version (Espressif) {}
+else enum uint num_gpio_interrupts = 0;
+
 nothrow @nogc:
 
 enum Pull : ubyte
@@ -70,6 +75,85 @@ enum DriveMode : ubyte
 {
     push_pull,
     open_drain,
+}
+
+struct GpioLine
+{
+    uint chip;
+    uint line = uint.max;
+}
+
+enum GpioInterruptTrigger : ubyte
+{
+    rising,
+    falling,
+    change,
+    high,
+    low,
+}
+
+struct GpioInterruptConfig
+{
+    GpioLine input;
+    GpioInterruptTrigger trigger;
+}
+
+struct GpioInterrupt
+{
+    ubyte port = ubyte.max;
+}
+
+enum GpioCallbackContext : ubyte
+{
+    thread,
+    interrupt,
+}
+
+alias GpioInterruptCallback = bool function(GpioInterrupt interrupt, GpioCallbackContext context) nothrow @nogc;
+
+// Backends retain this plain function pointer in static driver state; an interrupt-context callback must reside in local instruction memory.
+bool is_open(ref const GpioInterrupt interrupt)
+{
+    return interrupt.port != ubyte.max;
+}
+
+Result gpio_interrupt_open(ref GpioInterrupt interrupt, ubyte port, ref const GpioInterruptConfig config)
+{
+    static if (num_gpio_interrupts == 0)
+        return InternalResult.unsupported;
+    else
+    {
+        if (interrupt.is_open)
+            return InternalResult.already_exists;
+        if (port >= num_gpio_interrupts || config.input.line == uint.max || config.trigger > GpioInterruptTrigger.low)
+            return InternalResult.invalid_parameter;
+        Result result = gpio_interrupt_hw_open(port, config);
+        if (!result)
+            return result;
+        interrupt.port = port;
+        return Result.success;
+    }
+}
+
+void gpio_interrupt_set_callback(ref GpioInterrupt interrupt, GpioInterruptCallback callback)
+{
+    static if (num_gpio_interrupts == 0)
+        assert(false, "no GPIO interrupts on this platform");
+    else
+    {
+        assert(interrupt.is_open, "GPIO interrupt is not open");
+        gpio_interrupt_hw_set_callback(interrupt.port, callback);
+    }
+}
+
+void gpio_interrupt_close(ref GpioInterrupt interrupt)
+{
+    static if (num_gpio_interrupts != 0)
+    {
+        if (interrupt.is_open)
+            gpio_interrupt_hw_close(interrupt.port);
+    }
+    interrupt = GpioInterrupt();
 }
 
 enum GpioDrainStatus : ubyte

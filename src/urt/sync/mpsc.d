@@ -115,7 +115,7 @@ private:
 
 unittest
 {
-    MpscQueue!(int, 4) q;
+    MpscQueue!(int, 4) q = void;
     q.init();
 
     int v;

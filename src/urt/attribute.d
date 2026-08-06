@@ -57,11 +57,18 @@ enum isr_safe;
 // Use for ISRs, code that runs during flash erase/write, and paths
 // that need deterministic latency (no cache-miss jitter).
 // Default (no attribute) = XIP from flash via instruction cache.
-version (Espressif)     enum critical = section(".iram1");
-else version (Bouffalo) enum critical = section(".ramfunc");
-else version (STM32)    enum critical = section(".ramfunc");
-else version (BK7231)   enum critical = section(".ramfunc");
-else version (RP2350)   enum critical = section(".ramfunc");
+//
+// Placement alone is not enough: a switch lowered to a jump table puts the table in rodata,
+// which lands in flash, so the function faults on dispatch with the cache disabled.
+private alias Attrs(A...) = A;
+version (LDC) private alias no_tables = Attrs!(llvmAttr("no-jump-tables", "true"));
+else          private alias no_tables = Attrs!();
+
+version (Espressif)     alias critical = Attrs!(section(".iram1"), no_tables);
+else version (Bouffalo) alias critical = Attrs!(section(".ramfunc"), no_tables);
+else version (STM32)    alias critical = Attrs!(section(".ramfunc"), no_tables);
+else version (BK7231)   alias critical = Attrs!(section(".ramfunc"), no_tables);
+else version (RP2350)   alias critical = Attrs!(section(".ramfunc"), no_tables);
 else                    enum critical;
 
 // @persist - data that survives deep sleep / hibernate.

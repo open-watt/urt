@@ -284,7 +284,7 @@ struct LinkSlot
     shared bool active;
 }
 
-__gshared LinkSlot[num_links] _slots;
+__gshared LinkSlot[num_links] _slots = void;
 __gshared ubyte[num_counters] _counter_slots = ubyte.max;
 
 @critical extern(C) bool ow_link_fire(uint slot)

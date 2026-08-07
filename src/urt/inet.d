@@ -16,6 +16,7 @@ enum AddressFamily : byte
     unix,
     ipv4,
     ipv6,
+    ether,
 }
 
 enum WellKnownPort : ushort
@@ -594,10 +595,17 @@ nothrow @nogc:
         uint flow_info;
         uint scopeId;
     }
-    struct Addr
+    struct Ether
+    {
+        ubyte[6] addr;
+        ushort port;
+        uint scope_id;      // disambiguates the link when the address alone does not; 0 = unscoped
+    }
+    union Addr
     {
         IPv4 ipv4;
         IPv6 ipv6;
+        Ether ether;
     }
 
     AddressFamily family;
@@ -619,11 +627,75 @@ nothrow @nogc:
         this._a.ipv6.scopeId = scopeId;
     }
 
+    this(const ubyte[6] mac, ushort port, uint scope_id = 0)
+    {
+        family = AddressFamily.ether;
+        this._a.ether.addr = mac;
+        this._a.ether.port = port;
+        this._a.ether.scope_id = scope_id;
+    }
+
     inout(IPv4)* as_ipv4() inout pure
         => family == AddressFamily.ipv4 ? &_a.ipv4 : null;
 
     inout(IPv6)* as_ipv6() inout pure
         => family == AddressFamily.ipv6 ? &_a.ipv6 : null;
+
+    inout(Ether)* as_ether() inout pure
+        => family == AddressFamily.ether ? &_a.ether : null;
+
+    ushort port() const pure
+    {
+        switch (family)
+        {
+            case AddressFamily.ipv4:  return _a.ipv4.port;
+            case AddressFamily.ipv6:  return _a.ipv6.port;
+            case AddressFamily.ether: return _a.ether.port;
+            default:                  return 0;
+        }
+    }
+
+    void port(ushort value) pure
+    {
+        switch (family)
+        {
+            case AddressFamily.ipv4:  _a.ipv4.port = value;  break;
+            case AddressFamily.ipv6:  _a.ipv6.port = value;  break;
+            case AddressFamily.ether: _a.ether.port = value; break;
+            default:                  break;
+        }
+    }
+
+    bool addr_any() const pure
+    {
+        switch (family)
+        {
+            case AddressFamily.ipv4:  return _a.ipv4.addr == IPAddr.any;
+            case AddressFamily.ipv6:  return _a.ipv6.addr == IPv6Addr.any;
+            case AddressFamily.ether:
+                foreach (x; _a.ether.addr)
+                {
+                    if (x)
+                        return false;
+                }
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    bool same_addr(ref const InetAddress rhs) const pure
+    {
+        if (family != rhs.family)
+            return false;
+        switch (family)
+        {
+            case AddressFamily.ipv4:  return _a.ipv4.addr == rhs._a.ipv4.addr;
+            case AddressFamily.ipv6:  return _a.ipv6.addr == rhs._a.ipv6.addr;
+            case AddressFamily.ether: return _a.ether.addr == rhs._a.ether.addr;
+            default:                  return true;
+        }
+    }
 
     bool opCast(T : bool)() const pure
         => family > AddressFamily.Unspecified;
@@ -638,6 +710,8 @@ nothrow @nogc:
                 return _a.ipv4 == rhs._a.ipv4;
             case AddressFamily.ipv6:
                 return _a.ipv6 == rhs._a.ipv6;
+            case AddressFamily.ether:
+                return _a.ether == rhs._a.ether;
             default:
                 return true;
         }
@@ -663,6 +737,16 @@ nothrow @nogc:
                     return _a.ipv6.flow_info - rhs._a.ipv6.flow_info;
                 }
                 return _a.ipv6.port - rhs._a.ipv6.port;
+            case AddressFamily.ether:
+                foreach (i; 0 .. 6)
+                {
+                    int c = _a.ether.addr[i] - rhs._a.ether.addr[i];
+                    if (c != 0)
+                        return c;
+                }
+                if (_a.ether.port == rhs._a.ether.port)
+                    return _a.ether.scope_id - rhs._a.ether.scope_id;
+                return _a.ether.port - rhs._a.ether.port;
             default:
                 return 0;
         }
@@ -673,8 +757,14 @@ nothrow @nogc:
     {
         if (family == AddressFamily.ipv4)
             return _a.ipv4.addr.toHash() ^ _a.ipv4.port;
-        else
-            return _a.ipv6.addr.toHash() ^ _a.ipv6.port;
+        if (family == AddressFamily.ether)
+        {
+            ulong a = 0;
+            foreach (i, x; _a.ether.addr)
+                a |= ulong(x) << (i * 8);
+            return cast(size_t)(a * 0x9E3779B97F4A7C15) ^ _a.ether.port;
+        }
+        return _a.ipv6.addr.toHash() ^ _a.ipv6.port;
     }
 
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
@@ -688,6 +778,22 @@ nothrow @nogc:
             offset = _a.ipv4.addr.toString(tmp, null, null);
             tmp[offset++] = ':';
             offset += _a.ipv4.port.format_uint(tmp[offset..$]);
+        }
+        else if (family == AddressFamily.ether)
+        {
+            import urt.string.ascii : hex_digits;
+            tmp[0] = '[';
+            offset = 1;
+            foreach (i, x; _a.ether.addr)
+            {
+                if (i > 0)
+                    tmp[offset++] = ':';
+                tmp[offset++] = hex_digits[x >> 4];
+                tmp[offset++] = hex_digits[x & 0xF];
+            }
+            tmp[offset++] = ']';
+            tmp[offset++] = ':';
+            offset += _a.ether.port.format_uint(tmp[offset..$]);
         }
         else
         {
@@ -712,6 +818,7 @@ nothrow @nogc:
         AddressFamily af;
         IPAddr a4 = void;
         IPv6Addr a6 = void;
+        ubyte[6] eth_a = void;
         ushort port = 0;
         size_t taken = 0;
 
@@ -730,9 +837,14 @@ nothrow @nogc:
         {
             if (s.length > 0 && s[0] == '[')
                 ++taken;
-            size_t t = a6.fromString(s[taken..$]);
+            ptrdiff_t t = a6.fromString(s[taken..$]);
             if (t < 0)
-                return -1;
+            {
+                t = parse_mac(s[taken..$], eth_a);
+                if (t < 0)
+                    return -1;
+                af = AddressFamily.ether;
+            }
             if (s[0] == '[' && (s.length < t + 2 || s[t + taken++] != ']'))
                 return -1;
             taken += t;
@@ -756,6 +868,12 @@ nothrow @nogc:
             _a.ipv4.addr = a4;
             _a.ipv4.port = port;
         }
+        else if (af == AddressFamily.ether)
+        {
+            _a.ether.addr = eth_a;
+            _a.ether.port = port;
+            _a.ether.scope_id = 0;
+        }
         else
         {
             _a.ipv6.addr = a6;
@@ -775,6 +893,34 @@ nothrow @nogc:
             ptrdiff_t len = toString(buffer, null, null);
             return buffer[0 .. len];
         }
+    }
+
+private:
+
+    static ptrdiff_t parse_mac(const(char)[] s, ref ubyte[6] mac) pure
+    {
+        import urt.string.ascii : is_hex;
+
+        static int hex_val(char c) pure
+            => c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
+
+        size_t o = 0;
+        foreach (i; 0 .. 6)
+        {
+            if (i > 0)
+            {
+                if (o >= s.length || s[o] != ':')
+                    return -1;
+                ++o;
+            }
+            if (o + 2 > s.length || !is_hex(s[o]) || !is_hex(s[o + 1]))
+                return -1;
+            if (o + 2 < s.length && is_hex(s[o + 2]))
+                return -1;      // 3+ digit group; not a mac
+            mac[i] = cast(ubyte)(hex_val(s[o]) << 4 | hex_val(s[o + 1]));
+            o += 2;
+        }
+        return o;
     }
 }
 
@@ -874,6 +1020,26 @@ unittest
     assert(address.fromString("[::]:21") == 7 && address == InetAddress(IPv6Addr(), 21));
     assert(address.fromString("[::]:a") == -1);
     assert(address.fromString("[::]:65536") == -1);
+
+    static immutable ubyte[6] test_mac = [0x02, 0x13, 0x37, 0xAA, 0xBB, 0x64];
+    assert(tmp[0 .. InetAddress(test_mac, 1234).toString(tmp, null, null)] == "[02:13:37:AA:BB:64]:1234");
+    assert(address.fromString("[02:13:37:aa:bb:64]:1234") == 24 && address == InetAddress(test_mac, 1234));
+    assert(address.fromString("02:13:37:AA:BB:64") == 17 && address.family == AddressFamily.ether && address._a.ether.port == 0);
+    assert(address.fromString("[02:13:37:aa:bb]:1234") == -1);
+    assert(address.fromString("[02:13:37:aa:bb:641]:1234") == -1);
+    assert(address.fromString("[aa:bb:cc:dd:ee:ff:11:22]:80") == 28 && address.family == AddressFamily.ipv6);
+
+    assert(address.fromString("[02:13:37:aa:bb:64]:1234") == 24);
+    assert(address.port == 1234 && !address.addr_any);
+    address.port = 99;
+    assert(address.port == 99 && address._a.ether.port == 99);
+    InetAddress any_e = InetAddress(cast(ubyte[6])[0, 0, 0, 0, 0, 0], 7);
+    assert(any_e.addr_any && any_e.port == 7);
+    InetAddress same_a = InetAddress(test_mac, 1);
+    InetAddress same_b = InetAddress(test_mac, 2);
+    assert(same_a.same_addr(same_b) && !same_a.same_addr(any_e));
+    assert(!same_a.same_addr(InetAddress(IPAddr(1, 2, 3, 4), 1)));
+    assert(InetAddress(IPAddr.any, 80).addr_any && !InetAddress(IPAddr(10, 0, 0, 1), 80).addr_any);
 
     // IPAddr sorting tests
     {

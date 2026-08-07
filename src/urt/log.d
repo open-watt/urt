@@ -254,7 +254,7 @@ struct SinkSlot
     bool active;
 }
 
-__gshared SinkSlot[max_sinks] g_sinks;
+__gshared SinkSlot[max_sinks] g_sinks = void;
 __gshared Severity g_max_severity = Severity.info;
 
 __gshared const(char)[] g_log_hostname;

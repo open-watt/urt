@@ -153,6 +153,9 @@ nothrow @nogc:
     {
     }
 
+    // TODO: the literals 0/1 implicitly convert to bool and this non-template ctor beats
+    //       this(I) in overload resolution, so Variant(1) constructs `true`, not the int 1!
+    //       constrain it somehow (template this(B)(B b) if (is(B == bool))?) to reject literals
     this(bool b)
     {
         flags = b ? Flags.True : Flags.False;
@@ -1164,6 +1167,26 @@ nothrow @nogc:
 //    }
 
     int opApply(int delegate(const(char)[] k, ref Variant v) @nogc dg)
+    {
+        assert(isObject());
+        int r = 0;
+        try
+        {
+            for (uint i = 0; i < count; i += 2)
+            {
+                r = dg(value.n[i].asString(), value.n[i + 1]);
+                if (r != 0)
+                    break;
+            }
+        }
+        catch(Exception e)
+        {
+            assert(false, "Exception in loop body!");
+        }
+        return r;
+    }
+
+    int opApply(int delegate(const(char)[] k, ref const Variant v) @nogc dg) const
     {
         assert(isObject());
         int r = 0;

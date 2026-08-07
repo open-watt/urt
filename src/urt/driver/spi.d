@@ -25,6 +25,10 @@
 //   Result spi_hw_cancel(ref SpiBus, ref SpiOperation);
 //   Result spi_hw_suspend(ref SpiBus);
 //   Result spi_hw_resume(ref SpiBus);
+<<<<<<< HEAD
+=======
+
+>>>>>>> ow/spi-master
 module urt.driver.spi;
 
 import urt.atomic;
@@ -153,8 +157,12 @@ Result spi_open(ref SpiBus bus, ubyte port, ref const SpiBusConfig config)
         return InternalResult.unsupported;
     else
     {
+<<<<<<< HEAD
         if (port >= spi_count() || config.sck_gpio == ubyte.max ||
             (config.mosi_gpio == ubyte.max && config.miso_gpio == ubyte.max) || config.frequency == 0)
+=======
+        if (port >= spi_count() || config.sck_gpio == ubyte.max || (config.mosi_gpio == ubyte.max && config.miso_gpio == ubyte.max) || config.frequency == 0)
+>>>>>>> ow/spi-master
             return InternalResult.invalid_parameter;
         if (bus.is_open)
             return InternalResult.already_exists;
@@ -246,8 +254,12 @@ Result spi_resume(ref SpiBus bus)
 
 @critical package bool spi_complete(ref SpiOperation operation, SpiError error, SpiCallbackContext context)
 {
+<<<<<<< HEAD
     SpiOperationState state = error == SpiError.none
         ? SpiOperationState.complete : SpiOperationState.error;
+=======
+    SpiOperationState state = error == SpiError.none ? SpiOperationState.complete : SpiOperationState.error;
+>>>>>>> ow/spi-master
     return spi_complete(operation, state, error, context);
 }
 
@@ -255,8 +267,12 @@ Result spi_resume(ref SpiBus bus)
 {
     if (!operation.is_pending)
         return false;
+<<<<<<< HEAD
     assert(completion_state == SpiOperationState.complete || completion_state == SpiOperationState.cancelled ||
            completion_state == SpiOperationState.error);
+=======
+    assert(completion_state == SpiOperationState.complete || completion_state == SpiOperationState.cancelled || completion_state == SpiOperationState.error);
+>>>>>>> ow/spi-master
 
     SpiBus* bus = operation._bus;
     assert(bus !is null && bus._operation is &operation);

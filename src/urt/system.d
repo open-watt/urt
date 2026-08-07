@@ -6,8 +6,22 @@ import urt.time;
 
 version (Espressif)
 {
-    enum uint MALLOC_CAP_SPIRAM   = 1 << 10;
-    enum uint MALLOC_CAP_INTERNAL = 1 << 11;
+    enum uint MALLOC_CAP_8BIT      = 1 << 2;
+    enum uint MALLOC_CAP_SPIRAM    = 1 << 10;
+    enum uint MALLOC_CAP_INTERNAL  = 1 << 11;
+    enum uint MALLOC_CAP_IRAM_8BIT = 1 << 13;
+
+    version (Iram8BitSlowMemory)
+    {
+        enum uint slow_memory_caps = MALLOC_CAP_IRAM_8BIT;
+        enum string slow_memory_name = "IRAM";
+    }
+    else
+    {
+        enum uint slow_memory_caps = MALLOC_CAP_SPIRAM;
+        enum string slow_memory_name = "PSRAM";
+    }
+
     extern(C) nothrow @nogc
     {
         size_t heap_caps_get_total_size(uint caps);
@@ -149,21 +163,22 @@ SystemInfo get_sysinfo()
     else version (Espressif)
     {
         r.pools[0].name = "SRAM";
-        r.pools[0].total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+        enum sram_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        r.pools[0].total = heap_caps_get_total_size(sram_caps);
         if (r.pools[0].total > 0)
         {
-            r.pools[0].used = r.pools[0].total - heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-            r.pools[0].peak_used = r.pools[0].total - heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-            r.pools[0].largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            r.pools[0].used = r.pools[0].total - heap_caps_get_free_size(sram_caps);
+            r.pools[0].peak_used = r.pools[0].total - heap_caps_get_minimum_free_size(sram_caps);
+            r.pools[0].largest_free = heap_caps_get_largest_free_block(sram_caps);
         }
 
-        r.pools[1].name = "PSRAM";
-        r.pools[1].total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+        r.pools[1].name = slow_memory_name;
+        r.pools[1].total = heap_caps_get_total_size(slow_memory_caps);
         if (r.pools[1].total > 0)
         {
-            r.pools[1].used = r.pools[1].total - heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-            r.pools[1].peak_used = r.pools[1].total - heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
-            r.pools[1].largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+            r.pools[1].used = r.pools[1].total - heap_caps_get_free_size(slow_memory_caps);
+            r.pools[1].peak_used = r.pools[1].total - heap_caps_get_minimum_free_size(slow_memory_caps);
+            r.pools[1].largest_free = heap_caps_get_largest_free_block(slow_memory_caps);
         }
 
         r.uptime = get_app_time();

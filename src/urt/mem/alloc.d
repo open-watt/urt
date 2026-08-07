@@ -11,7 +11,7 @@ enum MemFlags : ubyte
 
     // Speed bits are placement *preferences*
     fast     = 1,   // prefer internal SRAM
-    slow     = 2,   // prefer external PSRAM
+    slow     = 2,   // prefer slow overflow memory
     fastest  = 3,   // prefer TCM (single-cycle), else internal SRAM
 
     dma      = 0x4, // DMA-accessible (hard requirement)

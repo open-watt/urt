@@ -78,19 +78,25 @@ void _free_retain(void[] mem) pure
 
 private:
 
-enum CAP_DMA      = 1 << 3;
-enum CAP_SPIRAM   = 1 << 10;
-enum CAP_INTERNAL = 1 << 11;
-enum CAP_DEFAULT  = 1 << 12;
-enum CAP_RTCRAM   = 1 << 15;
+enum CAP_DMA       = 1 << 3;
+enum CAP_SPIRAM    = 1 << 10;
+enum CAP_INTERNAL  = 1 << 11;
+enum CAP_DEFAULT   = 1 << 12;
+enum CAP_IRAM_8BIT = 1 << 13;
+enum CAP_RTCRAM    = 1 << 15;
 
-// MemFlags [2:0] → ESP-IDF heap_caps
+version (Iram8BitSlowMemory)
+    enum slow_caps = CAP_IRAM_8BIT;
+else
+    enum slow_caps = CAP_DEFAULT | CAP_SPIRAM;
+
+// MemFlags [2:0] -> ESP-IDF heap_caps
 //   [1:0] speed: 0=default, 1=fast, 2=slow, 3=fastest
 //   [2]   dma
 immutable uint[8] _esp_caps = [
     CAP_DEFAULT,                          // 0: default
     CAP_DEFAULT | CAP_INTERNAL,           // 1: fast
-    CAP_DEFAULT | CAP_SPIRAM,             // 2: slow
+    slow_caps,                            // 2: slow
     CAP_DEFAULT | CAP_INTERNAL,           // 3: fastest (no TCM on ESP32)
     CAP_DEFAULT | CAP_DMA,                // 4: dma
     CAP_DEFAULT | CAP_DMA | CAP_INTERNAL, // 5: dma+fast

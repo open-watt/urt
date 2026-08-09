@@ -17,7 +17,7 @@ struct KeyPair
 nothrow @nogc:
     version (MbedTLS)
     {
-        mbedtls_pk_context pk;
+        mbedtls_pk_context* pk;
     }
     else version (Windows)
     {
@@ -35,7 +35,7 @@ nothrow @nogc:
     bool valid() const pure
     {
         version (MbedTLS)
-            return pk.pk_info !is null;
+            return pk !is null;
         else version (Windows)
             return hcng !is null;
         else
@@ -48,7 +48,7 @@ struct CertRef
 nothrow @nogc:
     version (MbedTLS)
     {
-        mbedtls_x509_crt* crt;     // heap-allocated via urt_x509_crt_new
+        mbedtls_x509_crt* crt;
     }
     else version (Windows)
     {
@@ -73,12 +73,14 @@ Result generate_keypair(out KeyPair kp)
 {
     version (MbedTLS)
     {
-        mbedtls_pk_init(&kp.pk);
-        int ret = urt_pk_gen_ec_p256_key(&kp.pk);
+        kp.pk = urt_pk_new();
+        if (!kp.pk)
+            return InternalResult.no_memory;
+        int ret = urt_pk_gen_ec_p256_key(kp.pk);
         if (ret != 0)
         {
-            mbedtls_pk_free(&kp.pk);
-            kp.pk = mbedtls_pk_context.init;
+            urt_pk_delete(kp.pk);
+            kp.pk = null;
             return Result(cast(uint)ret);
         }
 
@@ -118,8 +120,8 @@ void free_keypair(ref KeyPair kp)
 {
     version (MbedTLS)
     {
-        mbedtls_pk_free(&kp.pk);
-        kp.pk = mbedtls_pk_context.init;
+        urt_pk_delete(kp.pk);
+        kp.pk = null;
     }
     else version (Windows)
     {
@@ -595,8 +597,7 @@ Result sign_hash(ref KeyPair kp, const(ubyte)[] hash, out Array!ubyte signature)
         // we need raw R||S format (64 bytes for P-256) to match the Windows contract.
         ubyte[256] sig_buf = void;
         size_t sig_len = 0;
-        int ret = urt_pk_sign(&kp.pk,
-            hash.ptr, hash.length, sig_buf.ptr, sig_buf.length, &sig_len);
+        int ret = urt_pk_sign(kp.pk, hash.ptr, hash.length, sig_buf.ptr, sig_buf.length, &sig_len);
         if (ret != 0)
             return Result(cast(uint)ret);
 
@@ -645,7 +646,7 @@ Result export_public_key_raw(ref KeyPair kp, out Array!ubyte x, out Array!ubyte 
         // export uncompressed point: 0x04 || X || Y
         ubyte[65] pt_buf = void; // 1 + 32 + 32 for P-256
         size_t olen = 0;
-        int ret = urt_pk_export_pubkey_xy(&kp.pk, pt_buf.ptr, pt_buf.length, &olen);
+        int ret = urt_pk_export_pubkey_xy(kp.pk, pt_buf.ptr, pt_buf.length, &olen);
         if (ret != 0)
             return Result(cast(uint)ret);
 
@@ -759,11 +760,11 @@ Result export_private_key(ref KeyPair kp, out Array!ubyte key_out)
         ubyte[65] xy_buf = void;
         size_t d_len = 0, xy_len = 0;
 
-        int ret = urt_pk_export_privkey_d(&kp.pk, d.ptr, d.length, &d_len);
+        int ret = urt_pk_export_privkey_d(kp.pk, d.ptr, d.length, &d_len);
         if (ret != 0)
             return Result(cast(uint)ret);
 
-        ret = urt_pk_export_pubkey_xy(&kp.pk, xy_buf.ptr, xy_buf.length, &xy_len);
+        ret = urt_pk_export_pubkey_xy(kp.pk, xy_buf.ptr, xy_buf.length, &xy_len);
         if (ret != 0)
             return Result(cast(uint)ret);
 
@@ -821,12 +822,14 @@ Result import_private_key(const(ubyte)[] key_data, out KeyPair kp)
         xy[1 .. 33] = x[];
         xy[33 .. 65] = y[];
 
-        mbedtls_pk_init(&kp.pk);
-        int ret = urt_pk_import_ec_p256_key(&kp.pk, d.ptr, d.length, xy.ptr, xy.length);
+        kp.pk = urt_pk_new();
+        if (!kp.pk)
+            return InternalResult.no_memory;
+        int ret = urt_pk_import_ec_p256_key(kp.pk, d.ptr, d.length, xy.ptr, xy.length);
         if (ret != 0)
         {
-            mbedtls_pk_free(&kp.pk);
-            kp.pk = mbedtls_pk_context.init;
+            urt_pk_delete(kp.pk);
+            kp.pk = null;
             return Result(cast(uint)ret);
         }
 

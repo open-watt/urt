@@ -30,13 +30,7 @@ int urt_rng_callback(void* p_rng, ubyte* output, size_t len);  // f_rng-shaped, 
 
 // --- PK (public key abstraction) ---
 
-struct mbedtls_pk_info_t; // opaque
-
-struct mbedtls_pk_context
-{
-    const(mbedtls_pk_info_t)* pk_info;
-    void* pk_ctx;
-}
+struct mbedtls_pk_context;
 
 void mbedtls_pk_init(mbedtls_pk_context* ctx);
 void mbedtls_pk_free(mbedtls_pk_context* ctx);
@@ -51,45 +45,26 @@ void mbedtls_pk_free(mbedtls_pk_context* ctx);
 int urt_pk_gen_ec_p256_key(mbedtls_pk_context* pk);
 int urt_pk_sign(mbedtls_pk_context* ctx, const(ubyte)* hash, size_t hash_len,
                 ubyte* sig, size_t sig_size, size_t* sig_len);
-int urt_pk_import_ec_p256_key(mbedtls_pk_context* pk,
-                              const(ubyte)* d, size_t d_len,
-                              const(ubyte)* xy, size_t xy_len);
+int urt_pk_import_ec_p256_key(mbedtls_pk_context* pk, const(ubyte)* d, size_t d_len, const(ubyte)* xy, size_t xy_len);
 int urt_pk_export_privkey_d(mbedtls_pk_context* pk, ubyte* buf, size_t buflen, size_t* olen);
 int urt_pk_export_pubkey_xy(mbedtls_pk_context* pk, ubyte* buf, size_t buflen, size_t* olen);
 
 
 // --- ECDH P-256 (from urt/internal/mbedtls.c) ---
 
-int urt_ecdh_p256_compute_shared(const(ubyte)* priv_d, size_t priv_len,
-                                  const(ubyte)* peer_xy, size_t peer_xy_len,
-                                  ubyte* shared_x_out);
+int urt_ecdh_p256_compute_shared(const(ubyte)* priv_d, size_t priv_len, const(ubyte)* peer_xy, size_t peer_xy_len, ubyte* shared_x_out);
 
 
 // --- AES-GCM one-shot (from urt/internal/mbedtls.c) ---
 
-int urt_gcm_encrypt(const(ubyte)* key, size_t key_len,
-                    const(ubyte)* iv, size_t iv_len,
-                    const(ubyte)* aad, size_t aad_len,
-                    const(ubyte)* plaintext, size_t pt_len,
-                    ubyte* ciphertext,
-                    ubyte* tag, size_t tag_len);
-
-int urt_gcm_decrypt(const(ubyte)* key, size_t key_len,
-                    const(ubyte)* iv, size_t iv_len,
-                    const(ubyte)* aad, size_t aad_len,
-                    const(ubyte)* ciphertext, size_t ct_len,
-                    const(ubyte)* tag, size_t tag_len,
-                    ubyte* plaintext);
+int urt_gcm_encrypt(const(ubyte)* key, size_t key_len, const(ubyte)* iv, size_t iv_len, const(ubyte)* aad, size_t aad_len, const(ubyte)* plaintext, size_t pt_len, ubyte* ciphertext, ubyte* tag, size_t tag_len);
+int urt_gcm_decrypt(const(ubyte)* key, size_t key_len, const(ubyte)* iv, size_t iv_len, const(ubyte)* aad, size_t aad_len, const(ubyte)* ciphertext, size_t ct_len, const(ubyte)* tag, size_t tag_len, ubyte* plaintext);
 
 
 // --- AES single-block ECB (RFC 3394 key-wrap building blocks) ---
 
-int urt_aes_ecb_decrypt(const(ubyte)* key, size_t key_len,
-                        const(ubyte)* cipher_block,
-                        ubyte* plain_block);
-int urt_aes_ecb_encrypt(const(ubyte)* key, size_t key_len,
-                        const(ubyte)* plain_block,
-                        ubyte* cipher_block);
+int urt_aes_ecb_encrypt(const(ubyte)* key, size_t key_len, const(ubyte)* plain_block, ubyte* cipher_block);
+int urt_aes_ecb_decrypt(const(ubyte)* key, size_t key_len, const(ubyte)* cipher_block, ubyte* plain_block);
 
 
 // --- X.509 certificate ---
@@ -153,8 +128,26 @@ enum MBEDTLS_SSL_VERIFY_REQUIRED = 2;
 size_t urt_sizeof_x509_crt();
 size_t urt_sizeof_ssl_context();
 size_t urt_sizeof_ssl_config();
+size_t urt_sizeof_pk_context();
 
 import urt.mem.alloc;
+
+mbedtls_pk_context* urt_pk_new()
+{
+    auto ctx = cast(mbedtls_pk_context*)alloc(urt_sizeof_pk_context()).ptr;
+    if (ctx)
+        mbedtls_pk_init(ctx);
+    return ctx;
+}
+
+void urt_pk_delete(mbedtls_pk_context* pk)
+{
+    if (pk)
+    {
+        mbedtls_pk_free(pk);
+        free((cast(void*)pk)[0..urt_sizeof_pk_context()]);
+    }
+}
 
 mbedtls_x509_crt* urt_x509_crt_new()
 {

@@ -567,7 +567,7 @@ nothrow @nogc:
     {
         left = rh.left;
         right = rh.right;
-        kvp = rh.kvp;
+        emplace(&kvp, rh.kvp);
         _base.height = rh._base.height;
     }
 

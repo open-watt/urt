@@ -633,6 +633,8 @@ bool is_open(ref const File file)
         return file.handle != INVALID_HANDLE_VALUE;
     else version (Posix)
         return file.fd != -1;
+    else version (HasFileBackend)
+        return file.fd >= 0;
     else
         return false;
 }

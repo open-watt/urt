@@ -30,7 +30,7 @@ Result i2c_hw_submit(ref I2cBus bus, ref I2cOperation operation, ref const I2cTr
 {
     int result = ow_i2c_submit(bus.driver_data, transfer.address, transfer.address_mode, bus.frequency,
         transfer.write_data.ptr, transfer.write_data.length, cast(void*)transfer.read_data.ptr, transfer.read_data.length,
-        timeout_ms(transfer.timeout), &operation_complete, &operation);
+        timeout_ms(transfer.timeout), &i2c_operation_complete, &operation);
     return result == 0 ? Result.success : InternalResult.failed;
 }
 
@@ -53,7 +53,7 @@ int timeout_ms(Duration timeout)
     return cast(int)value;
 }
 
-extern(C) bool operation_complete(void* context, int result)
+extern(C) bool i2c_operation_complete(void* context, int result)
 {
     I2cError error;
     switch (result)

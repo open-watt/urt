@@ -201,23 +201,23 @@ private enum copy_use_memcpy(T) = copy_use_memcpy!(T, T);
 // TODO: use is_trivially_move_constructible!
 private enum move_use_memcpy(T, U) = is_trivial!T && is(Unqual!T == U);
 private enum move_use_memcpy(T) = move_use_memcpy!(T, T);
+private enum is_byte_copy_type(T) = is(T == ubyte) || is(T == byte) || is(T == char) || is(T == void);
+private enum byte_copy_compatible(T, U) = is_byte_copy_type!(Unqual!T) && is_byte_copy_type!U;
 
-U[] copy_to(bool overlapping = false, bool move = false, T, U)(T[] arr, U[] dest)
+pragma(inline, true)
+U[] copy_to(bool overlapping = false, T, U)(T[] arr, U[] dest)
+    if (copy_use_memcpy!(T, U) || byte_copy_compatible!(T, U))
 {
     alias UT = Unqual!T;
     enum same_type = is(UT == U);
-    enum both_byte = (is(UT == ubyte) || is(UT == byte) || is(UT == char) || is(UT == void)) &&
-                     (is(U == ubyte)  || is(U == byte)  || is(U == char)  || is(U == void));
 
     static assert (!overlapping || same_type, "overlapping copy must be same type");
-
     assert(dest.length >= arr.length);
 
     if (__ctfe)
     {
         static if (same_type)
         {
-            // handle overlapping copies correctly where src < dst
             if (arr.ptr < dest.ptr)
             {
                 for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
@@ -229,55 +229,73 @@ U[] copy_to(bool overlapping = false, bool move = false, T, U)(T[] arr, U[] dest
             dest[i] = arr[i];
     }
     else
+        copy_bytes!overlapping(dest.ptr, arr.ptr, arr.length * T.sizeof);
+    return dest[0 .. arr.length];
+}
+
+U[] copy_to(bool overlapping = false, bool move = false, T, U)(T[] arr, U[] dest)
+    if (!copy_use_memcpy!(T, U) && !byte_copy_compatible!(T, U))
+{
+    alias UT = Unqual!T;
+    enum same_type = is(UT == U);
+
+    static assert (!overlapping || same_type, "overlapping copy must be same type");
+    assert(dest.length >= arr.length);
+
+    if (__ctfe)
     {
-        static if (!same_type && both_byte)
-            return copy_to!(overlapping, move)(cast(ubyte[])arr, cast(ubyte[])dest);
-        static if ((!move && copy_use_memcpy!(T, U)) || (move && move_use_memcpy!(T, U)))
+        static if (same_type)
         {
-            static if (move && copy_use_memcpy!(T, U))
-                return copy_to!(overlapping, false, T, U)(arr, dest);
-            else static if (overlapping)
-                memmove(dest.ptr, arr.ptr, arr.length * T.sizeof);
-            else
-                memcpy(dest.ptr, arr.ptr, arr.length * T.sizeof);
-        }
-        else static if (move)
-        {
-//            pragma(msg, "move: ", T, " --> ", U, is(T == class) ? " *** class" : "");
-            static if (overlapping)
+            if (arr.ptr < dest.ptr)
             {
-                if (arr.ptr < dest.ptr && dest.ptr < arr.ptr + arr.length)
-                {
-                    for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-                        .move(arr[i], dest[i]);
-                    return dest[0 .. arr.length];
-                }
+                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
+                    dest[i] = arr[i];
+                return dest[0 .. arr.length];
             }
-            for (size_t i = 0; i < arr.length; ++i)
-                .move(arr[i], dest[i]);
         }
-        else
+        for (size_t i = 0; i < arr.length; ++i)
+            dest[i] = arr[i];
+    }
+    else static if (move)
+    {
+        static if (overlapping)
         {
-//            pragma(msg, "copy: ", T, " --> ", U, is(T == class) ? " *** class" : "");
-            static if (overlapping)
+            if (arr.ptr < dest.ptr && dest.ptr < arr.ptr + arr.length)
             {
-                if (arr.ptr < dest.ptr && dest.ptr < arr.ptr + arr.length)
-                {
-                    for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-                        dest[i] = arr[i];
-                    return dest[0 .. arr.length];
-                }
+                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
+                    .move(arr[i], dest[i]);
+                return dest[0 .. arr.length];
             }
-            else static if (same_type)
-                dest[] = arr[];
-            else for (size_t i = 0; i < arr.length; ++i)
-                dest[i] = arr[i];
         }
+        for (size_t i = 0; i < arr.length; ++i)
+            .move(arr[i], dest[i]);
+    }
+    else
+    {
+        static if (overlapping)
+        {
+            if (arr.ptr < dest.ptr && dest.ptr < arr.ptr + arr.length)
+            {
+                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
+                    dest[i] = arr[i];
+                return dest[0 .. arr.length];
+            }
+        }
+        else static if (same_type)
+            dest[] = arr[];
+        else for (size_t i = 0; i < arr.length; ++i)
+            dest[i] = arr[i];
     }
     return dest[0 .. arr.length];
 }
+pragma(inline, true)
 U[] move_to(bool overlapping = false, T, U)(T[] arr, U[] dest)
-    => copy_to!(overlapping, true, T, U)(arr, dest);
+    if (move_use_memcpy!(T, U) || byte_copy_compatible!(T, U))
+    => copy_to!overlapping(arr, dest);
+
+U[] move_to(bool overlapping = false, T, U)(T[] arr, U[] dest)
+    if (!move_use_memcpy!(T, U) && !byte_copy_compatible!(T, U))
+    => copy_to!(overlapping, true)(arr, dest);
 
 void emplace_all(bool move = false, T, U)(T[] arr, U[] dest)
 {
@@ -344,7 +362,6 @@ T[] duplicate(T)(const T[] src, NoGCAllocator allocator = null) nothrow @nogc
     emplace_all(src, r);
     return r;
 }
-
 
 // Array introduces static-sized and/or stack-based ownership. this is useful anywhere that fixed-length arrays are appropriate
 // Array will fail-over to an allocated buffer if the contents exceed the fixed size
@@ -414,7 +431,10 @@ struct Array(T, size_t EmbedCount = 0)
     {
         clear();
         if (has_allocation())
-            free(ptr);
+        {
+            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+            array_free(ptr, T.sizeof, prefix);
+        }
     }
 
 nothrow @nogc:
@@ -606,16 +626,8 @@ nothrow @nogc:
     {
         assert(pos <= _length, "Insert position out of range");
         reserve(_length + 1);
-        static if (is_trivial!T)
-            memmove(ptr + pos + 1, ptr + pos, (_length++ - pos) * T.sizeof);
-        else
-        {
-            for (uint i = _length++; i > pos; --i)
-            {
-                moveEmplace!T(ptr[i-1], ptr[i]);
-                destroy!false(ptr[i-1]);
-            }
-        }
+        uint old_length = _length++;
+        move_emplace_overlapping(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
         static if (is(T == class) || is(T == interface))
             return (ptr[pos] = item);
         else
@@ -627,16 +639,8 @@ nothrow @nogc:
     {
         assert(pos <= _length, "Insert position out of range");
         reserve(_length + 1);
-        static if (is_trivial!T)
-            memmove(ptr + pos + 1, ptr + pos, (_length++ - pos) * T.sizeof);
-        else
-        {
-            for (uint i = _length++; i > pos; --i)
-            {
-                moveEmplace!T(ptr[i-1], ptr[i]);
-                destroy!false(ptr[i-1]);
-            }
-        }
+        uint old_length = _length++;
+        move_emplace_overlapping(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
         return *emplace!T(&ptr[pos], forward!args);
     }
 
@@ -756,16 +760,30 @@ nothrow @nogc:
 
     void reserve(size_t count)
     {
-        if (count > alloc_count())
-        {
-            debug assert(count <= uint.max, "Exceed maximum size");
+        static if (is_trivial!T)
+            pragma(inline, true);
 
-            T* new_array = allocate(cast(uint)count);
+        if (count <= alloc_count())
+            return;
+        debug assert(count <= uint.max, "Exceed maximum size");
+
+        static if (is_trivial!T)
+        {
+            enum alignment = T.alignof < 4 ? 4 : T.alignof;
+            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+            bool allocated = has_allocation();
+            ptr = cast(T*)array_reserve_trivial(ptr, _length, cast(uint)count, T.sizeof, alignment, prefix, allocated);
+        }
+        else
+        {
+            enum alignment = T.alignof < 4 ? 4 : T.alignof;
+            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+
+            T* new_array = cast(T*)array_allocate(cast(uint)count, T.sizeof, alignment, prefix);
             move_emplace_all(ptr[0 .. _length], new_array[0 .. _length]);
             destroy_all!false(ptr[0 .. _length]);
-
             if (has_allocation())
-                free(ptr);
+                array_free(ptr, T.sizeof, prefix);
             ptr = new_array;
         }
     }
@@ -818,35 +836,21 @@ private:
     uint alloc_count() const pure
         => has_allocation() ? (cast(uint*)ptr)[-1] : EmbedCount;
 
-    T* allocate(uint count)
-    {
-        enum AllocAlignment = T.alignof < 4 ? 4 : T.alignof;
-        enum AllocPrefixBytes = T.sizeof < 4 ? 4 : T.sizeof;
-
-        void[] mem = .alloc(AllocPrefixBytes + T.sizeof * count, AllocAlignment);
-        T* array = cast(T*)(mem.ptr + AllocPrefixBytes);
-        (cast(uint*)array)[-1] = count;
-        return array;
-    }
-    void free(T* ptr)
-    {
-        enum AllocPrefixBytes = T.sizeof < 4 ? 4 : T.sizeof;
-
-        .free((cast(void*)ptr - AllocPrefixBytes)[0 .. AllocPrefixBytes + T.sizeof * alloc_count()]);
-    }
-
     void grow(size_t target)
     {
-        size_t cap = alloc_count();
-        if (target <= cap)
-            return;
-        assert(target <= uint.max && cap < uint.max);
-        size_t new_cap = cap * 2;
-        if (new_cap < target)
-            new_cap = target;
-        if (new_cap > uint.max)
-            new_cap = uint.max;
-        reserve(new_cap);
+        static if (is_trivial!T)
+        {
+            enum alignment = T.alignof < 4 ? 4 : T.alignof;
+            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+            ptr = cast(T*)array_grow_trivial(ptr, _length, alloc_count(), target, T.sizeof, alignment, prefix, has_allocation());
+        }
+        else
+        {
+            size_t cap = alloc_count();
+            size_t new_cap = array_growth(cap, target);
+            if (new_cap != cap)
+                reserve(new_cap);
+        }
     }
 
     version (Windows)
@@ -1025,6 +1029,80 @@ private:
 
 private:
 
+pragma(inline, false)
+void copy_bytes(bool overlapping)(void* dest, const void* src, size_t bytes) pure
+{
+    static if (overlapping)
+        memmove(dest, src, bytes);
+    else
+        memcpy(dest, src, bytes);
+}
+
+void move_emplace_overlapping(T)(T[] arr, T[] dest)
+{
+    assert(arr.length == dest.length && arr.ptr < dest.ptr);
+    static if (is_trivial!T)
+        move_to!true(arr, dest);
+    else
+    {
+        for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
+        {
+            moveEmplace!T(arr[i], dest[i]);
+            destroy!false(arr[i]);
+        }
+    }
+}
+
+pragma(inline, false)
+void* array_allocate(uint count, size_t element_size, size_t alignment, size_t prefix) pure
+{
+    void[] mem = .alloc(prefix + element_size * count, alignment);
+    void* array = mem.ptr + prefix;
+    (cast(uint*)array)[-1] = count;
+    return array;
+}
+
+pragma(inline, false)
+void array_free(void* ptr, size_t element_size, size_t prefix) pure
+{
+    uint count = (cast(uint*)ptr)[-1];
+    .free((ptr - prefix)[0 .. prefix + element_size * count]);
+}
+
+pragma(inline, false)
+void* array_reserve_trivial(void* ptr, uint length, uint count, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
+{
+    void* result = array_allocate(count, element_size, alignment, prefix);
+    if (length)
+        memcpy(result, ptr, length * element_size);
+    if (allocated)
+        array_free(ptr, element_size, prefix);
+    return result;
+}
+
+pragma(inline, false)
+size_t array_growth(size_t capacity, size_t target) pure
+{
+    if (target <= capacity)
+        return capacity;
+    assert(target <= uint.max && capacity < uint.max);
+    size_t result = capacity * 2;
+    if (result < target)
+        result = target;
+    if (result > uint.max)
+        result = uint.max;
+    return result;
+}
+
+pragma(inline, false)
+void* array_grow_trivial(void* ptr, uint length, size_t capacity, size_t target, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
+{
+    size_t count = array_growth(capacity, target);
+    if (count == capacity)
+        return ptr;
+    return array_reserve_trivial(ptr, length, cast(uint)count, element_size, alignment, prefix, allocated);
+}
+
 pragma(inline, true)
 bool el_cmp(T)(const T a, const T b)
     if (is(T == class) || is(T == interface))
@@ -1044,4 +1122,40 @@ bool el_cmp(T)(auto ref const T a, auto ref const T b)
     if (!is(T == class) && !is(T == interface) && !is(T == U[], U))
 {
     return a == b;
+}
+
+unittest
+{
+    int[4] overlapping = [1, 2, 3, 4];
+    move_to!true(overlapping[0 .. 3], overlapping[1 .. 4]);
+    assert(overlapping == [1, 1, 2, 3]);
+
+    char[3] text = ['a', 'b', 'c'];
+    ubyte[3] bytes;
+    copy_to(text[], bytes[]);
+    assert(bytes == [cast(ubyte)'a', cast(ubyte)'b', cast(ubyte)'c']);
+
+    Array!int integers;
+    integers.append(1, 2, 3, 4);
+    integers.insert(1, 5);
+    assert(integers[] == [1, 5, 2, 3, 4]);
+    integers.remove(1, 2);
+    assert(integers[] == [1, 3, 4]);
+    integers.removeSwapLast(1);
+    assert(integers[] == [1, 4]);
+
+    static struct Item
+    {
+        int value;
+        this(this) nothrow @nogc {}
+        ~this() nothrow @nogc {}
+    }
+
+    Array!Item values;
+    values.emplaceBack(1);
+    values.emplaceBack(3);
+    values.insertEmplace(1, 2);
+    assert(values.length == 3 && values[0].value == 1 && values[1].value == 2 && values[2].value == 3);
+    values.remove(1);
+    assert(values.length == 2 && values[0].value == 1 && values[1].value == 3);
 }

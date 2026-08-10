@@ -2091,3 +2091,213 @@ void ow_lwip_freeaddrinfo(struct addrinfo *ai)
     lwip_freeaddrinfo(ai);
 }
 #endif
+
+
+// =====================================================================
+// SPIFFS -- urt.file backend
+//
+// TRAJECTORY, not the destination.
+//
+// This rides newlib's open/read/write, which reach SPIFFS through IDF's VFS.
+// That is why platforms/esp32s3/sdkconfig.defaults has to enable
+// CONFIG_VFS_SUPPORT_IO and _DIR: with them off, open() is a stub returning
+// ENOSYS even though the filesystem mounted fine. Those were deliberately off
+// to save space, and turning them on costs every ESP target the whole syscall
+// layer for the sake of a stopgap filesystem.
+//
+// Where this should go: mount SPIFFS directly with SPIFFS_mount() and read /
+// write / erase callbacks over esp_partition_*, then call SPIFFS_open() and
+// friends. No VFS, no newlib, no "/spiffs" prefixing, and the sdkconfig change
+// reverts. The blocker is that IDF keeps spiffs.h in PRIV_INCLUDE_DIRS and
+// esp_vfs_spiffs_register() keeps its spiffs* handle private, so it means
+// either widening the include path or vendoring the SPIFFS sources -- the
+// latter being what a non-Espressif target would need anyway.
+//
+// littlefs wants exactly that shape too (bring your own block device), so the
+// work is not thrown away when this is replaced.
+// =====================================================================
+
+#ifdef OW_USE_SPIFFS
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "esp_spiffs.h"
+
+#define OW_SPIFFS_ROOT "/spiffs"
+
+// Registration state is ours, not esp_spiffs_mounted()'s: that reports whether
+// the partition is mounted internally, which a format also does, and mounting
+// the partition does not put a VFS on OW_SPIFFS_ROOT. -1 latches a failed mount
+// so an unformatted partition is not retried on every access.
+static bool ow_spiffs_registered = false;
+static int ow_spiffs_mount_state = 0;
+
+static bool ow_spiffs_ready(void)
+{
+    if (ow_spiffs_registered)
+        return true;
+    if (ow_spiffs_mount_state < 0)
+        return false;
+
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = OW_SPIFFS_ROOT,
+        .partition_label = NULL,
+        .max_files = 4,
+        .format_if_mount_failed = false,
+    };
+    if (esp_vfs_spiffs_register(&conf) != ESP_OK)
+    {
+        ow_spiffs_mount_state = -1;
+        return false;
+    }
+    ow_spiffs_registered = true;
+    return true;
+}
+
+// Anchor caller paths under the mount point.
+static bool ow_spiffs_path(const char *path, size_t path_len, char *buffer, size_t buffer_size)
+{
+    const size_t root = sizeof(OW_SPIFFS_ROOT) - 1;
+    size_t skip = (path_len && path[0] == '/') ? 1 : 0;
+    if (root + 1 + (path_len - skip) + 1 > buffer_size)
+        return false;
+    memcpy(buffer, OW_SPIFFS_ROOT, root);
+    buffer[root] = '/';
+    memcpy(buffer + root + 1, path + skip, path_len - skip);
+    buffer[root + 1 + path_len - skip] = 0;
+    return true;
+}
+
+int urt_spiffs_exists(const char *path, size_t path_len)
+{
+    char buffer[128];
+    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+        return 0;
+    struct stat st;
+    return stat(buffer, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+int urt_spiffs_open(const char *path, size_t path_len, bool write, bool truncate)
+{
+    char buffer[128];
+    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+        return -1;
+    int flags = write ? (O_RDWR | O_CREAT) : O_RDONLY;
+    if (write && truncate)
+        flags |= O_TRUNC;
+    return open(buffer, flags, 0644);
+}
+
+ptrdiff_t urt_spiffs_read(int fd, void *buffer, size_t length)
+{
+    return read(fd, buffer, length);
+}
+
+ptrdiff_t urt_spiffs_write(int fd, const void *data, size_t length)
+{
+    return write(fd, data, length);
+}
+
+void urt_spiffs_close(int fd)
+{
+    close(fd);
+}
+
+uint64_t urt_spiffs_size(int fd)
+{
+    struct stat st;
+    return fstat(fd, &st) == 0 ? (uint64_t)st.st_size : 0;
+}
+
+int64_t urt_spiffs_seek(int fd, int64_t offset, int whence)
+{
+    return lseek(fd, (off_t)offset, whence);
+}
+
+int urt_spiffs_truncate(int fd, uint64_t length)
+{
+    return ftruncate(fd, (off_t)length);
+}
+
+int urt_spiffs_sync(int fd)
+{
+    return fsync(fd);
+}
+
+int urt_spiffs_unlink(const char *path, size_t path_len)
+{
+    char buffer[128];
+    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+        return -1;
+    return unlink(buffer);
+}
+
+int urt_spiffs_rename(const char *from, size_t from_len, const char *to, size_t to_len)
+{
+    char from_buffer[128], to_buffer[128];
+    if (!ow_spiffs_ready() ||
+        !ow_spiffs_path(from, from_len, from_buffer, sizeof(from_buffer)) ||
+        !ow_spiffs_path(to, to_len, to_buffer, sizeof(to_buffer)))
+        return -1;
+    return rename(from_buffer, to_buffer);
+}
+
+int urt_spiffs_stat(const char *path, size_t path_len, uint64_t *size)
+{
+    char buffer[128];
+    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+        return -1;
+    struct stat st;
+    if (stat(buffer, &st) != 0)
+        return -1;
+    *size = (uint64_t)st.st_size;
+    return 0;
+}
+
+// Formatting a multi-megabyte partition blocks for long enough to starve the
+// watchdog, so it runs on its own task and the caller polls for completion.
+enum { OW_SPIFFS_FORMAT_IDLE = 0, OW_SPIFFS_FORMAT_RUNNING, OW_SPIFFS_FORMAT_COMPLETE, OW_SPIFFS_FORMAT_FAILED };
+
+static volatile int ow_spiffs_format_state = OW_SPIFFS_FORMAT_IDLE;
+
+static void ow_spiffs_format_task(void *argument)
+{
+    (void)argument;
+    esp_err_t err = esp_spiffs_format(NULL);
+    if (err == ESP_OK)
+    {
+        // Formatting leaves the partition mounted but unregistered; drop that so
+        // the next access can register a VFS on it.
+        if (!ow_spiffs_registered && esp_spiffs_mounted(NULL))
+            esp_vfs_spiffs_unregister(NULL);
+        ow_spiffs_mount_state = 0;
+    }
+    ow_spiffs_format_state = (err == ESP_OK) ? OW_SPIFFS_FORMAT_COMPLETE : OW_SPIFFS_FORMAT_FAILED;
+    vTaskDelete(NULL);
+}
+
+int urt_spiffs_format_begin(void)
+{
+    if (ow_spiffs_format_state == OW_SPIFFS_FORMAT_RUNNING)
+        return 0;
+    ow_spiffs_format_state = OW_SPIFFS_FORMAT_RUNNING;
+    if (xTaskCreate(ow_spiffs_format_task, "ow-spiffs-fmt", 4096, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS)
+    {
+        ow_spiffs_format_state = OW_SPIFFS_FORMAT_FAILED;
+        return -1;
+    }
+    return 0;
+}
+
+int urt_spiffs_available(void)
+{
+    return ow_spiffs_ready() ? 1 : 0;
+}
+
+int urt_spiffs_format_status(void)
+{
+    return ow_spiffs_format_state;
+}
+
+#endif // OW_USE_SPIFFS

@@ -535,6 +535,20 @@ else ifeq ($(USE_LWIP),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)lwIP
 endif
 
+# Filesystem backends: urt.file has no backend on targets without a host
+# filesystem. Selection is additive -- each enabled backend is consulted in
+# turn, so a file may be sourced from whichever one holds it.
+ifeq ($(USE_SPIFFS),)
+  ifneq ($(filter esp%,$(PLATFORM)),)
+    USE_SPIFFS := 1
+  else
+    USE_SPIFFS := 0
+  endif
+endif
+ifeq ($(USE_SPIFFS),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseSpiffs
+endif
+
 ifeq ($(CONFIG),unittest)
     DFLAGS := $(DFLAGS) -unittest
 endif

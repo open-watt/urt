@@ -28,7 +28,7 @@ void spi_hw_close(ref SpiBus bus)
 
 Result spi_hw_submit(ref SpiBus bus, ref SpiOperation operation, ref const SpiTransfer transfer)
 {
-    int result = ow_spi_submit(bus.driver_data, transfer.write_data.ptr, transfer.write_data.length, cast(void*)transfer.read_data.ptr, transfer.read_data.length, &operation_complete, &operation);
+    int result = ow_spi_submit(bus.driver_data, transfer.write_data.ptr, transfer.write_data.length, cast(void*)transfer.read_data.ptr, transfer.read_data.length, &spi_operation_complete, &operation);
     return result == 0 ? Result.success : InternalResult.failed;
 }
 
@@ -54,7 +54,7 @@ extern(C) alias SpiCompletion = bool function(void*, int);
 int gpio_arg(ubyte gpio)
     => gpio == ubyte.max ? -1 : gpio;
 
-@critical extern(C) bool operation_complete(void* context, int result)
+@critical extern(C) bool spi_operation_complete(void* context, int result)
 {
     return spi_complete(*cast(SpiOperation*)context, result == 0 ? SpiError.none : SpiError.bus, SpiCallbackContext.interrupt);
 }

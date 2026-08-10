@@ -8,6 +8,26 @@ import urt.time;
 
 public import urt.result;
 
+// Backend selection is additive: each enabled backend is consulted in turn.
+version (UseSpiffs) version = HasFileBackend;
+
+version (HasFileBackend)
+{
+    import urt.meta : AliasSeq;
+
+    version (UseSpiffs)
+    {
+        import urt.fs.spiffs;
+        private alias SpiffsBackends = AliasSeq!(SpiffsBackend);
+    }
+    else
+        private alias SpiffsBackends = AliasSeq!();
+
+    private alias FileBackends = AliasSeq!(SpiffsBackends);
+
+    private enum : int { seek_set = 0, seek_cur = 1, seek_end = 2 }
+}
+
 alias SystemTime = void;
 
 version(Windows)
@@ -109,7 +129,11 @@ struct File
     else version (Posix)
         int fd = -1;
     else version (FreeStanding)
+    {
         int fd = -1;
+        version (HasFileBackend)
+            ubyte backend = ubyte.max;
+    }
     else
         static assert(0, "File: not implemented for this platform");
 }
@@ -126,6 +150,13 @@ bool file_exists(const(char)[] path)
         stat_t st;
         return stat(path.tstringz, &st) == 0 && S_ISREG(st.st_mode);
     }
+    else version (HasFileBackend)
+    {
+        static foreach (B; FileBackends)
+            if (B.exists(path))
+                return true;
+        return false;
+    }
     else
         return false;
 }
@@ -141,6 +172,15 @@ Result delete_file(const(char)[] path)
     {
         if (unlink(path.tstringz) == -1)
             return errno_result();
+    }
+    else version (HasFileBackend)
+    {
+        static foreach (B; FileBackends)
+        {
+            if (B.exists(path))
+                return B.remove(path) ? Result.success : InternalResult.failed;
+        }
+        return InternalResult.failed;
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform
@@ -159,6 +199,15 @@ Result rename_file(const(char)[] oldPath, const(char)[] newPath)
     {
         if (int result = rename(oldPath.tstringz, newPath.tstringz) != 0)
            return posix_result(result);
+    }
+    else version (HasFileBackend)
+    {
+        static foreach (B; FileBackends)
+        {
+            if (B.exists(oldPath))
+                return B.rename(oldPath, newPath) ? Result.success : InternalResult.failed;
+        }
+        return InternalResult.failed;
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform
@@ -268,6 +317,22 @@ Result get_file_attributes(const(char)[] path, out FileAttributes outAttributes)
         // TODO
         assert(false);
     }
+    else version (HasFileBackend)
+    {
+        static foreach (B; FileBackends)
+        {
+            if (B.exists(path))
+            {
+                ulong size;
+                if (!B.stat(path, size))
+                    return InternalResult.failed;
+                outAttributes.attributes = FileAttributeFlag.None;
+                outAttributes.size = size;
+                return Result.success;
+            }
+        }
+        return InternalResult.failed;
+    }
     else
         return InternalResult.unsupported; // no filesystem on this platform
 
@@ -311,6 +376,14 @@ Result get_attributes(ref const File file, out FileAttributes outAttributes)
     {
         // TODO
         assert(false);
+    }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        outAttributes.attributes = FileAttributeFlag.None;
+        outAttributes.size = file.get_size();
+        return Result.success;
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform
@@ -509,6 +582,45 @@ Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags 
         if (mode == FileOpenMode.WriteAppend || mode == FileOpenMode.ReadWriteAppend)
             lseek(file.fd, 0, SEEK_END);
     }
+    else version (HasFileBackend)
+    {
+        const bool write = mode != FileOpenMode.ReadExisting;
+        const bool truncate = mode == FileOpenMode.WriteTruncate || mode == FileOpenMode.ReadWriteTruncate;
+        const bool create = mode != FileOpenMode.ReadExisting && mode != FileOpenMode.ReadWriteExisting;
+
+        // Prefer the backend already holding it, so writes land on the copy
+        // that reads will find.
+        static foreach (i, B; FileBackends)
+        {
+            if (file.fd < 0 && B.exists(path))
+            {
+                int fd = B.open(path, write, truncate);
+                if (fd >= 0)
+                {
+                    file.fd = fd;
+                    file.backend = i;
+                }
+            }
+        }
+        if (file.fd < 0 && create)
+        {
+            int fd = FileBackends[0].open(path, true, truncate);
+            if (fd >= 0)
+            {
+                file.fd = fd;
+                file.backend = 0;
+            }
+        }
+        if (file.fd < 0)
+        {
+            static foreach (B; FileBackends)
+            {
+                if (B.available())
+                    return InternalResult.failed;
+            }
+            return InternalResult.unsupported;
+        }
+    }
     else
         return InternalResult.unsupported; // no filesystem on this platform
 
@@ -541,6 +653,18 @@ void close(ref File file)
         urt.internal.sys.posix.close(file.fd);
         file.fd = -1;
     }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i)
+                B.close(file.fd);
+        }
+        file.fd = -1;
+        file.backend = ubyte.max;
+    }
 }
 
 ulong get_size(ref const File file)
@@ -558,6 +682,17 @@ ulong get_size(ref const File file)
         if (fstat(file.fd, &fs))
             return 0;
         return fs.st_size;
+    }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return 0;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i)
+                return B.size(file.fd);
+        }
+        return 0;
     }
     else
         return 0;
@@ -608,6 +743,16 @@ Result set_size(ref File file, ulong size)
         if (ftruncate(file.fd, size))
             return errno_result();
     }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i && !B.set_size(file.fd, size))
+                return InternalResult.failed;
+        }
+    }
     else
         return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
@@ -625,6 +770,21 @@ ulong get_pos(ref const File file)
     }
     else version (Posix)
         return lseek(file.fd, 0, SEEK_CUR);
+    else version (HasFileBackend)
+    {
+        if (file.fd >= 0)
+        {
+            static foreach (i, B; FileBackends)
+            {
+                if (file.backend == i)
+                {
+                    long pos = B.seek(file.fd, 0, seek_cur);
+                    return pos < 0 ? 0 : cast(ulong)pos;
+                }
+            }
+        }
+        return 0;
+    }
     else
         return 0;
 }
@@ -643,6 +803,16 @@ Result set_pos(ref File file, ulong offset)
         off_t rc = lseek(file.fd, offset, SEEK_SET);
         if (rc < 0)
             return errno_result();
+    }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i && B.seek(file.fd, cast(long)offset, seek_set) < 0)
+                return InternalResult.failed;
+        }
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform
@@ -669,6 +839,21 @@ Result read(ref File file, void[] buffer, out size_t bytesRead)
         if (n < 0)
             return errno_result();
         bytesRead = n;
+    }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i)
+            {
+                ptrdiff_t n = B.read(file.fd, buffer);
+                if (n < 0)
+                    return InternalResult.failed;
+                bytesRead = n;
+            }
+        }
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform
@@ -702,6 +887,26 @@ Result read_at(ref File file, void[] buffer, ulong offset, out size_t bytesRead)
             return errno_result();
         bytesRead = n;
     }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i)
+            {
+                // no pread; emulate it and put the position back
+                long restore = B.seek(file.fd, 0, seek_cur);
+                if (restore < 0 || B.seek(file.fd, cast(long)offset, seek_set) < 0)
+                    return InternalResult.failed;
+                ptrdiff_t n = B.read(file.fd, buffer);
+                B.seek(file.fd, restore, seek_set);
+                if (n < 0)
+                    return InternalResult.failed;
+                bytesRead = n;
+            }
+        }
+    }
     else
         return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
@@ -722,6 +927,21 @@ Result write(ref File file, const(void)[] data, out size_t bytesWritten)
         if (n < 0)
             return errno_result();
         bytesWritten = n;
+    }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i)
+            {
+                ptrdiff_t n = B.write(file.fd, data);
+                if (n < 0)
+                    return InternalResult.failed;
+                bytesWritten = n;
+            }
+        }
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform
@@ -751,6 +971,26 @@ Result write_at(ref File file, const(void)[] data, ulong offset, out size_t byte
             return errno_result();
         bytesWritten = n;
     }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i)
+            {
+                // no pwrite; emulate it and put the position back
+                long restore = B.seek(file.fd, 0, seek_cur);
+                if (restore < 0 || B.seek(file.fd, cast(long)offset, seek_set) < 0)
+                    return InternalResult.failed;
+                ptrdiff_t n = B.write(file.fd, data);
+                B.seek(file.fd, restore, seek_set);
+                if (n < 0)
+                    return InternalResult.failed;
+                bytesWritten = n;
+            }
+        }
+    }
     else
         return InternalResult.unsupported; // no filesystem on this platform
     return Result.success;
@@ -767,6 +1007,16 @@ Result flush(ref File file)
     {
         if (fsync(file.fd))
             return errno_result();
+    }
+    else version (HasFileBackend)
+    {
+        if (file.fd < 0)
+            return InternalResult.invalid_parameter;
+        static foreach (i, B; FileBackends)
+        {
+            if (file.backend == i && !B.sync(file.fd))
+                return InternalResult.failed;
+        }
     }
     else
         return InternalResult.unsupported; // no filesystem on this platform

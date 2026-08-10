@@ -33,6 +33,12 @@ static nothrow @nogc:
     bool available()
         => urt_spiffs_available() != 0;
 
+    int last_error()
+        => urt_spiffs_last_error();
+
+    bool info(out ulong total, out ulong used)
+        => urt_spiffs_info(&total, &used) == 0;
+
     bool exists(const(char)[] path)
         => urt_spiffs_exists(path.ptr, path.length) != 0;
 
@@ -76,6 +82,8 @@ private extern(C)
     int urt_spiffs_format_begin();
     int urt_spiffs_format_status();
     int urt_spiffs_available();
+    int urt_spiffs_last_error();
+    int urt_spiffs_info(ulong* total, ulong* used);
     int urt_spiffs_exists(const(char)* path, size_t path_len);
     int urt_spiffs_stat(const(char)* path, size_t path_len, ulong* size);
     int urt_spiffs_unlink(const(char)* path, size_t path_len);

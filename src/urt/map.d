@@ -1,5 +1,6 @@
 module urt.map;
 
+import urt.array;
 import urt.lifetime;
 import urt.kvp;
 import urt.mem.allocator;
@@ -245,7 +246,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
 
     inout(V)* get(_K)(ref const _K key) inout
     {
-        inout(Node)* n = find(_root, key);
+        inout(Node)* n = cast(inout(Node)*)find_key!(K, _K, Pred)(_root ? _root.base : null, key);
         return n ? &n.kvp.value : null;
     }
 
@@ -372,16 +373,10 @@ nothrow:
     size_t _num_modes = 0;
     Node* _root = null;
 
-    static ptrdiff_t compare_node(const void* a, const void* b) pure
-        => Pred(*cast(K*)a, *cast(K*)b);
-
     static void free_node(void* p)
     {
         Allocator.instance.freeT(cast(Node*)p);
     }
-
-    static inout(Node)* find(_K)(inout(Node)* n, ref const _K key) pure
-        => cast(inout(Node)*)find_node(n.base, (a, b) => Pred(*cast(K*)a, *cast(_K*)b), &key);
 
     void destroy(Node* n)
     {
@@ -390,19 +385,12 @@ nothrow:
 
     Node* insert(Node* n, Node* newnode)
     {
-        return cast(Node*)insert_node(n.base, newnode.base, _num_modes,
-                                      &compare_node,
-                                      &free_node);
+        return cast(Node*)insert_node(n.base, newnode.base, _num_modes, &compare_keys!(K, K, Pred), &free_node);
     }
 
     Node* delete_node(_K)(Node* _pRoot, ref const _K key)
     {
-        static if (!is(K == _K))
-            static ptrdiff_t compare_search(const void* a, const void* b) pure
-                => Pred(*cast(K*)a, *cast(_K*)b);
-        else
-            alias compare_search = compare_node;
-        return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_search, &compare_node, (void* from, void* to) {
+        return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_keys!(K, _K, Pred), &compare_keys!(K, K, Pred), (void* from, void* to) {
             // Copy the in-order successor's data to this Node
             (cast(Node*)to).kvp.key = (cast(Node*)from).kvp.key; // we can't move the key, because delete_node still needs to be able to find it
             (cast(Node*)to).kvp.value = (cast(Node*)from).kvp.value.move;
@@ -431,32 +419,24 @@ public:
     struct Range(IterateBy type, bool const_ = false)
     {
     nothrow @nogc:
-        import urt.array;
-
         static if (const_)
             alias PN = const(Node)*;
         else
             alias PN = Node*;
 
-        PN n;
-        Array!(PN) stack;
-
         this(PN root)
         {
             if (root)
-            {
-                stack.reserve(root.height - 1);
-                n = getLeft(root);
-            }
+                _range.initialise(root.base);
         }
 
         bool empty() const pure
-            => n is null;
+            => _range.empty;
 
         static if (type == IterateBy.Keys)
         {
             ref const(K) front() const pure
-                => n.kvp.key;
+                => node.kvp.key;
         }
         else
         {
@@ -465,7 +445,7 @@ public:
                 ref auto front() const
                 {
                     static if (type == IterateBy.Values)
-                        return n.kvp.value;
+                        return node.kvp.value;
                     else
                     {
                         struct KV
@@ -476,7 +456,7 @@ public:
                             ref const(V) value() @property const pure
                                 => n.kvp.value;
                         }
-                        return KV(n);
+                        return KV(node);
                     }
                 }
             }
@@ -485,7 +465,7 @@ public:
                 ref auto front()
                 {
                     static if (type == IterateBy.Values)
-                        return n.kvp.value;
+                        return node.kvp.value;
                     else
                     {
                         struct KV
@@ -496,30 +476,19 @@ public:
                             ref inout(V) value() @property inout pure
                                 => n.kvp.value;
                         }
-                        return KV(n);
+                        return KV(node);
                     }
                 }
             }
         }
 
         void popFront()
-        {
-            if (n.right)
-                n = getLeft(n.right);
-            else
-                n = !stack.empty ? stack.popBack() : null;
-        }
-
+            => _range.pop_front();
     private:
-        PN getLeft(PN node)
-        {
-            while (node.left)
-            {
-                stack ~= node;
-                node = node.left;
-            }
-            return node;
-        }
+        BaseRange _range;
+
+        PN node() inout pure
+            => cast(PN)_range._node;
     }
 }
 struct BaseNode
@@ -844,6 +813,48 @@ private:
 alias CompFn = ptrdiff_t function(const void* a, const void* b) pure nothrow @nogc;
 alias MoveFn = void function(void* from, void* to) nothrow @nogc;
 alias DestroyFn = void function(void* a) nothrow @nogc;
+
+ptrdiff_t compare_keys(K, U, alias pred)(const void* a, const void* b) pure
+    => pred(*cast(K*)a, *cast(U*)b);
+
+pragma(inline, false)
+inout(BaseNode)* find_key(K, U, alias pred)(inout(BaseNode)* node, ref const U key) pure
+    => find_node(node, &compare_keys!(K, U, pred), &key);
+
+struct BaseRange
+{
+nothrow @nogc:
+    const(BaseNode)* _node;
+    Array!(const(BaseNode)*) _stack;
+
+    void initialise(const(BaseNode)* root)
+    {
+        _stack.reserve(root.height - 1);
+        _node = get_left(root);
+    }
+
+    bool empty() const pure
+        => _node is null;
+
+    void pop_front()
+    {
+        if (_node.right)
+            _node = get_left(_node.right);
+        else
+            _node = !_stack.empty ? _stack.popBack() : null;
+    }
+
+private:
+    const(BaseNode)* get_left(const(BaseNode)* value)
+    {
+        while (value.left)
+        {
+            _stack ~= value;
+            value = value.left;
+        }
+        return value;
+    }
+}
 
 inout(void)* node_key(inout(BaseNode)* n) pure
     => cast(inout(void)*)n + n.key_offset;

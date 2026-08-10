@@ -167,23 +167,23 @@ const(char)[] tconcat(Args...)(ref Args args)
     else
     {
         pragma(inline, true);
-        import urt.string.format : ConcatArg, make_concat_args;
+        import urt.string.format : ConcatArg, concat_mask, make_concat_args;
         ConcatArg[Args.length] packed = void;
         make_concat_args(args, packed.ptr);
-        return tconcat_impl(packed.ptr, packed.length);
+        return tconcat_impl(packed.ptr, concat_mask!Args);
     }
 }
 
 pragma(inline, false)
-const(char)[] tconcat_impl(const(void)* raw_args, size_t count)
+const(char)[] tconcat_impl(const(void)* raw_args, size_t arg_mask)
 {
     import urt.string.format : ConcatArg, concat_impl;
     const(ConcatArg)* args = cast(const(ConcatArg)*)raw_args;
-    const(char)[] r = concat_impl(cast(char*)tempMem.ptr + alloc_offset, tempMem.length - alloc_offset, args, count);
+    const(char)[] r = concat_impl(cast(char*)tempMem.ptr + alloc_offset, tempMem.length - alloc_offset, args, arg_mask);
     if (!r)
     {
         alloc_offset = 0;
-        r = concat_impl(cast(char*)tempMem.ptr, TempMemSize / 2, args, count);
+        r = concat_impl(cast(char*)tempMem.ptr, TempMemSize / 2, args, arg_mask);
     }
     alloc_offset += r.length;
     return r;

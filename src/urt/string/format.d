@@ -35,9 +35,14 @@ struct Format
 struct ConcatArg
 {
     const(void)* data;
-    size_t length;
-    typeof(StringifyFunc.funcptr) stringify;
+    union
+    {
+        size_t length;
+        typeof(StringifyFunc.funcptr) stringify;
+    }
 }
+
+enum max_concat_args = size_t.sizeof * 8 - 1;
 
 ptrdiff_t toString(T)(ref const T value, char[] buffer, const(char)[] format = null, const(FormatArg)[] formatArgs = null)
 {
@@ -55,37 +60,43 @@ void make_concat_arg(T)(ref const T arg, ref ConcatArg result)
     {
         result.data = &arg;
         result.length = 1;
-        result.stringify = null;
     }
     else static if (is(T : const(char)[]) || is(T == E[N], E, size_t N) && is(Unqual!E == char))
     {
         result.data = arg[].ptr;
         result.length = arg[].length;
-        result.stringify = null;
     }
     else static if (is(Unqual!T == String) || is(Unqual!T == MutableString!N, size_t N) || is(Unqual!T == Array!(char, N), size_t N))
     {
         result.data = arg[].ptr;
         result.length = arg[].length;
-        result.stringify = null;
     }
     else static if (is(Unqual!T == Format))
     {
         result.data = &arg;
-        result.length = 0;
         result.stringify = &Format.stringify;
     }
     else
     {
         StringifyFunc fn = get_to_string_func(arg);
         result.data = fn.ptr;
-        result.length = 0;
         result.stringify = fn.funcptr;
     }
 }
 
+enum concat_mask(Args...) = () {
+    static assert(Args.length <= max_concat_args, "Too many concat arguments");
+    size_t mask = size_t(1) << Args.length;
+    static foreach (i, T; Args)
+        static if (is_concat_text!T)
+            mask |= size_t(1) << i;
+    return mask;
+}();
+
 void make_concat_args(Args...)(ref const Args args, ConcatArg* result)
 {
+    pragma(inline, true);
+
     static foreach (i; 0 .. Args.length)
         make_concat_arg(args[i], result[i]);
 }
@@ -100,28 +111,32 @@ char[] concat(Args...)(char[] buffer, auto ref const Args args)
     {
         ConcatArg[Args.length] packed = void;
         make_concat_args(args, packed.ptr);
-        return concat_impl(buffer.ptr, buffer.length, packed.ptr, packed.length);
+        return concat_impl(buffer.ptr, buffer.length, packed.ptr, concat_mask!Args);
     }
 }
 
 pragma(inline, false)
-char[] concat_impl(char* buffer, size_t capacity, const ConcatArg* args, size_t count)
+char[] concat_impl(char* buffer, size_t capacity, const ConcatArg* args, size_t arg_mask)
 {
     size_t length = 0;
-    for (size_t i = 0; i < count; ++i)
+    size_t mask = arg_mask;
+    const(ConcatArg)* arg = args;
+    while (mask > 1)
     {
-        if (args[i].stringify)
+        if (mask & 1)
+            length += arg.length;
+        else
         {
             StringifyFunc fn;
-            fn.ptr = cast(void*)args[i].data;
-            fn.funcptr = args[i].stringify;
+            fn.ptr = cast(void*)arg.data;
+            fn.funcptr = arg.stringify;
             ptrdiff_t result = fn(null, null, null);
             if (result < 0)
                 return null;
             length += result;
         }
-        else
-            length += args[i].length;
+        ++arg;
+        mask >>= 1;
     }
 
     if (buffer)
@@ -129,23 +144,27 @@ char[] concat_impl(char* buffer, size_t capacity, const ConcatArg* args, size_t 
         if (length > capacity)
             return null;
         size_t offset = 0;
-        for (size_t i = 0; i < count; ++i)
+        mask = arg_mask;
+        arg = args;
+        while (mask > 1)
         {
-            if (args[i].stringify)
+            if (mask & 1)
+            {
+                buffer[offset .. offset + arg.length] = (cast(const(char)*)arg.data)[0 .. arg.length];
+                offset += arg.length;
+            }
+            else
             {
                 StringifyFunc fn;
-                fn.ptr = cast(void*)args[i].data;
-                fn.funcptr = args[i].stringify;
+                fn.ptr = cast(void*)arg.data;
+                fn.funcptr = arg.stringify;
                 ptrdiff_t result = fn(buffer[offset .. capacity], null, null);
                 if (result < 0)
                     return null;
                 offset += result;
             }
-            else
-            {
-                buffer[offset .. offset + args[i].length] = (cast(const(char)*)args[i].data)[0 .. args[i].length];
-                offset += args[i].length;
-            }
+            ++arg;
+            mask >>= 1;
         }
     }
     return buffer[0 .. length];
@@ -195,6 +214,10 @@ private:
 
 
 private:
+
+enum is_concat_text(T) = is(Unqual!T == char) || is(T : const(char)[]) ||
+    is(T == E[N], E, size_t N) && is(Unqual!E == char) || is(Unqual!T == String) ||
+    is(Unqual!T == MutableString!N, size_t N) || is(Unqual!T == Array!(char, N), size_t N);
 
 import urt.array;
 

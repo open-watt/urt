@@ -1,7 +1,7 @@
 module urt.log;
 
 import urt.mem.temp : tconcat_impl, tformat;
-import urt.string.format : ConcatArg, make_concat_args;
+import urt.string.format : ConcatArg, concat_mask, make_concat_args;
 import urt.time;
 
 nothrow @nogc:
@@ -158,7 +158,8 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
     {
         ConcatArg[T.length] packed = void;
         make_concat_args(args, packed.ptr);
-        write_concat_log(severity, tag.ptr, tag.length, object_name.ptr, object_name.length, packed.ptr, packed.length);
+        write_concat_log(severity, tag.ptr, tag.length, object_name.ptr, object_name.length,
+            packed.ptr, concat_mask!T);
     }
 }
 
@@ -250,9 +251,9 @@ LogSinkHandle register_log_sink(LegacyLogSink sink)
 private:
 
 void write_concat_log(Severity severity, const(char)* tag, size_t tag_length, const(char)* object_name,
-    size_t object_name_length, const(void)* args, size_t count)
+    size_t object_name_length, const(void)* args, size_t arg_mask)
 {
-    const(char)[] message = tconcat_impl(args, count);
+    const(char)[] message = tconcat_impl(args, arg_mask);
     write_log_message(severity, tag, tag_length, object_name, object_name_length, message.ptr, message.length);
 }
 

@@ -1010,10 +1010,10 @@ nothrow @nogc:
 
     ref MutableString!Embed append(Things...)(auto ref Things things)
     {
-        import urt.string.format : ConcatArg, make_concat_args;
+        import urt.string.format : ConcatArg, concat_mask, make_concat_args;
         ConcatArg[Things.length] args = void;
         make_concat_args(things, args.ptr);
-        return insert_impl(length(), args.ptr, args.length);
+        return insert_impl(length(), args.ptr, concat_mask!Things);
     }
 
     ref MutableString!Embed append_format(Things...)(const(char)[] format, auto ref Things args)
@@ -1025,10 +1025,10 @@ nothrow @nogc:
     {
         if (ptr)
             writeLength(0);
-        import urt.string.format : ConcatArg, make_concat_args;
+        import urt.string.format : ConcatArg, concat_mask, make_concat_args;
         ConcatArg[Things.length] args = void;
         make_concat_args(things, args.ptr);
-        return insert_impl(0, args.ptr, args.length);
+        return insert_impl(0, args.ptr, concat_mask!Things);
     }
 
     ref MutableString!Embed format(Args...)(const(char)[] format, auto ref Args args)
@@ -1040,10 +1040,10 @@ nothrow @nogc:
 
     ref MutableString!Embed insert(Things...)(size_t offset, auto ref Things things)
     {
-        import urt.string.format : ConcatArg, make_concat_args;
+        import urt.string.format : ConcatArg, concat_mask, make_concat_args;
         ConcatArg[Things.length] args = void;
         make_concat_args(things, args.ptr);
-        return insert_impl(offset, args.ptr, args.length);
+        return insert_impl(offset, args.ptr, concat_mask!Things);
     }
 
     ref MutableString!Embed insert_format(Things...)(size_t offset, const(char)[] format, auto ref Things args)
@@ -1181,7 +1181,7 @@ private:
         defaultAllocator().free(buffer[0 .. 4 + *cast(ushort*)buffer]);
     }
 
-    ref MutableString!Embed insert_impl(size_t offset, const(void)* raw_args, size_t count)
+    ref MutableString!Embed insert_impl(size_t offset, const(void)* raw_args, size_t arg_mask)
     {
         import urt.string.format : ConcatArg, concat_impl;
         const(ConcatArg)* args = cast(const(ConcatArg)*)raw_args;
@@ -1189,7 +1189,7 @@ private:
         char* oldPtr = ptr;
         size_t oldLen = length();
 
-        size_t insertLen = concat_impl(null, 0, args, count).length;
+        size_t insertLen = concat_impl(null, 0, args, arg_mask).length;
         size_t newLen = oldLen + insertLen;
         if (newLen == oldLen)
             return this;
@@ -1198,7 +1198,7 @@ private:
         size_t oldAlloc = allocated();
         ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(grow_capacity(newLen, oldAlloc));
         memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
-        concat_impl(ptr + offset, insertLen, args, count);
+        concat_impl(ptr + offset, insertLen, args, arg_mask);
         writeLength(newLen);
 
         if (oldPtr && ptr != oldPtr)

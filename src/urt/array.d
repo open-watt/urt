@@ -513,12 +513,13 @@ nothrow @nogc:
 
         ref Array!(T, EmbedCount) append(Things...)(auto ref Things things)
         {
-            import urt.string.format : ConcatArg, concat_impl, make_concat_args;
+            import urt.string.format : ConcatArg, concat_impl, concat_mask, make_concat_args;
             ConcatArg[Things.length] args = void;
             make_concat_args(things, args.ptr);
-            size_t ext_len = concat_impl(null, 0, args.ptr, args.length).length;
+            enum arg_mask = concat_mask!Things;
+            size_t ext_len = concat_impl(null, 0, args.ptr, arg_mask).length;
             grow(_length + ext_len);
-            concat_impl(ptr + _length, ext_len, args.ptr, args.length);
+            concat_impl(ptr + _length, ext_len, args.ptr, arg_mask);
             _length += ext_len;
             return this;
         }

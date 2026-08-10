@@ -1,7 +1,7 @@
 module urt.log;
 
-import urt.mem.temp : tconcat, tconcat_impl, tformat;
-import urt.string.format : normalise_args;
+import urt.mem.temp : tconcat_impl, tformat;
+import urt.string.format : ConcatArg, make_concat_args;
 import urt.time;
 
 nothrow @nogc:
@@ -150,18 +150,24 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
         return;
     import urt.string, urt.array;
     static if (T.length == 1 && (is(T[0] : const(char)[]) || is(T[0] : const String) || is(T[0] : const MutableString!N, size_t N) || is(T[0] : const Array!char)))
-        auto msg = LogMessage(severity, tag, object_name, args[0][], g_log_hostname, get_sys_time());
+    {
+        const(char)[] message = args[0][];
+        write_log_message(severity, tag.ptr, tag.length, object_name.ptr, object_name.length, message.ptr, message.length);
+    }
     else
-        auto msg = LogMessage(severity, tag, object_name, tconcat_impl(normalise_args(args)), g_log_hostname, get_sys_time());
-    write_log(msg);
+    {
+        ConcatArg[T.length] packed = void;
+        make_concat_args(args, packed.ptr);
+        write_concat_log(severity, tag.ptr, tag.length, object_name.ptr, object_name.length, packed.ptr, packed.length);
+    }
 }
 
 void write_logf(T...)(Severity severity, const(char)[] tag, const(char)[] object_name, const(char)[] fmt, ref T args)
 {
     if (severity > g_max_severity)
         return;
-    auto msg = LogMessage(severity, tag, object_name, tformat(fmt, args), g_log_hostname, get_sys_time());
-    write_log(msg);
+    const(char)[] message = tformat(fmt, args);
+    write_log_message(severity, tag.ptr, tag.length, object_name.ptr, object_name.length, message.ptr, message.length);
 }
 
 void write_log(scope ref const LogMessage msg)
@@ -243,6 +249,21 @@ LogSinkHandle register_log_sink(LegacyLogSink sink)
 
 private:
 
+void write_concat_log(Severity severity, const(char)* tag, size_t tag_length, const(char)* object_name,
+    size_t object_name_length, const(void)* args, size_t count)
+{
+    const(char)[] message = tconcat_impl(args, count);
+    write_log_message(severity, tag, tag_length, object_name, object_name_length, message.ptr, message.length);
+}
+
+void write_log_message(Severity severity, const(char)* tag, size_t tag_length, const(char)* object_name,
+    size_t object_name_length, const(char)* message, size_t message_length)
+{
+    auto msg = LogMessage(severity, tag[0 .. tag_length], object_name[0 .. object_name_length],
+        message[0 .. message_length], g_log_hostname, get_sys_time());
+    write_log(msg);
+}
+
 enum max_sinks = 16;
 
 struct SinkSlot
@@ -268,4 +289,32 @@ void recalc_max_severity()
             max_sev = sink.filter.max_severity;
     }
     g_max_severity = max_sev;
+}
+
+version (unittest)
+{
+    struct TestLogCapture
+    {
+        const(char)[] tag;
+        const(char)[] message;
+    }
+
+    void test_log_sink(void* context, scope ref const LogMessage message)
+    {
+        TestLogCapture* capture = cast(TestLogCapture*)context;
+        capture.tag = message.tag;
+        capture.message = message.message;
+    }
+}
+
+unittest
+{
+    Severity old_max_severity = g_max_severity;
+    TestLogCapture capture;
+    LogSinkHandle sink = register_log_sink(&test_log_sink, &capture);
+    log_info("test", "value=", 10);
+    assert(capture.tag == "test");
+    assert(capture.message == "value=10");
+    unregister_log_sink(sink);
+    g_max_severity = old_max_severity;
 }

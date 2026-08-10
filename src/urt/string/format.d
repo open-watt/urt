@@ -17,11 +17,6 @@ debug
 
 alias StringifyFunc = ptrdiff_t delegate(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) nothrow @nogc;
 
-struct Arg
-{
-    StringifyFunc fn;
-}
-
 struct Format
 {
     this(T)(ref const T value, const(char)[] format) pure nothrow @nogc
@@ -30,8 +25,18 @@ struct Format
         fmt = format;
     }
 
+    ptrdiff_t stringify(char[] buffer, const(char)[], const(FormatArg)[]) nothrow @nogc
+        => fn(buffer, fmt, null);
+
     StringifyFunc fn;
     const(char)[] fmt;
+}
+
+struct ConcatArg
+{
+    const(void)* data;
+    size_t length;
+    typeof(StringifyFunc.funcptr) stringify;
 }
 
 ptrdiff_t toString(T)(ref const T value, char[] buffer, const(char)[] format = null, const(FormatArg)[] formatArgs = null)
@@ -44,92 +49,106 @@ ptrdiff_t toString(T)(ref const T value, char[] buffer, const(char)[] format = n
 
 alias formatValue = toString; // TODO: remove me?
 
-auto normalise_args(Args...)(ref const Args args)
+void make_concat_arg(T)(ref const T arg, ref ConcatArg result)
 {
-    import urt.meta.tuple : Tuple;
-    alias NormalisedArgs = NormaliseArgs!Args;
-    Tuple!(NormalisedArgs) result = void;
-
-//    pragma(msg, "[ ", Args, " ] --> [ ", NormalisedArgs, " ]");
-
-    static foreach (i; 0 .. Args.length)
+    static if (is(Unqual!T == char))
     {
-        static if (is(NormalisedArgs[i] == char) || is(NormalisedArgs[i] == Format))
-            result[i] = args[i];
-        else static if (is(NormalisedArgs[i] == Arg))
-            result[i] = Arg(get_to_string_func(args[i]));
-        else static if (is(NormalisedArgs[i] == Array!char) || is(NormalisedArgs[i] == String) || is(NormalisedArgs[i] == MutableString!N, size_t N))
-            static assert(false, "use container[] at the callsite!");
-        else
-            result[i] = args[i][];
+        result.data = &arg;
+        result.length = 1;
+        result.stringify = null;
     }
-    return result;
+    else static if (is(T : const(char)[]) || is(T == E[N], E, size_t N) && is(Unqual!E == char))
+    {
+        result.data = arg[].ptr;
+        result.length = arg[].length;
+        result.stringify = null;
+    }
+    else static if (is(Unqual!T == String) || is(Unqual!T == MutableString!N, size_t N) || is(Unqual!T == Array!(char, N), size_t N))
+    {
+        result.data = arg[].ptr;
+        result.length = arg[].length;
+        result.stringify = null;
+    }
+    else static if (is(Unqual!T == Format))
+    {
+        result.data = &arg;
+        result.length = 0;
+        result.stringify = &Format.stringify;
+    }
+    else
+    {
+        StringifyFunc fn = get_to_string_func(arg);
+        result.data = fn.ptr;
+        result.length = 0;
+        result.stringify = fn.funcptr;
+    }
+}
+
+void make_concat_args(Args...)(ref const Args args, ConcatArg* result)
+{
+    static foreach (i; 0 .. Args.length)
+        make_concat_arg(args[i], result[i]);
 }
 
 char[] concat(Args...)(char[] buffer, auto ref const Args args)
 {
     pragma(inline, true);
 
-    alias NormalisedArgs = NormaliseArgs!Args;
-
     static if (Args.length == 0)
         return buffer.ptr[0 .. 0];
     else
-        return concat_impl(buffer, normalise_args(forward!args));
+    {
+        ConcatArg[Args.length] packed = void;
+        make_concat_args(args, packed.ptr);
+        return concat_impl(buffer.ptr, buffer.length, packed.ptr, packed.length);
+    }
 }
 
-import urt.meta.tuple : Tuple;
-char[] concat_impl(Args...)(char[] buffer, Tuple!Args args)
+pragma(inline, false)
+char[] concat_impl(char* buffer, size_t capacity, const ConcatArg* args, size_t count)
 {
-    size_t[Args.length] lens = void;
     size_t length = 0;
-    static foreach (i; 0 .. Args.length)
+    for (size_t i = 0; i < count; ++i)
     {
-        static if (is(Args[i] == char))
-            length += 1;
-        else static if (is(Args[i] == Arg))
+        if (args[i].stringify)
         {
-            lens[i] = args[i].fn(null, null, null);
-            length += lens[i];
-        }
-        else static if (is(Args[i] == Format))
-        {
-            lens[i] = args[i].fn(null, args[i].fmt, null);
-            length += lens[i];
+            StringifyFunc fn;
+            fn.ptr = cast(void*)args[i].data;
+            fn.funcptr = args[i].stringify;
+            ptrdiff_t result = fn(null, null, null);
+            if (result < 0)
+                return null;
+            length += result;
         }
         else
-        {
-            lens[i] = args[i].length;
-            length += lens[i];
-        }
+            length += args[i].length;
     }
-    if (buffer.ptr)
+
+    if (buffer)
     {
-        if (length > buffer.length)
+        if (length > capacity)
             return null;
-        char* p = buffer.ptr;
-        static foreach (i; 0 .. Args.length)
+        size_t offset = 0;
+        for (size_t i = 0; i < count; ++i)
         {
-            static if (is(Args[i] == char))
-                *p++ = args[i];
-            else static if (is(Args[i] == Arg))
+            if (args[i].stringify)
             {
-                args[i].fn(p[0..lens[i]], null, null);
-                p += lens[i];
-            }
-            else static if (is(Args[i] == Format))
-            {
-                args[i].fn(p[0..lens[i]], args[i].fmt, null);
-                p += lens[i];
+                StringifyFunc fn;
+                fn.ptr = cast(void*)args[i].data;
+                fn.funcptr = args[i].stringify;
+                ptrdiff_t result = fn(buffer[offset .. capacity], null, null);
+                if (result < 0)
+                    return null;
+                offset += result;
             }
             else
             {
-                p[0..lens[i]] = args[i].ptr[0..lens[i]];
-                p += lens[i];
+                buffer[offset .. offset + args[i].length] = (cast(const(char)*)args[i].data)[0 .. args[i].length];
+                offset += args[i].length;
             }
         }
     }
-    return buffer.ptr[0 .. length];
+    return buffer[0 .. length];
 }
 
 char[] format(Args...)(char[] buffer, const(char)[] fmt, auto ref Args args)
@@ -178,47 +197,6 @@ private:
 private:
 
 import urt.array;
-enum is_some_string(T) = is(T == char) || is(T : const char[]) || is(T : const(String)) || is(T : const(MutableString!N), size_t N) || is(T : const(Array!(char, N)), size_t N);
-
-template num_string_args(Args...)
-{
-    static if (Args.length == 0)
-        enum num_string_args = 0;
-    else static if (is_some_string!(Args[0]))
-        enum num_string_args = 1 + num_string_args!(Args[1 .. $]);
-    else
-        enum num_string_args = 0;
-}
-
-template NormaliseArgs(Args...)
-{
-    import urt.meta : AliasSeq;
-    alias NormaliseArgs = AliasSeq!();
-    static foreach (Arg; Args)
-        NormaliseArgs = AliasSeq!(NormaliseArgs, NormaliseOthers!(NormaliseConst!Arg));
-}
-
-template NormaliseOthers(T)
-{
-    static if (is(T : const(char)[]) || is(T == char))
-        alias NormaliseOthers = T;
-    else static if (is(T == String) || is(T == Array!char) || is(T == MutableString!N, size_t N))
-        alias NormaliseOthers = const(char)[];
-    else
-        alias NormaliseOthers = Arg;
-}
-
-template NormaliseConst(T)
-{
-    static if (is(T == const(U), U) || is(T == immutable(U), U))
-        alias NormaliseConst = NormaliseConst!U;
-    else static if (is(T == immutable(U)[], U) || is(T == U[], U))
-        alias NormaliseConst = const(U)[];
-    else static if (is(T == U[N], U, size_t N))
-        alias NormaliseConst = const(U)[];
-    else
-        alias NormaliseConst = T;
-}
 
 alias StringifyFuncReduced = ptrdiff_t delegate(char[] buffer, const(char)[] format) nothrow @nogc;
 alias StringifyFuncReduced2 = ptrdiff_t delegate(char[] buffer) nothrow @nogc;
@@ -830,19 +808,6 @@ ptrdiff_t format_int(ulong value, bool signed, char[] buffer, const(char)[] form
     return len;
 }
 
-char[] concat_impl(char[] buffer, const(StringifyFunc)[] args) nothrow @nogc
-{
-    size_t len = 0;
-    foreach (a; args)
-    {
-        ptrdiff_t r = a(buffer.ptr ? buffer[len..$] : null, null, null);
-        if (r < 0)
-            return null;
-        len += r;
-    }
-    return buffer.ptr[0..len];
-}
-
 char[] formatImpl(char[] buffer, const(char)[] format, const(FormatArg)[] args) nothrow @nogc
 {
     char *pBuffer = buffer.ptr;
@@ -1067,7 +1032,19 @@ unittest
 {
     char[1024] tmp;
 
-    char[] r = format(tmp, "hello");
+    char[] r = concat(tmp, "value=", 10, '!');
+    assert(r == "value=10!");
+
+    int value = 10;
+    r = concat(tmp, "value=", Format(value, "04"), '!');
+    assert(r == "value=0010!");
+    assert(concat(tmp[0 .. 4], "value=", 10) is null);
+
+    MutableString!0 text = MutableString!0("value");
+    r = concat(tmp, text, '=', 10);
+    assert(r == "value=10");
+
+    r = format(tmp, "hello");
     assert(r == "hello");
 
     r = format(tmp, "hello {0}", null);

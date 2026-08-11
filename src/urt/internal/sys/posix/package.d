@@ -307,6 +307,7 @@ else
 // and storing the full path just to stat it.
 int dirfd(DIR* dirp);
 int mkdir(scope const char* pathname, mode_t mode);
+int rmdir(scope const char* pathname);
 pure int posix_memalign(void** memptr, size_t alignment, size_t size);
 
 // ── time ──

@@ -49,6 +49,9 @@ static nothrow @nogc:
     bool remove(const(char)[] path)
         => urt_littlefs_unlink(path.ptr, path.length) == 0;
 
+    bool mkdir(const(char)[] path)
+        => urt_littlefs_mkdir(path.ptr, path.length) == 0;
+
     bool rename(const(char)[] from, const(char)[] to)
         => urt_littlefs_rename(from.ptr, from.length, to.ptr, to.length) == 0;
 
@@ -103,6 +106,7 @@ private extern(C)
     int urt_littlefs_exists(const(char)* path, size_t path_len);
     int urt_littlefs_stat(const(char)* path, size_t path_len, ulong* size);
     int urt_littlefs_unlink(const(char)* path, size_t path_len);
+    int urt_littlefs_mkdir(const(char)* path, size_t path_len);
     int urt_littlefs_rename(const(char)* from, size_t from_len, const(char)* to, size_t to_len);
     int urt_littlefs_open(const(char)* path, size_t path_len, bool write, bool truncate);
     ptrdiff_t urt_littlefs_read(int fd, void* buffer, size_t length);

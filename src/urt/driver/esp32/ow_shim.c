@@ -2119,6 +2119,7 @@ void ow_lwip_freeaddrinfo(struct addrinfo *ai)
 
 #ifdef OW_USE_SPIFFS
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>

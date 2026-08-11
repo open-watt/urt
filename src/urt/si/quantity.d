@@ -321,10 +321,13 @@ nothrow @nogc:
         {
             Quantity!T r;
             r.unit = ScaledUnit(unit.unit);
+            r.value = cast(T)convert_quantity_scale(value, unit, r.unit);
         }
         else
+        {
             Quantity!(T, ScaledUnit(unit.unit)) r;
-        r.value = r.adjust_scale(this);
+            r.value = r.adjust_scale(this);
+        }
         return r;
     }
 
@@ -336,83 +339,39 @@ nothrow @nogc:
         if (su == unit)
             r.value = cast(Ty)this.value;
         else
-            r.value = r.adjust_scale(this);
+            r.value = cast(Ty)convert_quantity_scale(value, unit, su);
         return r;
     }
 
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const
     {
-        import urt.conv : format_float;
-
-        double v = value;
-        ScaledUnit u = unit;
-
-        if (u.pack)
-        {
-            // round upward to the nearest ^3
-            if (u.siScale)
-            {
-                int x = u.exp;
-                if (u.unit.pack == 0)
-                {
-                    if (x == -3)
-                    {
-                        v *= 0.1;
-                        u = ScaledUnit(Unit(), x + 1);
-                    }
-                    else if (x != -2)
-                    {
-                        v *= u.scale();
-                        u = ScaledUnit();
-                    }
-                }
-                else
-                {
-                    x = (x + 33) % 3;
-                    if (x != 0)
-                    {
-                        u = ScaledUnit(u.unit, u.exp + (3 - x));
-                        if (x == 1)
-                            v *= 0.01;
-                        else
-                            v *= 0.1;
-                    }
-                }
-            }
-        }
-
-        ptrdiff_t l = format_float(v, buffer);
-        if (l < 0)
-            return l;
-
-        if (u.pack)
-        {
-            ptrdiff_t l2 = u.toString(buffer.ptr ? buffer.ptr[l .. buffer.length] : null, null, null);
-            if (l2 < 0)
-                return l2;
-            l += l2;
-        }
-
-        return l;
+        static if (is_some_float!T)
+            return format_quantity_floating(value, unit, buffer);
+        else
+            return format_quantity_integer(cast(ulong)value, is_signed_int!T, unit, buffer);
     }
 
     ptrdiff_t fromString(const(char)[] s)
     {
-        size_t taken;
-        VarQuantity q = parse_quantity(s, &taken);
-        if (taken == 0)
-            return -1;
+        ScaledUnit* dynamic_unit;
         static if (Dynamic)
+            dynamic_unit = &unit;
+
+        ptrdiff_t taken;
+        static if (is_some_float!T)
         {
-            unit = q.unit;
-            value = cast(T)q.value;
+            double parsed;
+            taken = parse_quantity_floating(s, unit, dynamic_unit, parsed);
+            if (taken >= 0)
+                value = cast(T)parsed;
         }
         else
         {
-            if (!q.isCompatible(this))
-                return -1;
-            value = adjust_scale(q);
+            ulong parsed;
+            taken = parse_quantity_integer(s, unit, dynamic_unit, is_signed_int!T, parsed);
+            if (taken >= 0)
+                value = cast(T)parsed;
         }
         return taken;
     }
@@ -427,38 +386,18 @@ private:
             if (unit == b.unit)
                 return cast(T)b.value;
 
-            static if (Dynamic)
-            {
-                auto lScale = unit.scale!true();
-                auto lTrans = unit.offset!true();
-            }
+            static if (Dynamic || b.Dynamic)
+                return cast(T)convert_quantity_scale(b.value, b.unit, unit);
             else
             {
                 enum lScale = unit.scale!true();
                 enum lTrans = unit.offset!true();
-            }
-            static if (b.Dynamic)
-            {
-                auto rScale = b.unit.scale();
-                auto rTrans = b.unit.offset();
-            }
-            else
-            {
                 enum rScale = b.unit.scale();
                 enum rTrans = b.unit.offset();
-            }
-
-            static if (Dynamic || b.Dynamic)
-            {
-                auto scale = lScale*rScale;
-                auto trans = lTrans + lScale*rTrans;
-            }
-            else
-            {
                 enum scale = lScale*rScale;
                 enum trans = lTrans + lScale*rTrans;
+                return cast(T)(b.value*scale + trans);
             }
-            return cast(T)(b.value*scale + trans);
         }
     }
 }
@@ -557,6 +496,23 @@ unittest
         assert(nan_v.value != nan_v.value);
     }
     static assert(!__traits(compiles, Quantity!(int, ScaledUnit(Metre)).nan));
+
+    char[32] text;
+    auto exact_signed = Quantity!(long, ScaledUnit())(9_007_199_254_740_993);
+    ptrdiff_t length = exact_signed.toString(text, null, null);
+    assert(text[0 .. length] == "9007199254740993");
+    exact_signed = Quantity!(long, ScaledUnit())(long.min);
+    length = exact_signed.toString(text, null, null);
+    assert(text[0 .. length] == "-9223372036854775808");
+    auto exact_unsigned = Quantity!(ulong, ScaledUnit())(ulong.max);
+    length = exact_unsigned.toString(text, null, null);
+    assert(text[0 .. length] == "18446744073709551615");
+
+    alias DeciAmps = Quantity!(ushort, ScaledUnit(Ampere, -1));
+    DeciAmps current = DeciAmps(165);
+    length = current.toString(text, null, null);
+    assert(text[0 .. length] == "16.5A");
+    assert(current.fromString("12.3A") == 5 && current.value == 123);
 }
 
 
@@ -650,4 +606,109 @@ unittest
     assert(sec.fromString("5V") == -1);
     VarQuantity dyn;
     assert(dyn.fromString("12/hr") == 5 && dyn.value == 12 && dyn.unit == Hour^^-1);
+}
+
+
+private:
+
+ptrdiff_t format_quantity_floating(double value, ScaledUnit unit, char[] buffer)
+{
+    import urt.conv : format_float;
+
+    value *= normalise_quantity_unit(unit);
+    ptrdiff_t length = format_float(value, buffer);
+    return append_quantity_unit(buffer, length, unit);
+}
+
+ptrdiff_t format_quantity_integer(ulong value, bool signed_value, ScaledUnit unit, char[] buffer)
+{
+    import urt.conv : format_float, format_int, format_uint;
+
+    double scale = normalise_quantity_unit(unit);
+    ptrdiff_t length;
+    if (scale != 1)
+    {
+        double scaled = signed_value ? cast(long)value * scale : value * scale;
+        length = format_float(scaled, buffer);
+    }
+    else
+        length = signed_value ? format_int(cast(long)value, buffer) : format_uint(value, buffer);
+    return append_quantity_unit(buffer, length, unit);
+}
+
+double normalise_quantity_unit(ref ScaledUnit unit)
+{
+    if (!unit.pack || !unit.siScale)
+        return 1;
+
+    int exponent = unit.exp;
+    if (unit.unit.pack == 0)
+    {
+        if (exponent == -3)
+        {
+            unit = ScaledUnit(Unit(), exponent + 1);
+            return 0.1;
+        }
+        if (exponent != -2)
+        {
+            double scale = unit.scale();
+            unit = ScaledUnit();
+            return scale;
+        }
+        return 1;
+    }
+
+    exponent = (exponent + 33) % 3;
+    if (exponent == 0)
+        return 1;
+    unit = ScaledUnit(unit.unit, unit.exp + (3 - exponent));
+    return exponent == 1 ? 0.01 : 0.1;
+}
+
+ptrdiff_t append_quantity_unit(char[] buffer, ptrdiff_t length, ScaledUnit unit)
+{
+    if (length < 0 || !unit.pack)
+        return length;
+    ptrdiff_t unit_length = unit.toString(buffer.ptr ? buffer.ptr[length .. buffer.length] : null, null, null);
+    return unit_length < 0 ? unit_length : length + unit_length;
+}
+
+ptrdiff_t parse_quantity_floating(const(char)[] text, ScaledUnit target_unit, ScaledUnit* dynamic_unit, out double value)
+{
+    size_t taken;
+    VarQuantity parsed = parse_quantity(text, &taken);
+    if (taken == 0)
+        return -1;
+    if (dynamic_unit)
+    {
+        *dynamic_unit = parsed.unit;
+        value = parsed.value;
+    }
+    else
+    {
+        if (parsed.unit.unit != target_unit.unit)
+            return -1;
+        value = convert_quantity_scale(parsed.value, parsed.unit, target_unit);
+    }
+    return taken;
+}
+
+ptrdiff_t parse_quantity_integer(const(char)[] text, ScaledUnit target_unit, ScaledUnit* dynamic_unit,
+    bool signed_value, out ulong value)
+{
+    double parsed;
+    ptrdiff_t taken = parse_quantity_floating(text, target_unit, dynamic_unit, parsed);
+    if (taken >= 0)
+        value = signed_value ? cast(ulong)cast(long)parsed : cast(ulong)parsed;
+    return taken;
+}
+
+double convert_quantity_scale(double value, ScaledUnit from, ScaledUnit to) pure
+{
+    if (from == to)
+        return value;
+    double to_scale = to.scale!true();
+    double scale = to_scale * from.scale();
+    double translation = to.offset!true() + to_scale * from.offset();
+    return value*scale + translation;
 }

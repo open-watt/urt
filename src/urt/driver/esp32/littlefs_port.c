@@ -231,6 +231,15 @@ int urt_littlefs_unlink(const char *path, size_t path_len)
     return lfs_remove(&ow_lfs, buffer) == 0 ? 0 : -1;
 }
 
+int urt_littlefs_mkdir(const char *path, size_t path_len)
+{
+    char buffer[OW_LFS_NAME_MAX + 1];
+    if (!ow_lfs_ready() || !ow_lfs_path(path, path_len, buffer, sizeof(buffer)))
+        return -1;
+    int err = lfs_mkdir(&ow_lfs, buffer);
+    return (err == 0 || err == LFS_ERR_EXIST) ? 0 : -1;
+}
+
 // littlefs renames atomically over an existing target, which SPIFFS cannot do.
 int urt_littlefs_rename(const char *from, size_t from_len, const char *to, size_t to_len)
 {

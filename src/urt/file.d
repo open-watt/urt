@@ -536,6 +536,16 @@ Result create_directory(const(char)[] path)
             return Result.success;
         r = errno_result();
     }
+    else version (HasFileBackend)
+    {
+        // create in the backend new files land in (the first); a flat
+        // namespace has no directories, the name simply works as a prefix
+        alias B = FileBackends[0];
+        static if (is(typeof(B.mkdir)))
+            return B.mkdir(path) ? Result.success : InternalResult.failed;
+        else
+            return Result.success;
+    }
     else
     {
         return InternalResult.unsupported; // no filesystem on this platform

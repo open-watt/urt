@@ -119,8 +119,13 @@ private bool start_scan()
     if (_scan_config.filter_duplicates)
         params.flags |= 0x04; // filter_duplicates
 
-    if (ble_gap_disc(0, 0, &params, &gap_event_trampoline, null) != 0)
+    int rc = ble_gap_disc(0, BLE_HS_FOREVER, &params, &gap_event_trampoline, null);
+    if (rc != 0)
+    {
+        // Silence here is indistinguishable from a healthy scan, and the radio simply goes deaf.
+        log_error("ble", "could not start scan, NimBLE status=", rc);
         return false;
+    }
     atomicStore!(MemoryOrder.release)(_scan_active, cast(ubyte)1);
     return true;
 }
@@ -454,6 +459,8 @@ enum default_service_budget = 32;
 struct SessionCharInfo
 {
     ushort handle;
+    ushort def_handle;
+    ushort svc_end;
     ushort cccd_handle;
     GUID service_uuid;
     GUID char_uuid;
@@ -827,6 +834,7 @@ __gshared bool _discovery_overflow;
 __gshared ble_gatt_svc[16] _discovered_svcs;
 __gshared ubyte _num_discovered_svcs;
 __gshared ubyte _current_svc_idx;
+__gshared ubyte _current_chr_idx;
 __gshared GUID _current_svc_uuid;
 
 void finish_discovery(bool success)
@@ -908,6 +916,15 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                 push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.timeout, cast(ubyte)event.connect.status);
                 request_scan_resume();
             }
+            signal_wake();
+            return 0;
+
+        case BLE_GAP_EVENT_DISC_COMPLETE:
+            // The controller stopped discovery on its own. Without clearing the flag the driver
+            // believes it is still scanning, resume_scan_if_needed() short-circuits forever, and
+            // the radio never hears another advertisement.
+            atomicStore!(MemoryOrder.release)(_scan_active, cast(ubyte)0);
+            request_scan_resume();
             signal_wake();
             return 0;
 
@@ -1006,8 +1023,8 @@ int discover_next_svc_chars(ushort conn_handle) nothrow @nogc
         return 0;
     }
 
-    _current_svc_idx = 0;
-    return discover_next_svc_descriptors(conn_handle);
+    _current_chr_idx = 0;
+    return discover_next_chr_descriptors(conn_handle);
 }
 
 // --- GATT characteristic discovery callback (NimBLE task) ---
@@ -1021,6 +1038,8 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, 
         {
             auto ci = &s.chars[s.num_chars++];
             ci.handle = chr.val_handle;
+            ci.def_handle = chr.def_handle;
+            ci.svc_end = _discovered_svcs[_current_svc_idx].end_handle;
             ci.service_uuid = _current_svc_uuid;
             ci.char_uuid = nimble_uuid_to_guid(&chr.uuid);
             ci.properties = chr.properties;
@@ -1041,14 +1060,32 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, 
     return discover_next_svc_chars(conn_handle);
 }
 
-int discover_next_svc_descriptors(ushort conn_handle) nothrow @nogc
+// NimBLE reports every descriptor against the start_handle passed to ble_gattc_disc_all_dscs,
+// so discovery must be issued per characteristic value handle; a service-wide range attributes
+// all CCCDs to the service start handle and none ever match.
+int discover_next_chr_descriptors(ushort conn_handle) nothrow @nogc
 {
-    while (_current_svc_idx < _num_discovered_svcs)
+    auto s = find_session_by_nimble(conn_handle);
+    if (s is null)
     {
-        auto svc = &_discovered_svcs[_current_svc_idx];
+        finish_discovery(false);
+        return 0;
+    }
+
+    while (_current_chr_idx < s.num_chars)
+    {
+        auto c = &s.chars[_current_chr_idx];
+        ushort end = c.svc_end;
+        if (_current_chr_idx + 1 < s.num_chars && s.chars[_current_chr_idx + 1].svc_end == c.svc_end)
+            end = cast(ushort)(s.chars[_current_chr_idx + 1].def_handle - 1);
+        if (end <= c.handle)
+        {
+            ++_current_chr_idx;
+            continue;
+        }
         atomicStore!(MemoryOrder.release)(_discover_phase, DiscoverPhase.descriptors);
 
-        if (ble_gattc_disc_all_dscs(conn_handle, svc.start_handle, svc.end_handle, &dsc_discover_cb, null) == 0)
+        if (ble_gattc_disc_all_dscs(conn_handle, c.handle, end, &dsc_discover_cb, null) == 0)
             return 0;
 
         finish_discovery(false);
@@ -1084,8 +1121,8 @@ extern(C) int dsc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error,
         return 0;
     }
 
-    ++_current_svc_idx;
-    return discover_next_svc_descriptors(conn_handle);
+    ++_current_chr_idx;
+    return discover_next_chr_descriptors(conn_handle);
 }
 
 // --- GATT read callback (NimBLE task) ---
@@ -1354,8 +1391,13 @@ enum : ubyte
     BLE_GAP_EVENT_CONNECT       = 0,
     BLE_GAP_EVENT_DISCONNECT    = 1,
     BLE_GAP_EVENT_DISC          = 7,
+    BLE_GAP_EVENT_DISC_COMPLETE = 8,
     BLE_GAP_EVENT_NOTIFY_RX     = 12,
 }
+
+// ble_gap_disc() treats a 0 duration as BLE_GAP_DISC_DUR_DFLT (10.24s), not as "no expiry";
+// BLE_HS_FOREVER is what keeps the scan up indefinitely.
+enum int BLE_HS_FOREVER = int.max;
 
 // C shim functions
 extern(C) nothrow @nogc

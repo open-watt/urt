@@ -267,16 +267,49 @@ Result copy_file(const(char)[] oldPath, const(char)[] newPath, bool overwriteExi
     {
         if (!CopyFileW(oldPath.twstringz, newPath.twstringz, !overwriteExisting))
             return getlasterror_result();
-    }
-    else version (Posix)
-    {
-        // TODO
-        assert(false);
+        return Result.success;
     }
     else
-        return InternalResult.unsupported; // no filesystem on this platform
+    {
+        // byte-copy through this module's own File API, which covers every
+        // backend alike; only Windows has a native copy worth preferring
+        if (!overwriteExisting && file_exists(newPath))
+            return InternalResult.already_exists;
 
-    return Result.success;
+        File src, dst;
+        Result r = src.open(oldPath, FileOpenMode.ReadExisting, FileOpenFlags.Sequential);
+        if (!r)
+            return r;
+        r = dst.open(newPath, FileOpenMode.WriteTruncate);
+        if (!r)
+        {
+            src.close();
+            return r;
+        }
+
+        ubyte[4096] buffer = void;
+        for (;;)
+        {
+            size_t got;
+            r = src.read(buffer[], got);
+            if (!r || got == 0)
+                break;
+            size_t written;
+            r = dst.write(buffer[0 .. got], written);
+            if (!r)
+                break;
+            if (written != got)
+            {
+                r = InternalResult.failed;
+                break;
+            }
+        }
+        src.close();
+        dst.close();
+        if (!r)
+            delete_file(newPath); // don't leave a half-written target behind
+        return r;
+    }
 }
 
 Result get_path(ref const File file, ref char[] buffer)
@@ -360,8 +393,23 @@ Result get_file_attributes(const(char)[] path, out FileAttributes outAttributes)
     }
     else version (Posix)
     {
-        // TODO
-        assert(false);
+        stat_t st;
+        if (stat(path.tstringz, &st) != 0)
+            return errno_result();
+
+        outAttributes.attributes = FileAttributeFlag.None;
+        if (S_ISDIR(st.st_mode))
+        {
+            outAttributes.attributes |= FileAttributeFlag.Directory;
+            outAttributes.size = 0;
+        }
+        else
+            outAttributes.size = st.st_size;
+
+        // st_ctim is inode-change time; POSIX has no creation time, this is the nearest thing
+        outAttributes.createTime = from_unix_time_ns(st.st_ctim.tv_sec * 1_000_000_000UL + st.st_ctim.tv_nsec);
+        outAttributes.accessTime = from_unix_time_ns(st.st_atim.tv_sec * 1_000_000_000UL + st.st_atim.tv_nsec);
+        outAttributes.writeTime = from_unix_time_ns(st.st_mtim.tv_sec * 1_000_000_000UL + st.st_mtim.tv_nsec);
     }
     else version (HasFileBackend)
     {

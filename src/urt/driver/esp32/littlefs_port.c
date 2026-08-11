@@ -26,6 +26,8 @@
 #define OW_LFS_MAX_FILES       8
 #define OW_LFS_NAME_MAX      127
 
+#define OW_LFS_MAX_DIRS        2
+
 // Distinct from any LFS_ERR_*, so an exhausted handle table cannot be misread
 // as a filesystem fault.
 #define OW_LFS_ERR_NO_HANDLES (-1000)
@@ -47,6 +49,12 @@ static struct
     struct lfs_file_config config;
     bool used;
 } ow_lfs_files[OW_LFS_MAX_FILES];
+
+static struct
+{
+    lfs_dir_t dir;
+    bool used;
+} ow_lfs_dirs[OW_LFS_MAX_DIRS];
 
 static struct lfs_config ow_lfs_config;
 
@@ -327,6 +335,72 @@ int urt_littlefs_sync(int h)
     if (!ow_lfs_valid(h))
         return -1;
     return lfs_file_sync(&ow_lfs, &ow_lfs_files[h].file) == 0 ? 0 : -1;
+}
+
+
+int urt_littlefs_dir_open(const char *path, size_t path_len)
+{
+    char buffer[OW_LFS_NAME_MAX + 1];
+    if (!ow_lfs_ready() || !ow_lfs_path(path, path_len, buffer, sizeof(buffer)))
+        return -1;
+
+    int h = -1;
+    for (int i = 0; i < OW_LFS_MAX_DIRS; ++i)
+    {
+        if (!ow_lfs_dirs[i].used)
+        {
+            h = i;
+            break;
+        }
+    }
+    if (h < 0)
+    {
+        ow_lfs_last_error = OW_LFS_ERR_NO_HANDLES;
+        return -1;
+    }
+
+    // An empty path is the root, which littlefs spells "/".
+    int err = lfs_dir_open(&ow_lfs, &ow_lfs_dirs[h].dir, buffer[0] ? buffer : "/");
+    if (err != 0)
+    {
+        ow_lfs_last_error = err;
+        return -1;
+    }
+    ow_lfs_dirs[h].used = true;
+    return h;
+}
+
+// Returns the name length, 0 at the end of the directory, negative on error.
+ptrdiff_t urt_littlefs_dir_read(int h, char *name, size_t name_len, uint64_t *size, int *is_dir)
+{
+    if (h < 0 || h >= OW_LFS_MAX_DIRS || !ow_lfs_dirs[h].used)
+        return -1;
+
+    struct lfs_info info;
+    int r = lfs_dir_read(&ow_lfs, &ow_lfs_dirs[h].dir, &info);
+    if (r < 0)
+    {
+        ow_lfs_last_error = r;
+        return -1;
+    }
+    if (r == 0)
+        return 0;
+
+    size_t len = strlen(info.name);
+    if (len > name_len)
+        len = name_len;
+    memcpy(name, info.name, len);
+    *size = info.size;
+    *is_dir = (info.type == LFS_TYPE_DIR);
+    return (ptrdiff_t)len;
+}
+
+void urt_littlefs_dir_close(int h)
+{
+    if (h < 0 || h >= OW_LFS_MAX_DIRS || !ow_lfs_dirs[h].used)
+        return;
+    lfs_dir_close(&ow_lfs, &ow_lfs_dirs[h].dir);
+    ow_lfs_dirs[h].used = false;
 }
 
 

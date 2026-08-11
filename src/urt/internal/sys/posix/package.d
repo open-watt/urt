@@ -120,6 +120,64 @@ else
     ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset);
 }
 int fsync(int fd);
+
+// -- dirent --
+
+struct DIR;
+
+enum : ubyte
+{
+    DT_UNKNOWN = 0,
+    DT_DIR     = 4,
+    DT_REG     = 8,
+}
+
+version (Darwin)
+{
+    struct dirent
+    {
+        ulong d_ino;
+        ulong d_seekoff;
+        ushort d_reclen;
+        ushort d_namlen;
+        ubyte d_type;
+        char[1024] d_name;
+    }
+
+    // Darwin renames the symbols rather than versioning the struct, so the
+    // 64-bit-inode layout above only matches under the suffixed names.
+    pragma(mangle, "opendir$INODE64") DIR* opendir(scope const char* name);
+    pragma(mangle, "readdir$INODE64") dirent* readdir(DIR* dirp);
+}
+else
+{
+    struct dirent
+    {
+        ino_t d_ino;
+        off_t d_off;
+        ushort d_reclen;
+        ubyte d_type;
+        char[256] d_name;
+    }
+    static assert(dirent.d_name.offsetof == 19);
+
+    version (X86)
+    {
+        // Same largefile treatment as lseek/pread above: the unsuffixed
+        // readdir returns 32-bit d_ino/d_off and would misread the struct.
+        DIR* opendir(scope const char* name);
+        dirent* readdir64(DIR* dirp);
+        alias readdir = readdir64;
+    }
+    else
+    {
+        DIR* opendir(scope const char* name);
+        dirent* readdir(DIR* dirp);
+    }
+}
+
+int closedir(DIR* dirp);
+
 int usleep(uint usec);
 long sysconf(int name);
 int gethostname(char* name, size_t len);
@@ -224,12 +282,17 @@ version (OldStatLayout)
 bool S_ISREG(mode_t mode)
     => (mode & 0xF000) == 0x8000;
 
+bool S_ISDIR(mode_t mode)
+    => (mode & 0xF000) == 0x4000;
+
 version (X86)
 {
     int stat64(scope const char* pathname, stat_t* buf);
     alias stat = stat64;
     int fstat64(int fd, stat_t* buf);
     alias fstat = fstat64;
+    int fstatat64(int dirfd, scope const char* pathname, stat_t* buf, int flags);
+    alias fstatat = fstatat64;
     int mkstemp64(char* tmpl);
     alias mkstemp = mkstemp64;
 }
@@ -237,8 +300,12 @@ else
 {
     int stat(scope const char* pathname, stat_t* buf);
     int fstat(int fd, stat_t* buf);
+    int fstatat(int dirfd, scope const char* pathname, stat_t* buf, int flags);
     int mkstemp(char* tmpl);
 }
+// Sizing a directory entry relative to its open directory avoids rebuilding
+// and storing the full path just to stat it.
+int dirfd(DIR* dirp);
 int mkdir(scope const char* pathname, mode_t mode);
 pure int posix_memalign(void** memptr, size_t alignment, size_t size);
 

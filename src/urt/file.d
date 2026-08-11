@@ -148,6 +148,42 @@ struct File
         static assert(0, "File: not implemented for this platform");
 }
 
+// One entry from a Directory walk. `name` points at storage owned by the
+// Directory, so it lives only until the next read or the close.
+struct DirEntry
+{
+    const(char)[] name;
+    ulong size;
+    FileAttributeFlag attributes;
+
+    bool is_directory() const pure nothrow @nogc
+        => (attributes & FileAttributeFlag.Directory) != 0;
+}
+
+struct Directory
+{
+    version (Windows)
+    {
+        void* handle = INVALID_HANDLE_VALUE;
+        WIN32_FIND_DATAW find_data = void;
+        bool pending;   // find_data holds the entry FindFirstFileW already produced
+        char[MAX_PATH * 3] name_buffer = void;
+    }
+    else version (Posix)
+        DIR* dir;
+    else version (FreeStanding)
+    {
+        int fd = -1;
+        version (HasFileBackend)
+        {
+            ubyte backend = ubyte.max;
+            char[256] name_buffer = void;
+        }
+    }
+    else
+        static assert(0, "Directory: not implemented for this platform");
+}
+
 bool file_exists(const(char)[] path)
 {
     version (Windows)
@@ -460,6 +496,201 @@ Result create_directory(const(char)[] path)
     if (r == InternalResult.already_exists)
         return Result.success;
     return r;
+}
+
+Result open(ref Directory dir, const(char)[] path)
+{
+    version (Windows)
+    {
+        import urt.mem.temp : tconcat;
+
+        // FindFirstFileW enumerates a wildcard, not a directory, and it
+        // produces the first entry up front rather than on the first read.
+        const(char)[] pattern = tconcat(path, path.length && path[$-1] != '\\' && path[$-1] != '/' ? "\\*" : "*");
+        dir.handle = FindFirstFileW(pattern.twstringz, &dir.find_data);
+        if (dir.handle == INVALID_HANDLE_VALUE)
+            return getlasterror_result();
+        dir.pending = true;
+    }
+    else version (Posix)
+    {
+        dir.dir = opendir(path.tstringz);
+        if (dir.dir is null)
+            return errno_result();
+    }
+    else version (HasFileBackend)
+    {
+        static foreach (i, B; FileBackends)
+        {
+            if (dir.fd < 0)
+            {
+                int fd = B.dir_open(path);
+                if (fd >= 0)
+                {
+                    dir.fd = fd;
+                    dir.backend = i;
+                }
+            }
+        }
+        if (dir.fd < 0)
+        {
+            static foreach (B; FileBackends)
+            {
+                if (B.available())
+                    return InternalResult.failed;
+            }
+            return InternalResult.unsupported;
+        }
+    }
+    else
+        return InternalResult.unsupported; // no filesystem on this platform
+
+    return Result.success;
+}
+
+// Returns false at the end of the directory, so a failure to open and an
+// exhausted walk read the same way at the call site.
+bool read(ref Directory dir, out DirEntry entry)
+{
+    version (Windows)
+    {
+        if (dir.handle == INVALID_HANDLE_VALUE)
+            return false;
+        for (;;)
+        {
+            if (!dir.pending && !FindNextFileW(cast(HANDLE)dir.handle, &dir.find_data))
+                return false;
+            dir.pending = false;
+
+            size_t wlen = 0;
+            while (wlen < dir.find_data.cFileName.length && dir.find_data.cFileName[wlen] != 0)
+                ++wlen;
+            char[] name = dir.name_buffer[];
+            size_t len = dir.find_data.cFileName[0 .. wlen].uni_convert(name);
+            if (len == 0)
+                continue;
+            name = dir.name_buffer[0 .. len];
+            if (name == "." || name == "..")
+                continue;
+
+            entry.name = name;
+            entry.size = (cast(ulong)dir.find_data.nFileSizeHigh << 32) | dir.find_data.nFileSizeLow;
+            if (dir.find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                entry.attributes |= FileAttributeFlag.Directory;
+            if (dir.find_data.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN)
+                entry.attributes |= FileAttributeFlag.Hidden;
+            if (dir.find_data.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+                entry.attributes |= FileAttributeFlag.ReadOnly;
+            return true;
+        }
+    }
+    else version (Posix)
+    {
+        import urt.mem : strlen;
+
+        if (dir.dir is null)
+            return false;
+        for (;;)
+        {
+            dirent* e = readdir(dir.dir);
+            if (e is null)
+                return false;
+
+            const(char)[] name = e.d_name.ptr[0 .. strlen(e.d_name.ptr)];
+            if (name == "." || name == "..")
+                continue;
+
+            // d_type is not filled in by every filesystem, so the stat below
+            // settles both the size and the kind.
+            stat_t st;
+            if (fstatat(dirfd(dir.dir), e.d_name.ptr, &st, 0) == 0)
+            {
+                entry.size = st.st_size;
+                if (S_ISDIR(st.st_mode))
+                    entry.attributes |= FileAttributeFlag.Directory;
+            }
+            else if (e.d_type == DT_DIR)
+                entry.attributes |= FileAttributeFlag.Directory;
+
+            if (name.length && name[0] == '.')
+                entry.attributes |= FileAttributeFlag.Hidden;
+            entry.name = name;
+            return true;
+        }
+    }
+    else version (HasFileBackend)
+    {
+        if (dir.fd < 0)
+            return false;
+        static foreach (i, B; FileBackends)
+        {
+            if (dir.backend == i)
+            {
+                for (;;)
+                {
+                    bool is_dir;
+                    ulong size;
+                    ptrdiff_t len = B.dir_read(dir.fd, dir.name_buffer[], size, is_dir);
+                    if (len <= 0)
+                        return false;
+                    const(char)[] name = dir.name_buffer[0 .. len];
+                    if (name == "." || name == "..")
+                        continue;
+                    entry.name = name;
+                    entry.size = size;
+                    if (is_dir)
+                        entry.attributes |= FileAttributeFlag.Directory;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    else
+        return false;
+}
+
+void close(ref Directory dir)
+{
+    version (Windows)
+    {
+        if (dir.handle == INVALID_HANDLE_VALUE)
+            return;
+        FindClose(cast(HANDLE)dir.handle);
+        dir.handle = INVALID_HANDLE_VALUE;
+        dir.pending = false;
+    }
+    else version (Posix)
+    {
+        if (dir.dir is null)
+            return;
+        closedir(dir.dir);
+        dir.dir = null;
+    }
+    else version (HasFileBackend)
+    {
+        if (dir.fd < 0)
+            return;
+        static foreach (i, B; FileBackends)
+        {
+            if (dir.backend == i)
+                B.dir_close(dir.fd);
+        }
+        dir.fd = -1;
+        dir.backend = ubyte.max;
+    }
+}
+
+bool is_open(ref const Directory dir)
+{
+    version (Windows)
+        return dir.handle != INVALID_HANDLE_VALUE;
+    else version (Posix)
+        return dir.dir !is null;
+    else version (HasFileBackend)
+        return dir.fd >= 0;
+    else
+        return false;
 }
 
 Result open(ref File file, const(char)[] path, FileOpenMode mode, FileOpenFlags openFlags = FileOpenFlags.None)
@@ -1155,4 +1386,73 @@ else unittest
     // clean up and verify
     assert(filename.delete_file());
     assert(!file_exists(filename));
+}
+
+version (FreeStanding) {}
+else unittest
+{
+    import urt.mem.temp : tconcat;
+    import urt.string;
+
+    // A temp *file* name is the only unique name on offer, so borrow one and
+    // hang a directory off it. "." rather than "" because with no directory
+    // Windows creates the file at the drive root and hands back a relative
+    // path, which then names nothing.
+    char[320] buffer = void;
+    char[] temp_name = buffer[];
+    assert(get_temp_filename(temp_name, ".", "dirtest"));
+    const(char)[] dir_path = tconcat(temp_name, ".dir");
+    assert(create_directory(dir_path));
+
+    assert(save_file(tconcat(dir_path, "/one.txt"), cast(const(void)[])"12345"));
+    assert(save_file(tconcat(dir_path, "/two.txt"), cast(const(void)[])"12345678"));
+    assert(create_directory(tconcat(dir_path, "/sub")));
+
+    Directory dir;
+    assert(dir.open(dir_path));
+    assert(dir.is_open);
+
+    size_t files, dirs;
+    bool saw_one, saw_two, saw_sub;
+    DirEntry entry;
+    while (dir.read(entry))
+    {
+        // "." and ".." are the walker's business, never the caller's
+        assert(entry.name != "." && entry.name != "..");
+        if (entry.is_directory)
+        {
+            ++dirs;
+            saw_sub |= entry.name == "sub";
+        }
+        else
+        {
+            ++files;
+            if (entry.name == "one.txt")
+            {
+                saw_one = true;
+                assert(entry.size == 5);
+            }
+            else if (entry.name == "two.txt")
+            {
+                saw_two = true;
+                assert(entry.size == 8);
+            }
+        }
+    }
+    assert(files == 2 && dirs == 1);
+    assert(saw_one && saw_two && saw_sub);
+
+    dir.close();
+    assert(!dir.is_open);
+
+    // Reading a closed walk ends rather than faulting, and so does a walk that
+    // never opened.
+    assert(!dir.read(entry));
+    Directory missing;
+    assert(!missing.open(tconcat(dir_path, "/nope")));
+    assert(!missing.read(entry));
+
+    assert(tconcat(dir_path, "/one.txt").delete_file());
+    assert(tconcat(dir_path, "/two.txt").delete_file());
+    assert(temp_name.delete_file());
 }

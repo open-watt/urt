@@ -75,6 +75,20 @@ static nothrow @nogc:
 
     bool sync(int fd)
         => urt_littlefs_sync(fd) == 0;
+
+    int dir_open(const(char)[] path)
+        => urt_littlefs_dir_open(path.ptr, path.length);
+
+    ptrdiff_t dir_read(int fd, char[] name, out ulong size, out bool is_dir)
+    {
+        int dir;
+        ptrdiff_t r = urt_littlefs_dir_read(fd, name.ptr, name.length, &size, &dir);
+        is_dir = dir != 0;
+        return r;
+    }
+
+    void dir_close(int fd)
+        => urt_littlefs_dir_close(fd);
 }
 
 
@@ -98,4 +112,7 @@ private extern(C)
     long urt_littlefs_seek(int fd, long offset, int whence);
     int urt_littlefs_truncate(int fd, ulong length);
     int urt_littlefs_sync(int fd);
+    int urt_littlefs_dir_open(const(char)* path, size_t path_len);
+    ptrdiff_t urt_littlefs_dir_read(int fd, char* name, size_t name_len, ulong* size, int* is_dir);
+    void urt_littlefs_dir_close(int fd);
 }

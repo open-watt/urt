@@ -2212,6 +2212,83 @@ int urt_spiffs_last_error(void)
     return ow_spiffs_last_errno;
 }
 
+// SPIFFS has no directories; its VFS reports the flat namespace as a single
+// listing at the mount root, so only the root enumerates anything.
+#define OW_SPIFFS_MAX_DIRS 2
+
+static DIR *ow_spiffs_dirs[OW_SPIFFS_MAX_DIRS];
+
+int urt_spiffs_dir_open(const char *path, size_t path_len)
+{
+    char buffer[128];
+    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+        return -1;
+
+    int h = -1;
+    for (int i = 0; i < OW_SPIFFS_MAX_DIRS; ++i)
+    {
+        if (!ow_spiffs_dirs[i])
+        {
+            h = i;
+            break;
+        }
+    }
+    if (h < 0)
+        return -1;
+
+    DIR *d = opendir(buffer);
+    if (!d)
+    {
+        ow_spiffs_last_errno = errno;
+        return -1;
+    }
+    ow_spiffs_dirs[h] = d;
+    return h;
+}
+
+ptrdiff_t urt_spiffs_dir_read(int h, char *name, size_t name_len, uint64_t *size, int *is_dir)
+{
+    if (h < 0 || h >= OW_SPIFFS_MAX_DIRS || !ow_spiffs_dirs[h])
+        return -1;
+
+    errno = 0;
+    struct dirent *e = readdir(ow_spiffs_dirs[h]);
+    if (!e)
+    {
+        if (errno)
+        {
+            ow_spiffs_last_errno = errno;
+            return -1;
+        }
+        return 0;
+    }
+
+    size_t len = strlen(e->d_name);
+    if (len > name_len)
+        len = name_len;
+    memcpy(name, e->d_name, len);
+    *is_dir = (e->d_type == DT_DIR);
+    *size = 0;
+    if (!*is_dir)
+    {
+        // d_name is relative to the directory, and there is no fstatat here.
+        char full[128];
+        int n = snprintf(full, sizeof(full), "%s/%s", OW_SPIFFS_ROOT, e->d_name);
+        struct stat st;
+        if (n > 0 && (size_t)n < sizeof(full) && stat(full, &st) == 0)
+            *size = (uint64_t)st.st_size;
+    }
+    return (ptrdiff_t)len;
+}
+
+void urt_spiffs_dir_close(int h)
+{
+    if (h < 0 || h >= OW_SPIFFS_MAX_DIRS || !ow_spiffs_dirs[h])
+        return;
+    closedir(ow_spiffs_dirs[h]);
+    ow_spiffs_dirs[h] = NULL;
+}
+
 ptrdiff_t urt_spiffs_write(int fd, const void *data, size_t length)
 {
     ptrdiff_t n = write(fd, data, length);

@@ -36,6 +36,20 @@ static nothrow @nogc:
     int last_error()
         => urt_spiffs_last_error();
 
+    int dir_open(const(char)[] path)
+        => urt_spiffs_dir_open(path.ptr, path.length);
+
+    ptrdiff_t dir_read(int fd, char[] name, out ulong size, out bool is_dir)
+    {
+        int dir;
+        ptrdiff_t r = urt_spiffs_dir_read(fd, name.ptr, name.length, &size, &dir);
+        is_dir = dir != 0;
+        return r;
+    }
+
+    void dir_close(int fd)
+        => urt_spiffs_dir_close(fd);
+
     bool info(out ulong total, out ulong used)
         => urt_spiffs_info(&total, &used) == 0;
 
@@ -83,6 +97,9 @@ private extern(C)
     int urt_spiffs_format_status();
     int urt_spiffs_available();
     int urt_spiffs_last_error();
+    int urt_spiffs_dir_open(const(char)* path, size_t path_len);
+    ptrdiff_t urt_spiffs_dir_read(int fd, char* name, size_t name_len, ulong* size, int* is_dir);
+    void urt_spiffs_dir_close(int fd);
     int urt_spiffs_info(ulong* total, ulong* used);
     int urt_spiffs_exists(const(char)* path, size_t path_len);
     int urt_spiffs_stat(const(char)* path, size_t path_len, ulong* size);

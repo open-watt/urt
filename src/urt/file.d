@@ -546,6 +546,34 @@ Result create_directory(const(char)[] path)
     return r;
 }
 
+// Removes an empty directory; a populated one is refused by the filesystem.
+Result remove_directory(const(char)[] path)
+{
+    version (Windows)
+    {
+        if (!RemoveDirectoryW(path.twstringz))
+            return getlasterror_result();
+    }
+    else version (Posix)
+    {
+        if (urt.internal.sys.posix.rmdir(tconcat(path, "\0").ptr) != 0)
+            return errno_result();
+    }
+    else version (HasFileBackend)
+    {
+        static foreach (B; FileBackends)
+        {
+            if (B.exists(path))
+                return B.remove(path) ? Result.success : InternalResult.failed;
+        }
+        return InternalResult.failed;
+    }
+    else
+        return InternalResult.unsupported; // no filesystem on this platform
+
+    return Result.success;
+}
+
 Result open(ref Directory dir, const(char)[] path)
 {
     version (Windows)

@@ -4,6 +4,8 @@
 // ESP-IDF startup before app_main, so we just call D's main().
 
 #include "esp_event.h"
+#include "esp_core_dump.h"
+#include "esp_partition.h"
 #include "nvs_flash.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -17,6 +19,42 @@ extern int main(int argc, char **argv);
 void ow_watchdog_feed(void)
 {
     esp_task_wdt_reset();
+}
+
+bool ow_crash_dump_size(size_t *size)
+{
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    size_t address;
+    return esp_core_dump_image_check() == ESP_OK &&
+           esp_core_dump_image_get(&address, size) == ESP_OK;
+#else
+    (void)size;
+    return false;
+#endif
+}
+
+bool ow_crash_dump_read(size_t offset, void *buffer, size_t length)
+{
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    const esp_partition_t *partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    return partition && offset <= partition->size && length <= partition->size - offset &&
+           esp_partition_read(partition, offset, buffer, length) == ESP_OK;
+#else
+    (void)offset;
+    (void)buffer;
+    (void)length;
+    return false;
+#endif
+}
+
+bool ow_crash_dump_clear(void)
+{
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    return esp_core_dump_image_erase() == ESP_OK;
+#else
+    return false;
+#endif
 }
 
 void app_main(void)

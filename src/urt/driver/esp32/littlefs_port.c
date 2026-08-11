@@ -16,6 +16,8 @@
 
 #include "lfs.h"
 
+extern void ow_watchdog_feed(void);
+
 #define OW_LFS_READ_SIZE      16
 #define OW_LFS_PROG_SIZE      16
 #define OW_LFS_CACHE_SIZE    256
@@ -63,7 +65,10 @@ static int ow_lfs_bd_read(const struct lfs_config *c, lfs_block_t block, lfs_off
                           void *buffer, lfs_size_t size)
 {
     (void)c;
-    return esp_partition_read(ow_lfs_partition, block * ow_lfs_config.block_size + off, buffer, size) == ESP_OK
+    ow_watchdog_feed();
+    esp_err_t result = esp_partition_read(ow_lfs_partition, block * ow_lfs_config.block_size + off, buffer, size);
+    ow_watchdog_feed();
+    return result == ESP_OK
         ? 0 : LFS_ERR_IO;
 }
 
@@ -71,15 +76,21 @@ static int ow_lfs_bd_prog(const struct lfs_config *c, lfs_block_t block, lfs_off
                           const void *buffer, lfs_size_t size)
 {
     (void)c;
-    return esp_partition_write(ow_lfs_partition, block * ow_lfs_config.block_size + off, buffer, size) == ESP_OK
+    ow_watchdog_feed();
+    esp_err_t result = esp_partition_write(ow_lfs_partition, block * ow_lfs_config.block_size + off, buffer, size);
+    ow_watchdog_feed();
+    return result == ESP_OK
         ? 0 : LFS_ERR_IO;
 }
 
 static int ow_lfs_bd_erase(const struct lfs_config *c, lfs_block_t block)
 {
     (void)c;
-    return esp_partition_erase_range(ow_lfs_partition, block * ow_lfs_config.block_size,
-                                     ow_lfs_config.block_size) == ESP_OK ? 0 : LFS_ERR_IO;
+    ow_watchdog_feed();
+    esp_err_t result = esp_partition_erase_range(ow_lfs_partition, block * ow_lfs_config.block_size,
+                                                  ow_lfs_config.block_size);
+    ow_watchdog_feed();
+    return result == ESP_OK ? 0 : LFS_ERR_IO;
 }
 
 static int ow_lfs_bd_sync(const struct lfs_config *c)

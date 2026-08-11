@@ -9,11 +9,20 @@ import urt.time;
 public import urt.result;
 
 // Backend selection is additive: each enabled backend is consulted in turn.
-version (UseSpiffs) version = HasFileBackend;
+version (UseSpiffs)   version = HasFileBackend;
+version (UseLittleFS) version = HasFileBackend;
 
 version (HasFileBackend)
 {
     import urt.meta : AliasSeq;
+
+    version (UseLittleFS)
+    {
+        import urt.fs.littlefs;
+        private alias LittleFsBackends = AliasSeq!(LittleFsBackend);
+    }
+    else
+        private alias LittleFsBackends = AliasSeq!();
 
     version (UseSpiffs)
     {
@@ -23,7 +32,8 @@ version (HasFileBackend)
     else
         private alias SpiffsBackends = AliasSeq!();
 
-    private alias FileBackends = AliasSeq!(SpiffsBackends);
+    // littlefs first: where both are built it is the one to create new files in.
+    private alias FileBackends = AliasSeq!(LittleFsBackends, SpiffsBackends);
 
     private enum : int { seek_set = 0, seek_cur = 1, seek_end = 2 }
 }
@@ -633,6 +643,8 @@ bool is_open(ref const File file)
         return file.handle != INVALID_HANDLE_VALUE;
     else version (Posix)
         return file.fd != -1;
+    else version (HasFileBackend)
+        return file.fd >= 0;
     else
         return false;
 }

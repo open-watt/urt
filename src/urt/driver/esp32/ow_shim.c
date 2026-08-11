@@ -2194,9 +2194,30 @@ ptrdiff_t urt_spiffs_read(int fd, void *buffer, size_t length)
     return read(fd, buffer, length);
 }
 
+static int ow_spiffs_last_errno = 0;
+
+int urt_spiffs_info(uint64_t *total, uint64_t *used)
+{
+    if (!ow_spiffs_ready())
+        return -1;
+    size_t t = 0, u = 0;
+    esp_err_t err = esp_spiffs_info(NULL, &t, &u);
+    *total = t;
+    *used = u;
+    return err == ESP_OK ? 0 : -1;
+}
+
+int urt_spiffs_last_error(void)
+{
+    return ow_spiffs_last_errno;
+}
+
 ptrdiff_t urt_spiffs_write(int fd, const void *data, size_t length)
 {
-    return write(fd, data, length);
+    ptrdiff_t n = write(fd, data, length);
+    if (n < 0)
+        ow_spiffs_last_errno = errno;
+    return n;
 }
 
 void urt_spiffs_close(int fd)

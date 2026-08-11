@@ -537,9 +537,16 @@ endif
 
 # Filesystem backends: urt.file has no backend on targets without a host
 # filesystem. Selection is additive -- each enabled backend is consulted in
-# turn, so a file may be sourced from whichever one holds it.
+# turn, so a file may be sourced from whichever one holds it. Both backends
+# claim the same 'storage' partition though, so enabling both only makes sense
+# while migrating; USE_LITTLEFS=1 therefore turns SPIFFS off unless asked for.
+ifeq ($(USE_LITTLEFS),)
+    USE_LITTLEFS := 0
+endif
 ifeq ($(USE_SPIFFS),)
-  ifneq ($(filter esp%,$(PLATFORM)),)
+  ifeq ($(USE_LITTLEFS),1)
+    USE_SPIFFS := 0
+  else ifneq ($(filter esp%,$(PLATFORM)),)
     USE_SPIFFS := 1
   else
     USE_SPIFFS := 0
@@ -547,6 +554,9 @@ ifeq ($(USE_SPIFFS),)
 endif
 ifeq ($(USE_SPIFFS),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseSpiffs
+endif
+ifeq ($(USE_LITTLEFS),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseLittleFS
 endif
 
 ifeq ($(CONFIG),unittest)

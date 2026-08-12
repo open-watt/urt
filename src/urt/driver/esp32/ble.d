@@ -11,7 +11,8 @@ module urt.driver.esp32.ble;
 
 import urt.atomic : MemoryOrder, atomicExchange, atomicFetchAdd, atomicLoad, atomicStore;
 import urt.driver.ble;
-import urt.log : log_error;
+import urt.log : log_error, log_warning;
+import urt.time : getTime, MonoTime, Duration, seconds;
 
 import urt.sync.mpsc : MpscQueue;
 import urt.uuid : GUID;
@@ -148,6 +149,62 @@ private void resume_scan_if_needed()
         atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)1);
 }
 
+private uint active_session_count()
+{
+    uint n;
+    foreach (ref s; _sessions)
+    {
+        auto state = atomicLoad!(MemoryOrder.acquire)(s.state);
+        if (state == SessionState.active || state == SessionState.disconnecting)
+            ++n;
+    }
+    return n;
+}
+
+// Scan resume is edge-triggered off controller events; a single dropped or lost
+// event leaves the radio silently deaf with nothing to re-arm it. Level-check the
+// invariant "scanning is wanted but not running, and no connection is in flight",
+// and a stuck connect that never reported completion, so BLE self-recovers instead
+// of needing a reboot. Both paths log, so a wedge is visible after the fact.
+private void heal_ble_if_stalled()
+{
+    if (!_opened)
+        return;
+
+    MonoTime now = getTime();
+
+    if (atomicLoad!(MemoryOrder.acquire)(_pending_connect) != 0)
+    {
+        if (now - _pending_connect_since > pending_connect_timeout)
+        {
+            log_warning("ble", "connect never completed, clearing stuck pending state");
+            atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+            request_scan_resume();
+        }
+        return;
+    }
+
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) == 0
+        || atomicLoad!(MemoryOrder.acquire)(_scan_active) != 0
+        || active_session_count() != 0)
+    {
+        _scan_stall_since = MonoTime();
+        return;
+    }
+
+    if (_scan_stall_since == MonoTime())
+        _scan_stall_since = now;
+    else if (now - _scan_stall_since > scan_stall_timeout)
+    {
+        log_warning("ble", "scan stopped without a pending resume, restarting");
+        _scan_stall_since = now;
+        request_scan_resume();
+    }
+}
+
+enum Duration pending_connect_timeout = 35.seconds; // 30s NimBLE connect duration + margin
+enum Duration scan_stall_timeout = 3.seconds;
+
 private ushort conn_interval_units(ushort ms) pure
 {
     return cast(ushort)((cast(uint)ms * 1000 + 1249) / 1250);
@@ -220,6 +277,7 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
     params.max_ce_len = 0;
 
     atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)1);
+    _pending_connect_since = getTime();
     int rc = ble_gap_connect(0, &addr, 30_000, &params, &gap_event_trampoline, null);
     if (rc != 0)
     {
@@ -377,6 +435,7 @@ bool ble_hw_service(uint port, size_t budget)
 {
     if (port >= num_ble)
         return false;
+    heal_ble_if_stalled();
     resume_scan_if_needed();
     if (_servicing)
         return queues_pending();
@@ -673,6 +732,8 @@ void dispatch_notification(BLE ble, ref const NotifyEvent notification)
 
 __gshared bool _opened;
 __gshared bool _faulted;
+__gshared MonoTime _pending_connect_since;
+__gshared MonoTime _scan_stall_since;
 shared ubyte _pending_connect;
 shared ubyte _scan_requested;
 shared ubyte _scan_active;

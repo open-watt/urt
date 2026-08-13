@@ -342,10 +342,51 @@ bool wifi_hw_get_sta_link_info(uint port, ref WifiStaLinkInfo info)
 {
     if (port >= num_wifi)
         return false;
+    info = WifiStaLinkInfo.init;
     int rssi;
     if (ow_wifi_sta_get_ap_info(info.bssid.ptr, &rssi) == 0)
         return false;
     info.rssi = cast(byte)rssi;
+    info.nss = 1; // every ESP32 radio is 1x1
+
+    ubyte channel;
+    int secondary;
+    if (esp_wifi_get_channel(&channel, &secondary) == ESP_OK)
+        info.band = channel >= 36 ? WifiBand._5ghz : WifiBand._2_4ghz;
+
+    // ESP-IDF exposes no live bitrate, only the mode the association settled on, so the bitrates stay
+    // unknown and the caller derives a peak from the mode. wifi_phy_mode_t folds bandwidth into the
+    // mode and HT40 is the widest it can name, so a VHT80/HE80 link reads back understated.
+    int phymode;
+    if (esp_wifi_sta_get_negotiated_phymode(&phymode) != ESP_OK)
+        return true;
+    switch (phymode)
+    {
+        case WIFI_PHY_MODE_LR:
+            info.phy_mode = WifiPhyMode.lr;
+            break;
+        case WIFI_PHY_MODE_11B:
+            info.phy_mode = WifiPhyMode.b;
+            break;
+        case WIFI_PHY_MODE_11G, WIFI_PHY_MODE_11A:
+            info.phy_mode = WifiPhyMode.g;
+            break;
+        case WIFI_PHY_MODE_HT20:
+            info.phy_mode = WifiPhyMode.n;
+            break;
+        case WIFI_PHY_MODE_HT40:
+            info.phy_mode = WifiPhyMode.n;
+            info.bandwidth = WifiBandwidth.bw_40mhz;
+            break;
+        case WIFI_PHY_MODE_VHT20:
+            info.phy_mode = WifiPhyMode.ac;
+            break;
+        case WIFI_PHY_MODE_HE20:
+            info.phy_mode = WifiPhyMode.ax;
+            break;
+        default:
+            break;
+    }
     return true;
 }
 
@@ -497,6 +538,19 @@ enum : int
     WIFI_EVENT_AP_STOP            = 13,
     WIFI_EVENT_AP_STACONNECTED    = 14,
     WIFI_EVENT_AP_STADISCONNECTED = 15,
+}
+
+// wifi_phy_mode_t (from esp_wifi_types_generic.h)
+enum : int
+{
+    WIFI_PHY_MODE_LR    = 0,
+    WIFI_PHY_MODE_11B   = 1,
+    WIFI_PHY_MODE_11G   = 2,
+    WIFI_PHY_MODE_11A   = 3,
+    WIFI_PHY_MODE_HT20  = 4,
+    WIFI_PHY_MODE_HT40  = 5,
+    WIFI_PHY_MODE_HE20  = 6,
+    WIFI_PHY_MODE_VHT20 = 7,
 }
 
 __gshared bool _opened;
@@ -880,6 +934,7 @@ extern(C) nothrow @nogc
     int esp_wifi_set_max_tx_power(byte power);
     int esp_wifi_set_band_mode(int band_mode);
     int esp_wifi_get_channel(ubyte* primary, int* second);
+    int esp_wifi_sta_get_negotiated_phymode(int* phymode);
     int esp_read_mac(ubyte* mac, int type);
     int esp_wifi_internal_tx(int ifx, void* buffer, ushort len);
 }

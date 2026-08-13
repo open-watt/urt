@@ -90,6 +90,18 @@ enum WifiBandwidth : ubyte
     bw_160mhz,
 }
 
+enum WifiPhyMode : ubyte
+{
+    unknown,
+    b,      // DSSS/CCK
+    g,      // ERP-OFDM, also covers 11a
+    n,      // HT
+    ac,     // VHT
+    ax,     // HE
+    be,     // EHT
+    lr,     // Espressif proprietary long range
+}
+
 enum WifiEvent : ubyte
 {
     sta_connected,
@@ -173,8 +185,15 @@ struct WifiStaInfo
 
 struct WifiStaLinkInfo
 {
+    uint tx_bitrate;      // kbit/s, 0 = unknown
+    uint rx_bitrate;      // kbit/s, 0 = unknown
     ubyte[6] bssid;
     byte rssi;
+    WifiBand band;
+    WifiPhyMode phy_mode;
+    WifiBandwidth bandwidth;
+    ubyte nss;            // spatial streams, 0 = unknown
+    bool short_gi;
 }
 
 // Delivered by wifi_service() when an Ethernet frame is received on a virtual

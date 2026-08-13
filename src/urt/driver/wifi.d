@@ -94,7 +94,8 @@ enum WifiPhyMode : ubyte
 {
     unknown,
     b,      // DSSS/CCK
-    g,      // ERP-OFDM, also covers 11a
+    a,      // OFDM on 5 GHz
+    g,      // ERP-OFDM on 2.4 GHz
     n,      // HT
     ac,     // VHT
     ax,     // HE
@@ -181,6 +182,14 @@ struct WifiStaInfo
 {
     ubyte[6] mac;
     byte rssi;
+}
+
+struct WifiCapability
+{
+    WifiBand band;
+    WifiPhyMode phy_mode;
+    WifiBandwidth bandwidth;
+    ubyte nss;            // spatial streams, 0 = unknown
 }
 
 struct WifiStaLinkInfo
@@ -567,6 +576,23 @@ bool wifi_get_sta_link_info(ref Wifi wifi, ref WifiStaLinkInfo info)
         return wifi_hw_get_sta_link_info(wifi.port, info);
     else
         return false;
+}
+
+// The best this radio can do on one supported band, as opposed to what a link negotiated. A
+// multi-band radio has one capability per band; 'any' is not a band and is therefore rejected.
+bool wifi_get_capability(ref Wifi wifi, WifiBand band, ref WifiCapability caps)
+{
+    static if (num_wifi == 0)
+        return false;
+    else
+    {
+        if (band == WifiBand.any || !wifi_band_supported(wifi.port, band))
+            return false;
+        static if (__traits(compiles, wifi_hw_get_capability(wifi.port, band, caps)))
+            return wifi_hw_get_capability(wifi.port, band, caps);
+        else
+            return false;
+    }
 }
 
 Result wifi_set_tx_power(ref Wifi wifi, byte power_dbm)

@@ -1211,7 +1211,7 @@ extern (C) int on_scanu_result_ind(bl_hw* hw, bl_cmd* cmd, ipc_e2a_msg* msg)
     r.bssid     = body_.sa;
     r.rssi      = body_.rssi;
     r.channel   = freq_to_channel(body_.center_freq);
-    r.band      = body_.band == 0 ? WifiBand.band_2g4 : WifiBand.band_5g;
+    r.band      = body_.band == 0 ? WifiBand._2_4ghz : WifiBand._5ghz;
     r.bandwidth = WifiBandwidth.bw_20mhz;
     r.auth      = WifiAuth.open;
     r.ssid_len  = ssid.length > r.ssid_buf.length ? cast(ubyte)r.ssid_buf.length : cast(ubyte)ssid.length;
@@ -1370,7 +1370,7 @@ private bool wifi_set_monitor_mode(bool enable)
 
 private ushort channel_to_freq(ubyte ch, WifiBand band) pure
 {
-    if (band == WifiBand.band_5g || ch >= 36)
+    if (band == WifiBand._5ghz || ch >= 36)
         return cast(ushort)(5180 + (ch - 36) * 5);
     if (ch == 14)
         return 2484;

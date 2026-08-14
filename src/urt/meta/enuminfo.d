@@ -43,6 +43,11 @@ private template get_display_attr(Attrs...)
         enum get_display_attr = get_display_attr!(Attrs[1 .. $]);
 }
 
+// Canonical CLI/profile key for an enum member name: edge underscores trimmed,
+// so digit-leading keys can be expressed as identifiers (`_5g` -> "5g").
+import urt.string : trim;
+enum trim_key(string key) = key.trim!(c => c == '_');
+
 const(E)* enum_from_key(E)(const(char)[] key) pure
     if (is_enum!E)
     => enum_info!E.value_for(key);
@@ -687,9 +692,6 @@ alias GetFun = Variant function(const(void)*, const(VoidEnumInfo)*) pure;
 
 Variant get_value(T)(const(void)* ptr, const(VoidEnumInfo)* info)
     => Variant(*cast(T*)ptr, info);
-
-import urt.string : trim;
-enum trim_key(string key) = key.trim!(c => c == '_');
 
 ushort key_length(const(char)* key) pure
 {

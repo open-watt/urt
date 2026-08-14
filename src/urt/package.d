@@ -108,6 +108,9 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 
     run_module_dtors(modules);
 
+    import urt.async : deinit_async;
+    deinit_async();
+
     uart_deinit();
 
     deinit_string_heap();
@@ -355,8 +358,10 @@ else version (linux)
         // LDC emits ModuleInfo pointers into the __minfo ELF section but does
         // not generate .init_array calls to _d_dso_registry. The linker
         // generates __start___minfo / __stop___minfo boundary symbols for us.
-        extern(C) extern __gshared immutable(ModuleInfo*) __start___minfo;
-        extern(C) extern __gshared immutable(ModuleInfo*) __stop___minfo;
+        // Weak because --fno-moduleinfo leaves the section unemitted, and an
+        // absent section leaves the boundary symbols undefined rather than equal.
+        pragma(LDC_extern_weak) extern(C) extern __gshared immutable(ModuleInfo*) __start___minfo;
+        pragma(LDC_extern_weak) extern(C) extern __gshared immutable(ModuleInfo*) __stop___minfo;
     }
 }
 else

@@ -282,6 +282,9 @@ class TypeInfo_Class : TypeInfo
     immutable(void)* m_RTInfo;
     override @property immutable(void)* rtInfo() nothrow pure const @safe { return m_RTInfo; }
 
+    // The compiler checks this field count against its own hardcoded layout
+    // ("Unexpected number of fields in object.ClassInfo"), so nothing here can
+    // be dropped even when urt never reads it.
     uint[4] nameSig;
 
     override @property size_t tsize() nothrow pure const @safe

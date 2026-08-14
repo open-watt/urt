@@ -77,9 +77,9 @@ enum WifiAuth : ubyte
 enum WifiBand : ubyte
 {
     any,
-    band_2g4,   // 2.4 GHz
-    band_5g,    // 5 GHz
-    band_6g,    // 6 GHz (Wi-Fi 6E)
+    _2_4ghz,
+    _5ghz,
+    _6ghz,
 }
 
 enum WifiBandwidth : ubyte
@@ -240,6 +240,29 @@ void wifi_deinit()
 
 // Radio operations
 
+ubyte wifi_supported_bands(ubyte port) pure
+{
+    static if (num_wifi == 0)
+        return 0;
+    else
+    {
+        if (port >= num_wifi)
+            return 0;
+        static if (__traits(compiles, wifi_hw_supported_bands(port)))
+            return wifi_hw_supported_bands(port);
+        else
+            return cast(ubyte)(1 << WifiBand._2_4ghz);
+    }
+}
+
+bool wifi_band_supported(ubyte port, WifiBand band) pure
+{
+    ubyte supported = wifi_supported_bands(port);
+    return band == WifiBand.any
+        ? supported != 0
+        : (supported & (1 << band)) != 0;
+}
+
 Result wifi_open(ref Wifi wifi, ubyte port, ref const WifiConfig cfg)
 {
     static if (num_wifi == 0)
@@ -247,6 +270,8 @@ Result wifi_open(ref Wifi wifi, ubyte port, ref const WifiConfig cfg)
     else
     {
         if (port >= num_wifi)
+            return InternalResult.invalid_parameter;
+        if (!wifi_band_supported(port, cfg.band))
             return InternalResult.invalid_parameter;
 
         if (!wifi_hw_open(port, cfg))
@@ -589,6 +614,7 @@ unittest
             assert(r2, "wifi_open failed");
             assert(port.is_open);
             assert(port.port == p);
+            assert(wifi_supported_bands(port.port) != 0);
 
             wifi_service(port);
 

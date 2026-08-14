@@ -28,6 +28,8 @@ else version (ESP32_C5) enum uint num_wifi = 1;
 else version (ESP32_C6) enum uint num_wifi = 1;
 else                    enum uint num_wifi = 0; // H2 (BT/802.15.4 only), P4 (needs external)
 
+version (ESP32_C5) version = DualBandRadio;
+
 enum ubyte wifi_max_ap_clients = 10;
 
 
@@ -53,6 +55,19 @@ bool wifi_hw_open(uint port, ref const WifiConfig cfg)
     {
         ow_wifi_deinit();
         return false;
+    }
+
+    version (DualBandRadio)
+    {
+        int band_mode = cfg.band == WifiBand._2_4ghz ? WIFI_BAND_MODE_2G_ONLY
+                      : cfg.band == WifiBand._5ghz   ? WIFI_BAND_MODE_5G_ONLY
+                      :                                WIFI_BAND_MODE_AUTO;
+        if (esp_wifi_set_band_mode(band_mode) != ESP_OK)
+        {
+            esp_wifi_stop();
+            ow_wifi_deinit();
+            return false;
+        }
     }
 
     _opened = true;
@@ -294,6 +309,14 @@ bool wifi_hw_set_channel(uint port, ubyte primary)
 
 // Queries
 
+ubyte wifi_hw_supported_bands(uint port) pure
+{
+    version (DualBandRadio)
+        return cast(ubyte)((1 << WifiBand._2_4ghz) | (1 << WifiBand._5ghz));
+    else
+        return cast(ubyte)(1 << WifiBand._2_4ghz);
+}
+
 bool wifi_hw_get_mac(uint port, WifiVif vif, ref ubyte[6] mac)
 {
     // ESP_MAC_WIFI_STA=0, ESP_MAC_WIFI_SOFTAP=1
@@ -454,6 +477,14 @@ bool dispatch_one_raw_rx(Wifi wifi)
 }
 
 enum int ESP_OK = 0;
+
+// ESP-IDF band modes (from esp_wifi_types_generic.h)
+enum : int
+{
+    WIFI_BAND_MODE_2G_ONLY = 1,
+    WIFI_BAND_MODE_5G_ONLY = 2,
+    WIFI_BAND_MODE_AUTO    = 3,
+}
 
 // ESP-IDF event IDs (from esp_wifi_types.h)
 enum : int
@@ -847,6 +878,7 @@ extern(C) nothrow @nogc
     int esp_wifi_connect();
     int esp_wifi_disconnect();
     int esp_wifi_set_max_tx_power(byte power);
+    int esp_wifi_set_band_mode(int band_mode);
     int esp_wifi_get_channel(ubyte* primary, int* second);
     int esp_read_mac(ubyte* mac, int type);
     int esp_wifi_internal_tx(int ifx, void* buffer, ushort len);

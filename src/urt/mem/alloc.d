@@ -33,11 +33,20 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     void[] mem = _alloc(size, alignment, flags);
     version (AllocTracking)
     {
-        import urt.mem.tracking : track_alloc;
+        import urt.mem.profile.record : track_alloc;
         if (mem.ptr !is null)
         {
             alias TrackFn = void function(void*, size_t) pure nothrow @nogc;
             (cast(TrackFn) &track_alloc)(mem.ptr, mem.length);
+        }
+    }
+    version (AllocProfile)
+    {
+        import urt.mem.profile.log : profile_alloc;
+        if (mem.ptr !is null)
+        {
+            alias ProfileFn = void function(void*, size_t) pure nothrow @nogc;
+            (cast(ProfileFn) &profile_alloc)(mem.ptr, mem.length);
         }
     }
     return mem;
@@ -58,14 +67,24 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
     static if (has_realloc)
     {
         void* old_ptr = mem.ptr;
+        size_t old_size = mem.length;
         void[] new_mem = _realloc(mem, new_size, alignment, flags);
         version (AllocTracking)
         {
-            import urt.mem.tracking : track_realloc;
+            import urt.mem.profile.record : track_realloc;
             if (new_mem.ptr !is null)
             {
                 alias TrackFn = void function(void*, void*, size_t) pure nothrow @nogc;
                 (cast(TrackFn) &track_realloc)(old_ptr, new_mem.ptr, new_mem.length);
+            }
+        }
+        version (AllocProfile)
+        {
+            import urt.mem.profile.log : profile_realloc;
+            if (new_mem.ptr !is null)
+            {
+                alias ProfileFn = void function(void*, void*, size_t, size_t) pure nothrow @nogc;
+                (cast(ProfileFn) &profile_realloc)(old_ptr, new_mem.ptr, new_mem.length, old_size);
             }
         }
         return new_mem;
@@ -90,9 +109,15 @@ void free(void[] mem) pure
         return;
     version (AllocTracking)
     {
-        import urt.mem.tracking : untrack_alloc;
+        import urt.mem.profile.record : untrack_alloc;
         alias UntrackFn = void function(void*) pure nothrow @nogc;
         (cast(UntrackFn) &untrack_alloc)(mem.ptr);
+    }
+    version (AllocProfile)
+    {
+        import urt.mem.profile.log : profile_free;
+        alias ProfileFn = void function(void*, size_t) pure nothrow @nogc;
+        (cast(ProfileFn) &profile_free)(mem.ptr, mem.length);
     }
     _free(mem.ptr);
 }
@@ -102,15 +127,28 @@ void[] expand(void[] mem, size_t new_size) pure
     if (mem.ptr is null)
         return null;
     static if (has_expand)
-        return _expand(mem, new_size);
+        void[] new_mem = _expand(mem, new_size);
     else static if (has_memsize)
     {
+        void[] new_mem = null;
         if (new_size <= _memsize(mem.ptr))
-            return mem.ptr[0 .. new_size];
-        return null;
+            new_mem = mem.ptr[0 .. new_size];
     }
     else
+    {
+        void[] new_mem = null;
         assert(false, "unsupported");
+    }
+    version (AllocProfile)
+    {
+        import urt.mem.profile.log : profile_expand;
+        if (new_mem.ptr !is null)
+        {
+            alias ProfileFn = void function(void*, size_t, size_t) pure nothrow @nogc;
+            (cast(ProfileFn) &profile_expand)(new_mem.ptr, mem.length, new_mem.length);
+        }
+    }
+    return new_mem;
 }
 
 size_t memsize(void* ptr) pure

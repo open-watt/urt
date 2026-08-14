@@ -11,9 +11,6 @@
  */
 module urt.internal.aa;
 
-/// AA version for debuggers, bump whenever changing the layout
-immutable int _aaVersion = 1;
-
 import urt.internal.traits : substInout;
 
 // grow threshold
@@ -220,8 +217,6 @@ private:
         buckets = alloc_buckets(sz);
         first_used = cast(uint) buckets.length;
 
-        // only for binary compatibility
-        entry_ti = typeid(Entry!(K, V));
         hash_fn = delegate size_t (scope ref const K key) nothrow pure @nogc @safe {
             return pure_hashOf!K(key);
         };
@@ -245,7 +240,6 @@ private:
     Bucket[] buckets;
     uint used;
     uint deleted;
-    const(TypeInfo) entry_ti; // only for binary compatibility
     uint first_used;
     immutable uint key_sz;    // only for binary compatibility
     immutable uint val_sz;    // only for binary compatibility
@@ -356,9 +350,16 @@ private:
 
     static Bucket[] alloc_buckets(size_t dim) pure nothrow @safe
     {
-        // could allocate with BlkAttr.NO_INTERIOR, but that does not combine
-        //  well with arrays and type info for precise scanning
-        return new Bucket[dim];
+        // CTFE has no allocator, and its `new` emits no TypeInfo.
+        if (__ctfe)
+            return new Bucket[dim];
+
+        static Bucket[] impl(size_t dim) nothrow @nogc @trusted
+        {
+            import urt.mem.alloc : alloc_array;
+            return alloc_array!Bucket(dim);
+        }
+        return (cast(Bucket[] function(size_t) pure nothrow @safe)&impl)(dim);
     }
 }
 

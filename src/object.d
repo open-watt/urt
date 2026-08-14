@@ -282,6 +282,7 @@ class TypeInfo_Class : TypeInfo
     immutable(void)* m_RTInfo;
     override @property immutable(void)* rtInfo() nothrow pure const @safe { return m_RTInfo; }
 
+    // The compiler validates the ClassInfo field count, so nameSig cannot be dropped.
     uint[4] nameSig;
 
     override @property size_t tsize() nothrow pure const @safe

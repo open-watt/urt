@@ -4,14 +4,19 @@ import urt.atomic;
 
 nothrow @nogc:
 
+version (Windows) version = OwnerTracked;
+version (Posix)   version = OwnerTracked;
+
 
 // Scope-based "nothing else touches the protected state right now" guard.
 // Critical sections are SHORT by contract - a handful of instructions.
 // Long-held sections will starve other threads/cores; for long sections
 // use a Mutex.
 //
-// Reentrant on every platform. Place a Critical as a field of the object
-// it protects (or __gshared if it protects global state).
+// Reentrant on every platform. Zero-init is the valid initial state on
+// every platform, so a __gshared Critical needs no init() call. Place a
+// Critical as a field of the object it protects (or __gshared if it
+// protects global state).
 
 struct Critical
 {
@@ -19,31 +24,18 @@ nothrow @nogc:
     @disable this(this);
 
     bool init()
-    {
-        version (Windows)
-            InitializeCriticalSection(&_cs);
-        // POSIX/FreeRTOS/bare-metal: zero-init is the valid initial state.
-        return true;
-    }
+        => true;
 
     void destroy()
     {
-        version (Windows)
-            DeleteCriticalSection(&_cs);
-        // other platforms: nothing to release
     }
 
     CriticalGuard acquire() return
     {
         CriticalGuard g = void;
-        version (Windows)
+        version (OwnerTracked)
         {
-            EnterCriticalSection(&_cs);
-            g._critical = &this;
-        }
-        else version (Posix)
-        {
-            auto self = cast(size_t)pthread_self();
+            auto self = _current_id();
             if (atomicLoad(_owner) == self)
             {
                 // already own it -- just bump the recursion count
@@ -51,8 +43,16 @@ nothrow @nogc:
             }
             else
             {
-                while (!cas(&_owner, cast(size_t)0, self))
-                    pause();
+                version (Windows)
+                {
+                    AcquireSRWLockExclusive(&_srw);
+                    atomicStore(_owner, self);
+                }
+                else
+                {
+                    while (!cas(&_owner, cast(size_t)0, self))
+                        pause();
+                }
                 _count = 1;
             }
             g._critical = &this;
@@ -92,12 +92,10 @@ nothrow @nogc:
     }
 
 private:
-    version (Windows)
+    version (OwnerTracked)
     {
-        CRITICAL_SECTION _cs;
-    }
-    else version (Posix)
-    {
+        version (Windows)
+            SRWLOCK _srw;       // waiters block here; owner/count layer reentrancy on top
         shared size_t _owner;   // current thread id, or 0 when unowned
         int _count;             // recursion depth (touched only by owner)
     }
@@ -121,12 +119,14 @@ private:
 
     void _leave()
     {
-        version (Windows)
-            LeaveCriticalSection(&_cs);
-        else version (Posix)
+        version (OwnerTracked)
         {
             if (--_count == 0)
+            {
                 atomicStore!(MemoryOrder.release)(_owner, cast(size_t)0);
+                version (Windows)
+                    ReleaseSRWLockExclusive(&_srw);
+            }
         }
         else version (FreeRTOS)
         {
@@ -156,8 +156,7 @@ nothrow @nogc:
 
     ~this()
     {
-        version (Windows)       _critical._leave();
-        else version (Posix)    _critical._leave();
+        version (OwnerTracked)  _critical._leave();
         else version (FreeRTOS) _critical._leave();
         else
         {
@@ -169,8 +168,7 @@ nothrow @nogc:
     }
 
 private:
-    version (Windows)       Critical* _critical;
-    else version (Posix)    Critical* _critical;
+    version (OwnerTracked)  Critical* _critical;
     else version (FreeRTOS) Critical* _critical;
     else
     {
@@ -222,18 +220,21 @@ private:
 
 version (Windows)
 {
-    import urt.internal.sys.windows.winbase : CRITICAL_SECTION;
+    // SRWLOCK is a single pointer-sized opaque value; zero-init is valid.
+    struct SRWLOCK { void* Ptr; }
 
-    // Re-declare with the attribute set we need (winbase declares these
-    // without nothrow @nogc). Linker resolves to the same Win32 symbols.
     extern(Windows) nothrow @nogc:
-    void InitializeCriticalSection(CRITICAL_SECTION*);
-    void DeleteCriticalSection(CRITICAL_SECTION*);
-    void EnterCriticalSection(CRITICAL_SECTION*);
-    void LeaveCriticalSection(CRITICAL_SECTION*);
+    uint GetCurrentThreadId();
+    void AcquireSRWLockExclusive(SRWLOCK*);
+    void ReleaseSRWLockExclusive(SRWLOCK*);
+
+    size_t _current_id()
+        => GetCurrentThreadId();
 }
 else version (Posix)
 {
-    extern(C) nothrow @nogc:
-    void* pthread_self();
+    extern(C) nothrow @nogc void* pthread_self();
+
+    size_t _current_id()
+        => cast(size_t)pthread_self();
 }

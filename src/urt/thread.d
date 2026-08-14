@@ -12,7 +12,47 @@ else                    enum ThreadsSupported = false;
 
 
 alias Thread      = void*;
+alias ThreadId    = size_t;
 alias ThreadEntry = void delegate() nothrow @nogc;
+
+
+ThreadId current_thread_id()
+{
+    version (Windows)
+    {
+        import urt.internal.sys.windows.winbase : GetCurrentThreadId;
+        return GetCurrentThreadId();
+    }
+    else version (Posix)
+        return cast(ThreadId)pthread_self();
+    else version (FreeRTOS)
+    {
+        import urt.internal.sys.freertos : xTaskGetCurrentTaskHandle;
+        return cast(ThreadId)xTaskGetCurrentTaskHandle();
+    }
+    else
+    {
+        import urt.driver.irq : has_smp;
+        static if (has_smp)
+        {
+            import urt.driver.irq : cpu_id;
+            return cpu_id();
+        }
+        else
+            return 0;
+    }
+}
+
+// Until set_main_thread() is called, every thread is considered main; single-threaded
+// targets and test harnesses need no setup.
+void set_main_thread()
+{
+    _main_thread = current_thread_id();
+    _main_thread_set = true;
+}
+
+bool is_main_thread()
+    => !_main_thread_set || current_thread_id() == _main_thread;
 
 
 // Spawn an OS thread. Returns null on failure.
@@ -90,6 +130,9 @@ void thread_join(Thread t)
 
 private:
 
+__gshared ThreadId _main_thread;
+__gshared bool _main_thread_set;
+
 version (Windows)
 {
     extern(Windows) uint _win_entry(void* arg) nothrow @nogc
@@ -157,6 +200,7 @@ version (Posix)
         static assert(false, "pthread_attr_t size not configured for this POSIX target");
 
     alias PthreadStart = extern(C) void* function(void*) nothrow @nogc;
+    pthread_t pthread_self();
     int pthread_create(pthread_t*, const(pthread_attr_t)*, PthreadStart, void*);
     int pthread_join(pthread_t, void**);
     int pthread_attr_init(pthread_attr_t*);
@@ -182,5 +226,15 @@ static if (_has_smoke)
         assert(t !is null);
         thread_join(t);
         assert(atomicLoad(_smoke_counter) == 1);
+
+        static shared bool _worker_is_main;
+
+        assert(is_main_thread());
+        set_main_thread();
+        assert(is_main_thread());
+        t = thread_spawn(() nothrow @nogc { atomicStore(_worker_is_main, is_main_thread()); });
+        assert(t !is null);
+        thread_join(t);
+        assert(!atomicLoad(_worker_is_main));
     }
 }

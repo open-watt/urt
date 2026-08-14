@@ -2,6 +2,9 @@ module urt.mem.alloc;
 
 import urt.mem;
 
+version (Tiny) {} else
+    version = MemoryThreats;
+
 nothrow @nogc:
 
 
@@ -43,6 +46,15 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
         static if (__traits(compiles, _alloc_failure(size, alignment, flags)))
             _alloc_failure(size, alignment, flags);
     }
+    version (MemoryThreats)
+    {
+        if (mem.ptr !is null)
+        {
+            import urt.mem.reclaim : account_alloc;
+            alias AccountFn = void function(size_t) pure nothrow @nogc;
+            (cast(AccountFn) &account_alloc)(accounted_size(mem.ptr, mem.length));
+        }
+    }
     version (AllocTracking)
     {
         import urt.mem.profile.record : track_alloc;
@@ -80,6 +92,8 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
     {
         void* old_ptr = mem.ptr;
         size_t old_size = mem.length;
+        version (MemoryThreats)
+            size_t old_accounted_size = accounted_size(mem.ptr, mem.length);
         void[] new_mem = _realloc(mem, new_size, alignment, flags);
         if (new_mem.ptr is null)
         {
@@ -92,6 +106,19 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
         {
             static if (__traits(compiles, _alloc_failure(new_size, alignment, flags)))
                 _alloc_failure(new_size, alignment, flags);
+        }
+        version (MemoryThreats)
+        {
+            if (new_mem.ptr !is null)
+            {
+                import urt.mem.reclaim : account_alloc, account_free;
+                alias AccountFn = void function(size_t) pure nothrow @nogc;
+                size_t new_accounted_size = accounted_size(new_mem.ptr, new_mem.length);
+                if (new_accounted_size > old_accounted_size)
+                    (cast(AccountFn) &account_alloc)(new_accounted_size - old_accounted_size);
+                else if (new_accounted_size < old_accounted_size)
+                    (cast(AccountFn) &account_free)(old_accounted_size - new_accounted_size);
+            }
         }
         version (AllocTracking)
         {
@@ -133,6 +160,12 @@ void free(T)(T[] mem) pure
 {
     if (mem.ptr is null)
         return;
+    version (MemoryThreats)
+    {
+        import urt.mem.reclaim : account_free;
+        alias AccountFn = void function(size_t) pure nothrow @nogc;
+        (cast(AccountFn) &account_free)(accounted_size(cast(void*)mem.ptr, mem.length));
+    }
     version (AllocTracking)
     {
         import urt.mem.profile.record : untrack_alloc;
@@ -250,6 +283,8 @@ void[] expand(void[] mem, size_t new_size) pure
 {
     if (mem.ptr is null)
         return null;
+    version (MemoryThreats)
+        size_t old_accounted_size = accounted_size(mem.ptr, mem.length);
     static if (has_expand)
         void[] new_mem = _expand(mem, new_size);
     else static if (has_memsize)
@@ -262,6 +297,19 @@ void[] expand(void[] mem, size_t new_size) pure
     {
         void[] new_mem = null;
         assert(false, "unsupported");
+    }
+    version (MemoryThreats)
+    {
+        if (new_mem.ptr !is null)
+        {
+            import urt.mem.reclaim : account_alloc, account_free;
+            alias AccountFn = void function(size_t) pure nothrow @nogc;
+            size_t new_accounted_size = accounted_size(new_mem.ptr, new_mem.length);
+            if (new_accounted_size > old_accounted_size)
+                (cast(AccountFn) &account_alloc)(new_accounted_size - old_accounted_size);
+            else if (new_accounted_size < old_accounted_size)
+                (cast(AccountFn) &account_free)(old_accounted_size - new_accounted_size);
+        }
     }
     version (AllocProfile)
     {
@@ -283,6 +331,22 @@ size_t memsize(void* ptr) pure
         return _memsize(ptr);
     else
         assert(false, "unsupported");
+}
+
+version (MemoryThreats)
+{
+    private size_t accounted_size(void* ptr, size_t requested) pure
+    {
+        static if (__traits(compiles, account_usable_size))
+        {
+            static if (account_usable_size)
+                return _memsize(ptr);
+            else
+                return requested;
+        }
+        else
+            return requested;
+    }
 }
 
 void[] alloc_exec(size_t size) pure

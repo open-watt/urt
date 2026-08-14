@@ -49,6 +49,7 @@ version (BouffaloUnifiedAlloc):
 
 import urt.attribute : fast_data;
 import urt.mem.alloc : MemFlags;
+import urt.sync.critical : Critical;
 
 @nogc nothrow:
 
@@ -155,6 +156,7 @@ struct PoolStats
 
 void query_pool_stats(size_t idx, out PoolStats stats) nothrow @nogc
 {
+    auto guard = _heap_lock.acquire();
     init_pools();
     auto p = &_pools[idx];
     stats.name = p.name;
@@ -367,40 +369,52 @@ enum TLSF_CONTROL_BYTES = 3200;
 @fast_data __gshared Pool[num_pools] _pools;
 @fast_data __gshared bool _initialized;
 
+// TLSF has no internal locking, and vendor C (libwifi etc) enters through the
+// extern(C) malloc overrides from other tasks; every touch of the pools goes
+// under this lock. Log calls stay outside it -- they format strings.
+@fast_data __gshared Critical _heap_lock;
+
 
 void[] alloc_impl(size_t size, size_t alignment, MemFlags flags) nothrow @nogc
 {
-    init_pools();
-
     bool dma = (flags & MemFlags.dma) != 0;
-    size_t primary = pool_for(flags);
-
-    void* p = tlsf_memalign(_pools[primary].tlsf, alignment, size);
-    size_t allocated_in = primary;
-    if (p is null && !dma)
+    bool failed_over = false;
+    void* p;
     {
-        foreach (i, ref f; _pools)
+        auto guard = _heap_lock.acquire();
+        init_pools();
+
+        size_t primary = pool_for(flags);
+        p = tlsf_memalign(_pools[primary].tlsf, alignment, size);
+        size_t allocated_in = primary;
+        if (p is null && !dma)
         {
-            if (i == primary)
-                continue;
-            p = tlsf_memalign(f.tlsf, alignment, size);
-            if (p !is null)
+            foreach (i, ref f; _pools)
             {
-                allocated_in = i;
-                log_failover(size, alignment, flags);
-                break;
+                if (i == primary)
+                    continue;
+                p = tlsf_memalign(f.tlsf, alignment, size);
+                if (p !is null)
+                {
+                    allocated_in = i;
+                    failed_over = true;
+                    break;
+                }
             }
+        }
+
+        if (p !is null)
+        {
+            size_t block = tlsf_block_size(p);
+            _pools[allocated_in].used += block;
+            if (_pools[allocated_in].used > _pools[allocated_in].peak_used)
+                _pools[allocated_in].peak_used = _pools[allocated_in].used;
         }
     }
 
-    if (p !is null)
-    {
-        size_t block = tlsf_block_size(p);
-        _pools[allocated_in].used += block;
-        if (_pools[allocated_in].used > _pools[allocated_in].peak_used)
-            _pools[allocated_in].peak_used = _pools[allocated_in].used;
-    }
-    else
+    if (failed_over)
+        log_failover(size, alignment, flags);
+    if (p is null)
         log_oom(size, alignment, flags);
 
     return p ? p[0 .. size] : null;
@@ -415,6 +429,8 @@ void[] realloc_impl(void[] mem, size_t new_size, size_t alignment, MemFlags flag
         free_impl(mem.ptr);
         return null;
     }
+
+    auto guard = _heap_lock.acquire();
     Pool* owner = pool_of(mem.ptr);
     if (owner is null)
         return null;
@@ -431,6 +447,7 @@ void[] realloc_impl(void[] mem, size_t new_size, size_t alignment, MemFlags flag
 
 void free_impl(void* ptr) nothrow @nogc
 {
+    auto guard = _heap_lock.acquire();
     Pool* owner = pool_of(ptr);
     if (owner is null)
         return;

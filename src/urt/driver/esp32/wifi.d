@@ -338,14 +338,131 @@ byte wifi_hw_get_rssi(uint port)
     return wifi_hw_get_sta_link_info(port, info) ? info.rssi : 0;
 }
 
+bool wifi_hw_get_capability(uint port, WifiBand band, ref WifiCapability caps)
+{
+    if (port >= num_wifi || band == WifiBand.any || !wifi_band_supported(cast(ubyte)port, band))
+        return false;
+    caps = WifiCapability.init;
+    caps.band = band;
+    caps.nss = 1; // every ESP32 radio is 1x1
+
+    // the protocol bitmap is what the driver has enabled, which is the ceiling any association here
+    // can reach even when the silicon could do more
+    ushort protocols;
+    int bw;
+    version (DualBandRadio)
+    {
+        WifiProtocols configured_protocols;
+        if (esp_wifi_get_protocols(WIFI_IF_STA, &configured_protocols) != ESP_OK)
+            return false;
+        protocols = band == WifiBand._2_4ghz
+            ? configured_protocols.band_2_4ghz
+            : configured_protocols.band_5ghz;
+
+        WifiBandwidths configured_bandwidths;
+        if (esp_wifi_get_bandwidths(WIFI_IF_STA, &configured_bandwidths) != ESP_OK)
+            return false;
+        bw = band == WifiBand._2_4ghz
+            ? configured_bandwidths.band_2_4ghz
+            : configured_bandwidths.band_5ghz;
+    }
+    else
+    {
+        ubyte configured_protocols;
+        if (esp_wifi_get_protocol(WIFI_IF_STA, &configured_protocols) != ESP_OK)
+            return false;
+        protocols = configured_protocols;
+
+        if (esp_wifi_get_bandwidth(WIFI_IF_STA, &bw) != ESP_OK)
+            return false;
+    }
+
+    if (protocols & WIFI_PROTOCOL_11AX)
+        caps.phy_mode = WifiPhyMode.ax;
+    else if (protocols & WIFI_PROTOCOL_11AC)
+        caps.phy_mode = WifiPhyMode.ac;
+    else if (protocols & WIFI_PROTOCOL_11N)
+        caps.phy_mode = WifiPhyMode.n;
+    else if (protocols & WIFI_PROTOCOL_11A)
+        caps.phy_mode = WifiPhyMode.a;
+    else if (protocols & WIFI_PROTOCOL_11G)
+        caps.phy_mode = WifiPhyMode.g;
+    else if (protocols & WIFI_PROTOCOL_11B)
+        caps.phy_mode = WifiPhyMode.b;
+    else if (protocols & WIFI_PROTOCOL_LR)
+        caps.phy_mode = WifiPhyMode.lr;
+
+    switch (bw)
+    {
+        case WIFI_BW40:
+            caps.bandwidth = WifiBandwidth.bw_40mhz;
+            break;
+        case WIFI_BW80:
+            caps.bandwidth = WifiBandwidth.bw_80mhz;
+            break;
+        case WIFI_BW160:
+        case WIFI_BW80_BW80:    // no non-contiguous member; 160 is the closer of the two
+            caps.bandwidth = WifiBandwidth.bw_160mhz;
+            break;
+        default:
+            caps.bandwidth = WifiBandwidth.bw_20mhz;
+            break;
+    }
+    return true;
+}
+
 bool wifi_hw_get_sta_link_info(uint port, ref WifiStaLinkInfo info)
 {
     if (port >= num_wifi)
         return false;
+    info = WifiStaLinkInfo.init;
     int rssi;
     if (ow_wifi_sta_get_ap_info(info.bssid.ptr, &rssi) == 0)
         return false;
     info.rssi = cast(byte)rssi;
+    info.nss = 1; // every ESP32 radio is 1x1
+
+    ubyte channel;
+    int secondary;
+    if (esp_wifi_get_channel(&channel, &secondary) == ESP_OK)
+        info.band = channel >= 36 ? WifiBand._5ghz : WifiBand._2_4ghz;
+
+    // ESP-IDF exposes no live bitrate, only the mode the association settled on, so the bitrates stay
+    // unknown and the caller derives a peak from the mode. wifi_phy_mode_t folds bandwidth into the
+    // mode and HT40 is the widest it can name, so a VHT80/HE80 link reads back understated.
+    int phymode;
+    if (esp_wifi_sta_get_negotiated_phymode(&phymode) != ESP_OK)
+        return true;
+    switch (phymode)
+    {
+        case WIFI_PHY_MODE_LR:
+            info.phy_mode = WifiPhyMode.lr;
+            break;
+        case WIFI_PHY_MODE_11B:
+            info.phy_mode = WifiPhyMode.b;
+            break;
+        case WIFI_PHY_MODE_11A:
+            info.phy_mode = WifiPhyMode.a;
+            break;
+        case WIFI_PHY_MODE_11G:
+            info.phy_mode = WifiPhyMode.g;
+            break;
+        case WIFI_PHY_MODE_HT20:
+            info.phy_mode = WifiPhyMode.n;
+            break;
+        case WIFI_PHY_MODE_HT40:
+            info.phy_mode = WifiPhyMode.n;
+            info.bandwidth = WifiBandwidth.bw_40mhz;
+            break;
+        case WIFI_PHY_MODE_VHT20:
+            info.phy_mode = WifiPhyMode.ac;
+            break;
+        case WIFI_PHY_MODE_HE20:
+            info.phy_mode = WifiPhyMode.ax;
+            break;
+        default:
+            break;
+    }
     return true;
 }
 
@@ -497,6 +614,48 @@ enum : int
     WIFI_EVENT_AP_STOP            = 13,
     WIFI_EVENT_AP_STACONNECTED    = 14,
     WIFI_EVENT_AP_STADISCONNECTED = 15,
+}
+
+enum int WIFI_IF_STA = 0;
+
+struct WifiProtocols
+{
+    ushort band_2_4ghz;
+    ushort band_5ghz;
+}
+
+struct WifiBandwidths
+{
+    int band_2_4ghz;
+    int band_5ghz;
+}
+
+// protocol bitmap and wifi_bandwidth_t (from esp_wifi_types_generic.h)
+enum ubyte WIFI_PROTOCOL_11B  = 0x01;
+enum ubyte WIFI_PROTOCOL_11G  = 0x02;
+enum ubyte WIFI_PROTOCOL_11N  = 0x04;
+enum ubyte WIFI_PROTOCOL_LR   = 0x08;
+enum ubyte WIFI_PROTOCOL_11A  = 0x10;
+enum ubyte WIFI_PROTOCOL_11AC = 0x20;
+enum ubyte WIFI_PROTOCOL_11AX = 0x40;
+
+enum int WIFI_BW20      = 1;
+enum int WIFI_BW40      = 2;
+enum int WIFI_BW80      = 3;
+enum int WIFI_BW160     = 4;
+enum int WIFI_BW80_BW80 = 5;
+
+// wifi_phy_mode_t (from esp_wifi_types_generic.h)
+enum : int
+{
+    WIFI_PHY_MODE_LR    = 0,
+    WIFI_PHY_MODE_11B   = 1,
+    WIFI_PHY_MODE_11G   = 2,
+    WIFI_PHY_MODE_11A   = 3,
+    WIFI_PHY_MODE_HT20  = 4,
+    WIFI_PHY_MODE_HT40  = 5,
+    WIFI_PHY_MODE_HE20  = 6,
+    WIFI_PHY_MODE_VHT20 = 7,
 }
 
 __gshared bool _opened;
@@ -880,6 +1039,11 @@ extern(C) nothrow @nogc
     int esp_wifi_set_max_tx_power(byte power);
     int esp_wifi_set_band_mode(int band_mode);
     int esp_wifi_get_channel(ubyte* primary, int* second);
+    int esp_wifi_sta_get_negotiated_phymode(int* phymode);
+    int esp_wifi_get_protocol(int ifx, ubyte* protocol_bitmap);
+    int esp_wifi_get_protocols(int ifx, WifiProtocols* protocols);
+    int esp_wifi_get_bandwidth(int ifx, int* bw);
+    int esp_wifi_get_bandwidths(int ifx, WifiBandwidths* bandwidths);
     int esp_read_mac(ubyte* mac, int type);
     int esp_wifi_internal_tx(int ifx, void* buffer, ushort len);
 }

@@ -11,8 +11,10 @@ module urt.driver.esp32.ble;
 
 import urt.atomic : MemoryOrder, atomicExchange, atomicFetchAdd, atomicLoad, atomicStore;
 import urt.driver.ble;
+import urt.log : log_error;
 
 import urt.sync.mpsc : MpscQueue;
+import urt.time : FixedTimer;
 import urt.uuid : GUID;
 
 nothrow @nogc:
@@ -80,6 +82,9 @@ void ble_hw_close(uint port)
     _write_cb = null;
     _notify_cb = null;
     atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)0);
+    atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)0);
+    _scan_retry_pending = false;
     atomicStore!(MemoryOrder.release)(_discover_phase, DiscoverPhase.idle);
     _num_discovered_svcs = 0;
     _current_svc_idx = 0;
@@ -92,22 +97,74 @@ void ble_hw_close(uint port)
 
 bool ble_hw_scan_start(uint port, ref const BLEScanConfig cfg)
 {
-    ble_gap_disc_params params;
-    params.itvl = cast(ushort)(cfg.interval_ms * 1000 / 625); // BLE units of 0.625ms
-    params.window = cast(ushort)(cfg.window_ms * 1000 / 625);
-    if (!cfg.active)
-        params.flags |= 0x02; // passive
-    if (cfg.filter_duplicates)
-        params.flags |= 0x04; // filter_duplicates
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) != 0)
+        return true;
 
-    if (ble_gap_disc(0, 0, &params, &gap_event_trampoline, null) != 0)
-        return false;
-    return true;
+    _scan_config = cfg;
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)1);
+    if (start_scan())
+        return true;
+
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)0);
+    return false;
 }
 
 void ble_hw_scan_stop(uint port)
 {
-    ble_gap_disc_cancel();
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)0);
+    atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)0);
+    _scan_retry_pending = false;
+
+    int rc = ble_gap_disc_cancel();
+    if (rc != 0 && rc != BLE_HS_EALREADY)
+        log_error("ble", "could not stop scan, NimBLE status=", rc);
+}
+
+private bool start_scan()
+{
+    ble_gap_disc_params params;
+    params.itvl = cast(ushort)(_scan_config.interval_ms * 1000 / 625); // BLE units of 0.625ms
+    params.window = cast(ushort)(_scan_config.window_ms * 1000 / 625);
+    if (!_scan_config.active)
+        params.flags |= 0x02; // passive
+    if (_scan_config.filter_duplicates)
+        params.flags |= 0x04; // filter_duplicates
+
+    int rc = ble_gap_disc(0, BLE_HS_FOREVER, &params, &gap_event_trampoline, null);
+    if (rc != 0)
+    {
+        log_error("ble", "could not start scan, NimBLE status=", rc);
+        return false;
+    }
+    return true;
+}
+
+private void request_scan_resume()
+{
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) != 0 && ble_gap_disc_active() == 0)
+        atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)1);
+}
+
+private void resume_scan_if_needed()
+{
+    if (atomicExchange!(MemoryOrder.acq_rel)(&_scan_restart, cast(ubyte)0) == 0)
+    {
+        if (!_scan_retry_pending || !_scan_retry_timer.expired())
+            return;
+    }
+    _scan_retry_pending = false;
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) == 0 || ble_gap_disc_active() != 0)
+        return;
+    if (!start_scan())
+    {
+        _scan_retry_timer.reset();
+        _scan_retry_pending = true;
+    }
+}
+
+private ushort conn_interval_units(ushort ms) pure
+{
+    return cast(ushort)((cast(uint)ms * 1000 + 1249) / 1250);
 }
 
 // --- Advertising ---
@@ -149,6 +206,16 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
     if (atomicLoad!(MemoryOrder.acquire)(_pending_connect) != 0)
         return false;
 
+    if (ble_gap_disc_active() != 0)
+    {
+        int rc = ble_gap_disc_cancel();
+        if (rc != 0 && rc != BLE_HS_EALREADY)
+        {
+            log_error("ble", "could not stop scan before connecting, NimBLE status=", rc);
+            return false;
+        }
+    }
+
     ble_addr_t addr;
     addr.type = cast(ubyte)addr_type;
     // NimBLE uses LSB-first byte order
@@ -156,17 +223,22 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
         addr.val[i] = peer_addr[5 - i];
 
     ble_gap_conn_params params;
-    params.itvl_min = cast(ushort)(cfg.interval_min_ms * 1000 / 1250); // units of 1.25ms
-    params.itvl_max = cast(ushort)(cfg.interval_max_ms * 1000 / 1250);
+    params.scan_itvl = 0x0010;
+    params.scan_window = 0x0010;
+    params.itvl_min = conn_interval_units(cfg.interval_min_ms);
+    params.itvl_max = conn_interval_units(cfg.interval_max_ms);
     params.latency = cfg.latency;
     params.supervision_timeout = cast(ushort)(cfg.timeout_ms / 10); // units of 10ms
     params.min_ce_len = 0;
     params.max_ce_len = 0;
 
     atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)1);
-    if (ble_gap_connect(0, &addr, 30_000, &params, &gap_event_trampoline, null) != 0)
+    int rc = ble_gap_connect(0, &addr, 30_000, &params, &gap_event_trampoline, null);
+    if (rc != 0)
     {
+        log_error("ble", "could not submit connection request, NimBLE status=", rc);
         atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+        request_scan_resume();
         return false;
     }
     return true;
@@ -176,7 +248,10 @@ void ble_hw_connect_cancel(uint port)
 {
     // A successful cancel completes through BLE_GAP_EVENT_CONNECT; a rejected cancel has no callback.
     if (ble_gap_conn_cancel() != 0)
+    {
         atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+        request_scan_resume();
+    }
 }
 
 bool ble_hw_disconnect(uint port, BLEConn conn)
@@ -314,6 +389,7 @@ bool ble_hw_service(uint port, size_t budget)
 {
     if (port >= num_ble)
         return false;
+    resume_scan_if_needed();
     if (_servicing)
         return queues_pending();
 
@@ -381,6 +457,7 @@ uint ble_hw_take_event_drops(uint port)
 private:
 
 enum int ESP_OK = 0;
+enum int BLE_HS_EALREADY = 2;
 enum max_sessions = 4;
 enum max_chars_per_session = 32;
 enum scan_queue_capacity = 16;
@@ -513,6 +590,7 @@ struct ControlEvent
     ControlEventKind kind;
     ubyte conn_id;
     BLEError error;
+    int status;
 }
 
 void dispatch_scan(BLE ble, ref const ScanEvent scan)
@@ -530,6 +608,8 @@ void dispatch_control(BLE ble, ref const ControlEvent control)
                 _conn_cb(ble, BLEConn(control.conn_id), true, BLEError.none);
             break;
         case ControlEventKind.connect_failed:
+            if (control.status != 0)
+                log_error("ble", "connection failed, NimBLE status=", control.status);
             if (_conn_cb !is null)
                 _conn_cb(ble, BLEConn(control.conn_id), false, control.error);
             break;
@@ -596,7 +676,12 @@ void dispatch_notification(BLE ble, ref const NotifyEvent notification)
 __gshared bool _opened;
 __gshared bool _faulted;
 shared ubyte _pending_connect;
+shared ubyte _scan_requested;
+shared ubyte _scan_restart;
 __gshared ubyte _next_conn_id;
+__gshared BLEScanConfig _scan_config;
+__gshared FixedTimer!1000 _scan_retry_timer;
+__gshared bool _scan_retry_pending;
 
 __gshared Session[max_sessions] _sessions;
 
@@ -729,13 +814,14 @@ bool queues_pending()
     return _have_scan || _have_control || _have_gatt || _have_notification || !_scan_queue.empty || !_control_queue.empty || !_gatt_queue.empty || !_notify_queue.empty;
 }
 
-bool push_control(ControlEventKind kind, ubyte conn_id, BLEError error = BLEError.none)
+bool push_control(ControlEventKind kind, ubyte conn_id, BLEError error = BLEError.none, int status = 0)
 {
     ControlEvent event;
     event.sequence = next_event_sequence();
     event.kind = kind;
     event.conn_id = conn_id;
     event.error = error;
+    event.status = status;
     if (_control_queue.enqueue(event))
         return true;
     count_event_drop();
@@ -821,9 +907,18 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                     push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.internal);
                     ble_gap_terminate(event.connect.conn_handle, 0x13);
                 }
+                request_scan_resume();
             }
             else
-                push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.timeout);
+            {
+                push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.timeout, event.connect.status);
+                request_scan_resume();
+            }
+            signal_wake();
+            return 0;
+
+        case BLE_GAP_EVENT_DISC_COMPLETE:
+            request_scan_resume();
             signal_wake();
             return 0;
 
@@ -838,6 +933,7 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                     atomicStore!(MemoryOrder.release)(s.state, SessionState.disconnecting);
                 else
                     atomicStore!(MemoryOrder.release)(s.state, SessionState.inactive);
+                request_scan_resume();
             }
             signal_wake();
             return 0;
@@ -1236,8 +1332,12 @@ enum : ubyte
     BLE_GAP_EVENT_CONNECT       = 0,
     BLE_GAP_EVENT_DISCONNECT    = 1,
     BLE_GAP_EVENT_DISC          = 7,
+    BLE_GAP_EVENT_DISC_COMPLETE = 8,
     BLE_GAP_EVENT_NOTIFY_RX     = 12,
 }
+
+// Zero means 10.24s, not forever.
+enum int BLE_HS_FOREVER = int.max;
 
 // C shim functions
 extern(C) nothrow @nogc
@@ -1251,6 +1351,7 @@ extern(C) nothrow @nogc
 {
     int ble_gap_disc(ubyte own_addr_type, int duration_ms, const(ble_gap_disc_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_disc_cancel();
+    int ble_gap_disc_active();
     int ble_gap_connect(ubyte own_addr_type, const(ble_addr_t)* peer_addr, int duration_ms, const(ble_gap_conn_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_conn_cancel();
     int ble_gap_terminate(ushort conn_handle, ubyte hci_reason);

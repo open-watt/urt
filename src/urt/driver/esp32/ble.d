@@ -1048,8 +1048,8 @@ GUID nimble_uuid_to_guid(const(ble_uuid_any)* uuid) nothrow @nogc
         g.data1 = v[12] | (cast(uint)v[13] << 8) | (cast(uint)v[14] << 16) | (cast(uint)v[15] << 24);
         g.data2 = cast(ushort)(v[10] | (cast(ushort)v[11] << 8));
         g.data3 = cast(ushort)(v[8] | (cast(ushort)v[9] << 8));
-        g.data4[0 .. 2] = v[6 .. 8]; // big-endian in GUID
-        g.data4[2 .. 8] = v[0 .. 6];
+        foreach (i; 0 .. g.data4.length)
+            g.data4[i] = v[7 - i];
     }
     return g;
 }

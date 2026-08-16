@@ -267,7 +267,7 @@ bool ble_hw_disconnect(uint port, BLEConn conn)
 bool ble_hw_gatt_discover(uint port, BLEConn conn)
 {
     auto s = find_session(conn.id);
-    if (s is null || s.device3 is null)
+    if (s is null || s.device3 is null || _pending_discover.phase != DiscoverPhase.idle)
         return false;
 
     IInspectable gatt_op;
@@ -279,7 +279,8 @@ bool ble_hw_gatt_discover(uint port, BLEConn conn)
     _pending_discover.async_op = gatt_op;
     _pending_discover.conn_id = conn.id;
     _pending_discover.phase = DiscoverPhase.services;
-    s.num_chars = 0;
+    _pending_discover.overflow = false;
+    release_session_gatt(s);
 
     return true;
 }
@@ -567,6 +568,7 @@ struct SessionChar
     GUID char_uuid;
     GattCharacteristicProperties properties;
     IGattCharacteristic characteristic;
+    IGattDeviceService3 service; // Keeps the characteristic open.
     GattValueChangedHandler notify_handler;
     EventRegistrationToken notify_token;
 }
@@ -581,6 +583,7 @@ struct WinSession
     EventRegistrationToken conn_status_token;
     SessionChar[max_chars_per_session] chars;
     ubyte num_chars;
+    IGattSession gatt_session;
 }
 
 struct PendingConnect
@@ -597,8 +600,10 @@ struct PendingDiscover
     uint service_count;
     uint current_service;
     GUID current_service_uuid;
+    IGattDeviceService3 current_service_object;
     ubyte conn_id;
     DiscoverPhase phase;
+    bool overflow;
 }
 
 struct PendingGattOp
@@ -730,9 +735,9 @@ WinSession* alloc_session()
     _next_conn_id = cast(ubyte)(id + 1);
 
     auto s = &_sessions[_num_sessions++];
+    *s = WinSession.init;
     s.active = true;
     s.id = id;
-    s.num_chars = 0;
     return s;
 }
 
@@ -742,22 +747,18 @@ void remove_session(ubyte id)
     {
         if (s.id == id)
         {
-            _sessions[i] = _sessions[_num_sessions - 1];
-            _num_sessions--;
+            ubyte last = cast(ubyte)(_num_sessions - 1);
+            if (i != last)
+                _sessions[i] = _sessions[last];
+            _sessions[last] = WinSession.init;
+            --_num_sessions;
             return;
         }
     }
 }
 
-void release_session(WinSession* s)
+void release_session_gatt(WinSession* s)
 {
-    if (s.device !is null && s.conn_handler !is null)
-    {
-        s.device.remove_ConnectionStatusChanged(s.conn_status_token);
-        defaultAllocator().freeT(s.conn_handler);
-        s.conn_handler = null;
-    }
-
     foreach (ref gc; s.chars[0 .. s.num_chars])
     {
         if (gc.notify_handler !is null)
@@ -771,6 +772,31 @@ void release_session(WinSession* s)
             gc.characteristic.Release();
             gc.characteristic = null;
         }
+        if (gc.service !is null)
+        {
+            gc.service.Release();
+            gc.service = null;
+        }
+    }
+    s.num_chars = 0;
+}
+
+void release_session(WinSession* s)
+{
+    if (s.device !is null && s.conn_handler !is null)
+    {
+        s.device.remove_ConnectionStatusChanged(s.conn_status_token);
+        defaultAllocator().freeT(s.conn_handler);
+        s.conn_handler = null;
+    }
+
+    release_session_gatt(s);
+
+    if (s.gatt_session !is null)
+    {
+        s.gatt_session.put_MaintainConnection(0);
+        s.gatt_session.Release();
+        s.gatt_session = null;
     }
 
     if (s.device3 !is null)
@@ -967,50 +993,70 @@ void poll_discover(BLE ble)
     }
     else
     {
-        // phase 2: characteristics for a service
-        if (result_raw !is null && s !is null)
+        if (result_raw is null || s is null)
         {
-            auto chars_result = cast(IGattCharacteristicsResult)cast(void*)result_raw;
-            GattCommunicationStatus gatt_status;
-            chars_result.get_Status(&gatt_status);
-
-            if (gatt_status == GattCommunicationStatus.success)
-            {
-                IInspectable chars_raw;
-                chars_result.get_Characteristics(&chars_raw);
-                if (chars_raw !is null)
-                {
-                    auto chars = cast(IVectorView_IInspectable)cast(void*)chars_raw;
-                    uint count;
-                    chars.get_Size(&count);
-
-                    foreach (j; 0 .. count)
-                    {
-                        IInspectable char_raw;
-                        chars.GetAt(j, &char_raw);
-                        if (char_raw is null)
-                            continue;
-
-                        auto chr = cast(IGattCharacteristic)cast(void*)char_raw;
-                        if (s.num_chars < max_chars_per_session)
-                        {
-                            auto ci = &s.chars[s.num_chars++];
-                            chr.get_AttributeHandle(&ci.handle);
-                            ci.service_uuid = _pending_discover.current_service_uuid;
-                            chr.get_Uuid(&ci.char_uuid);
-                            chr.get_CharacteristicProperties(&ci.properties);
-                            ci.characteristic = chr;
-                        }
-                        else
-                            (cast(IUnknown)chr).Release();
-                    }
-                    chars_raw.Release();
-                }
-            }
-            result_raw.Release();
+            release_pending_discover_service();
+            finish_discover(ble, conn_id, BLEError.protocol);
+            return;
         }
 
-        _pending_discover.current_service++;
+        auto chars_result = cast(IGattCharacteristicsResult)cast(void*)result_raw;
+        GattCommunicationStatus gatt_status;
+        chars_result.get_Status(&gatt_status);
+
+        if (gatt_status != GattCommunicationStatus.success)
+        {
+            result_raw.Release();
+            release_pending_discover_service();
+            finish_discover(ble, conn_id, BLEError.protocol);
+            return;
+        }
+
+        IInspectable chars_raw;
+        chars_result.get_Characteristics(&chars_raw);
+        if (chars_raw !is null)
+        {
+            auto chars = cast(IVectorView_IInspectable)cast(void*)chars_raw;
+            uint count;
+            chars.get_Size(&count);
+
+            foreach (j; 0 .. count)
+            {
+                IInspectable char_raw;
+                chars.GetAt(j, &char_raw);
+                if (char_raw is null)
+                    continue;
+
+                auto chr = cast(IGattCharacteristic)cast(void*)char_raw;
+                if (s.num_chars < max_chars_per_session)
+                {
+                    auto ci = &s.chars[s.num_chars++];
+                    chr.get_AttributeHandle(&ci.handle);
+                    ci.service_uuid = _pending_discover.current_service_uuid;
+                    chr.get_Uuid(&ci.char_uuid);
+                    chr.get_CharacteristicProperties(&ci.properties);
+                    ci.characteristic = chr;
+                    _pending_discover.current_service_object.AddRef();
+                    ci.service = _pending_discover.current_service_object;
+                }
+                else
+                {
+                    (cast(IUnknown)chr).Release();
+                    _pending_discover.overflow = true;
+                }
+            }
+            chars_raw.Release();
+        }
+        result_raw.Release();
+        release_pending_discover_service();
+
+        if (_pending_discover.overflow)
+        {
+            finish_discover(ble, conn_id, BLEError.protocol);
+            return;
+        }
+
+        ++_pending_discover.current_service;
         if (!discover_next_service())
             finish_discover(ble, conn_id, BLEError.none);
     }
@@ -1041,17 +1087,41 @@ bool discover_next_service()
             continue;
         }
 
+        auto s = find_session(_pending_discover.conn_id);
+        if (s is null)
+        {
+            svc3.Release();
+            return false;
+        }
+        IInspectable session_raw;
+        if (svc3.get_Session(&session_raw) >= 0 && session_raw !is null)
+        {
+            if (auto gatt_session = qi!IGattSession(session_raw, &IID_IGattSession))
+            {
+                if (s.gatt_session is null)
+                {
+                    gatt_session.put_MaintainConnection(1);
+                    s.gatt_session = gatt_session;
+                }
+                else
+                    gatt_session.Release();
+            }
+            session_raw.Release();
+        }
+
+        // Cached characteristics may belong to a previous, closed connection.
         IInspectable chars_op;
-        svc3.GetCharacteristicsAsync(&chars_op);
-        svc3.Release();
+        svc3.GetCharacteristicsWithCacheModeAsync(1, &chars_op);
 
         if (chars_op is null)
         {
+            svc3.Release();
             _pending_discover.current_service++;
             continue;
         }
 
         register_completion(chars_op);
+        _pending_discover.current_service_object = svc3;
         _pending_discover.async_op = chars_op;
         return true;
     }
@@ -1065,8 +1135,18 @@ bool discover_next_service()
     return false;
 }
 
+void release_pending_discover_service()
+{
+    if (_pending_discover.current_service_object !is null)
+    {
+        _pending_discover.current_service_object.Release();
+        _pending_discover.current_service_object = null;
+    }
+}
+
 void finish_discover(BLE ble, ubyte conn_id, BLEError error)
 {
+    release_pending_discover_service();
     if (_pending_discover.services !is null)
     {
         (cast(IUnknown)_pending_discover.services).Release();
@@ -1458,6 +1538,7 @@ static immutable IID_IBluetoothLEDeviceStatics                   = GUID(0xC8CF1A
 static immutable IID_IBluetoothLEDevice3                         = GUID(0xAEE9E493, 0x44AC, 0x40DC, [0xAF,0x33,0xB2,0xC1,0x3C,0x01,0xCA,0x46]);
 static immutable IID_IGattDeviceServicesResult                   = GUID(0x171DD3EE, 0x016D, 0x419D, [0x83,0x8A,0x57,0x6C,0xF4,0x75,0xA3,0xD8]);
 static immutable IID_IGattDeviceService3                         = GUID(0xB293A950, 0x0C53, 0x437C, [0xA9,0xB3,0x5C,0x32,0x10,0xC6,0xE5,0x69]);
+static immutable IID_IGattSession                                = GUID(0xD23B5143, 0xE04E, 0x4C24, [0x99,0x9C,0x9C,0x25,0x6F,0x98,0x56,0xB1]);
 static immutable IID_IGattCharacteristic                         = GUID(0x59CB50C1, 0x5934, 0x4F68, [0xA1,0x98,0xEB,0x86,0x4F,0xA4,0x4E,0x6B]);
 static immutable IID_IGattReadResult                             = GUID(0x63A66F08, 0x1AEA, 0x4C4C, [0xA5,0x0F,0x97,0xBA,0xE4,0x74,0xB3,0x48]);
 static immutable IID_IBluetoothLEAdvertisementPublisher          = GUID(0xCDE820F9, 0xD9FA, 0x43D6, [0xA2,0x64,0xDD,0xD8,0xB7,0xDA,0x8B,0x78]);
@@ -1649,6 +1730,21 @@ nothrow @nogc:
     HRESULT get_DeviceId(HSTRING* value);
     HRESULT get_Uuid(GUID* value);
     HRESULT get_AttributeHandle(ushort* value);
+}
+
+interface IGattSession : IInspectable
+{
+nothrow @nogc:
+    HRESULT get_DeviceId(IInspectable* value);
+    HRESULT get_CanMaintainConnection(BOOL* value);
+    HRESULT put_MaintainConnection(BOOL value);
+    HRESULT get_MaintainConnection(BOOL* value);
+    HRESULT get_MaxPduSize(ushort* value);
+    HRESULT get_SessionStatus(int* value);
+    HRESULT add_MaxPduSizeChanged(IUnknown handler, EventRegistrationToken* token);
+    HRESULT remove_MaxPduSizeChanged(EventRegistrationToken token);
+    HRESULT add_SessionStatusChanged(IUnknown handler, EventRegistrationToken* token);
+    HRESULT remove_SessionStatusChanged(EventRegistrationToken token);
 }
 
 interface IGattDeviceService3 : IInspectable

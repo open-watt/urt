@@ -1191,6 +1191,9 @@ void poll_gatt(BLE ble)
 
         AsyncStatus status;
         async_info.get_Status(&status);
+        HRESULT error_code;
+        if (status != AsyncStatus.started && status != AsyncStatus.completed)
+            async_info.get_ErrorCode(&error_code);
         async_info.Release();
 
         if (status == AsyncStatus.started)
@@ -1236,7 +1239,7 @@ void poll_gatt(BLE ble)
             }
         }
         else if (pg.op_type != GattOpType.read)
-            log.warning("GATT write handle=", pg.handle, " did not complete: ", status);
+            log.warningf("GATT write handle={0} did not complete: status={1} hr=x{2,08x}", pg.handle, cast(int)status, cast(uint)error_code);
 
         // fire callback
         if (pg.op_type == GattOpType.read)

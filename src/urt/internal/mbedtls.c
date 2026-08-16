@@ -10,14 +10,15 @@
 // mbedtls 4.x reorganised around PSA-Crypto. It moved a lot of classic
 // primitive headers into <mbedtls/private/...> (still callable but upstream-
 // unstable) and deleted entropy/ctr_drbg/ssl_conf_rng entirely from IDF's
-// build -- only PSA RNG is exposed there. We hide the divergence here so D
-// only sees one urt_* API across all mbedtls versions.
+// build -- only PSA RNG is exposed there. ECDH went further and is gone
+// altogether, classic API and header both, so key agreement has to go through
+// PSA. We hide the divergence here so D only sees one urt_* API across all
+// mbedtls versions.
 #if MBEDTLS_VERSION_MAJOR >= 4
 #include <psa/crypto.h>
 #include <mbedtls/private/bignum.h>
 #include <mbedtls/private/ecp.h>
 #include <mbedtls/private/gcm.h>
-#include <mbedtls/private/ecdh.h>
 #include <mbedtls/private/aes.h>
 #else
 #include <mbedtls/entropy.h>
@@ -413,6 +414,37 @@ int urt_ecdh_p256_compute_shared(const unsigned char *priv_d, size_t priv_len,
     if (ret != 0)
         return ret;
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+
+    // psa_raw_key_agreement yields exactly the shared X coordinate for PSA_ALG_ECDH,
+    // so there is no point to decode.
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attr, 256);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&attr, PSA_ALG_ECDH);
+
+    mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
+    psa_status_t s = psa_import_key(&attr, priv_d, priv_len, &key);
+    if (s != PSA_SUCCESS)
+        return (int)s;
+
+    unsigned char point[65];
+    point[0] = 0x04;
+    memcpy(point + 1, peer_xy, 64);
+
+    size_t olen = 0;
+    s = psa_raw_key_agreement(PSA_ALG_ECDH, key, point, sizeof(point), shared_x_out, 32, &olen);
+    psa_destroy_key(key);
+
+    if (s != PSA_SUCCESS)
+        return (int)s;
+    if (olen != 32)
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    return 0;
+
+#else
+
     mbedtls_ecp_group grp;
     mbedtls_mpi d, z;
     mbedtls_ecp_point Q;
@@ -442,6 +474,8 @@ int urt_ecdh_p256_compute_shared(const unsigned char *priv_d, size_t priv_len,
     mbedtls_mpi_free(&d);
     mbedtls_ecp_group_free(&grp);
     return ret;
+
+#endif
 }
 
 #endif

@@ -328,15 +328,35 @@ bool ble_hw_gatt_subscribe(uint port, BLEConn conn, ushort handle, bool enable)
     if (s is null)
         return false;
 
-    // find CCCD handle (handle + 1 by convention for standard GATT)
-    ushort cccd_handle = cast(ushort)(handle + 1);
+    ushort cccd_handle;
+    ushort properties;
+    foreach (ref c; s.chars[0 .. s.num_chars])
+        if (c.handle == handle)
+        {
+            cccd_handle = c.cccd_handle;
+            properties = c.properties;
+            break;
+        }
+    if (cccd_handle == 0)
+        return false;
 
     ubyte[2] cccd_value;
     if (enable)
-        cccd_value[0] = 0x01; // enable notifications
+    {
+        if ((properties & GattCharProps.notify) != 0)
+            cccd_value[0] = 0x01;
+        else if ((properties & GattCharProps.indicate) != 0)
+            cccd_value[0] = 0x02;
+        else
+            return false;
+    }
 
-    if (ble_gattc_write_flat(s.nimble_handle, cccd_handle, cccd_value.ptr, 2, null, null) != 0)
+    int rc = ble_gattc_write_flat(s.nimble_handle, cccd_handle, cccd_value.ptr, 2, null, null);
+    if (rc != 0)
+    {
+        log_error("ble", "could not write CCCD ", cccd_handle, " for handle ", handle, ", NimBLE status=", rc);
         return false;
+    }
     return true;
 }
 
@@ -471,6 +491,8 @@ enum default_service_budget = 32;
 struct SessionCharInfo
 {
     ushort handle;
+    ushort def_handle;
+    ushort svc_end;
     ushort cccd_handle;
     GUID service_uuid;
     GUID char_uuid;
@@ -828,7 +850,7 @@ bool push_control(ControlEventKind kind, ubyte conn_id, BLEError error = BLEErro
     return false;
 }
 
-enum DiscoverPhase : ubyte { idle, services, chars, complete }
+enum DiscoverPhase : ubyte { idle, services, chars, descriptors, complete }
 shared DiscoverPhase _discover_phase;
 __gshared ubyte _discovering_conn;
 __gshared bool _discovery_overflow;
@@ -837,6 +859,7 @@ __gshared bool _discovery_overflow;
 __gshared ble_gatt_svc[16] _discovered_svcs;
 __gshared ubyte _num_discovered_svcs;
 __gshared ubyte _current_svc_idx;
+__gshared ubyte _current_chr_idx;
 __gshared GUID _current_svc_uuid;
 
 void finish_discovery(bool success)
@@ -1036,8 +1059,8 @@ int discover_next_svc_chars(ushort conn_handle) nothrow @nogc
         return 0;
     }
 
-    finish_discovery(true);
-    return 0;
+    _current_chr_idx = 0;
+    return discover_next_chr_descriptors(conn_handle);
 }
 
 // --- GATT characteristic discovery callback (NimBLE task) ---
@@ -1051,7 +1074,9 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, 
         {
             auto ci = &s.chars[s.num_chars++];
             ci.handle = chr.val_handle;
-            ci.cccd_handle = 0; // TODO: discover descriptors for CCCD
+            ci.def_handle = chr.def_handle;
+            ci.svc_end = _discovered_svcs[_current_svc_idx].end_handle;
+            ci.cccd_handle = 0;
             ci.service_uuid = _current_svc_uuid;
             ci.char_uuid = nimble_uuid_to_guid(&chr.uuid);
             ci.properties = chr.properties;
@@ -1070,6 +1095,68 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, 
 
     _current_svc_idx++;
     return discover_next_svc_chars(conn_handle);
+}
+
+// NimBLE associates descriptors with the requested start handle.
+int discover_next_chr_descriptors(ushort conn_handle) nothrow @nogc
+{
+    auto s = find_session_by_nimble(conn_handle);
+    if (s is null)
+    {
+        finish_discovery(false);
+        return 0;
+    }
+
+    while (_current_chr_idx < s.num_chars)
+    {
+        auto c = &s.chars[_current_chr_idx];
+        ushort end = c.svc_end;
+        if (_current_chr_idx + 1 < s.num_chars && s.chars[_current_chr_idx + 1].svc_end == c.svc_end)
+            end = cast(ushort)(s.chars[_current_chr_idx + 1].def_handle - 1);
+        if (end <= c.handle)
+        {
+            ++_current_chr_idx;
+            continue;
+        }
+        atomicStore!(MemoryOrder.release)(_discover_phase, DiscoverPhase.descriptors);
+
+        if (ble_gattc_disc_all_dscs(conn_handle, c.handle, end, &dsc_discover_cb, null) == 0)
+            return 0;
+
+        finish_discovery(false);
+        return 0;
+    }
+
+    finish_discovery(true);
+    return 0;
+}
+
+extern(C) int dsc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, ushort chr_val_handle, const(ble_gatt_dsc)* dsc, void*) nothrow @nogc
+{
+    if (error !is null && error.status == 0 && dsc !is null)
+    {
+        if (dsc.uuid.u.type == 16 && dsc.uuid.u16.value == 0x2902)
+        {
+            auto s = find_session_by_nimble(conn_handle);
+            if (s !is null)
+                foreach (ref c; s.chars[0 .. s.num_chars])
+                    if (c.handle == chr_val_handle)
+                    {
+                        c.cccd_handle = dsc.handle;
+                        break;
+                    }
+        }
+        return 0;
+    }
+
+    if (error is null || error.status != BLE_HS_EDONE)
+    {
+        finish_discovery(false);
+        return 0;
+    }
+
+    ++_current_chr_idx;
+    return discover_next_chr_descriptors(conn_handle);
 }
 
 // --- GATT read callback (NimBLE task) ---
@@ -1306,6 +1393,12 @@ struct ble_gatt_chr
     ble_uuid_any uuid;
 }
 
+struct ble_gatt_dsc
+{
+    ushort handle;
+    ble_uuid_any uuid;
+}
+
 struct ble_gatt_attr
 {
     ushort handle;
@@ -1364,6 +1457,7 @@ extern(C) nothrow @nogc
 
     int ble_gattc_disc_all_svcs(ushort conn_handle, int function(ushort, const(ble_gatt_error)*, const(ble_gatt_svc)*, void*) cb, void* cb_arg);
     int ble_gattc_disc_all_chrs(ushort conn_handle, ushort start_handle, ushort end_handle, int function(ushort, const(ble_gatt_error)*, const(ble_gatt_chr)*, void*) cb, void* cb_arg);
+    int ble_gattc_disc_all_dscs(ushort conn_handle, ushort start_handle, ushort end_handle, int function(ushort, const(ble_gatt_error)*, ushort, const(ble_gatt_dsc)*, void*) cb, void* cb_arg);
     int ble_gattc_read(ushort conn_handle, ushort attr_handle, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_no_rsp_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len);

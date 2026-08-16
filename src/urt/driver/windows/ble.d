@@ -311,6 +311,16 @@ bool ble_hw_gatt_read(uint port, BLEConn conn, ushort handle)
     return true;
 }
 
+ushort ble_hw_get_mtu(uint port, BLEConn conn)
+{
+    auto s = find_session(conn.id);
+    if (s is null || s.gatt_session is null)
+        return 0;
+
+    ushort max_pdu;
+    return s.gatt_session.get_MaxPduSize(&max_pdu) >= 0 ? max_pdu : 0;
+}
+
 bool ble_hw_gatt_write(uint port, BLEConn conn, ushort handle, const(ubyte)[] data, bool with_response)
 {
     if (_num_pending_gatt >= max_gatt_ops)

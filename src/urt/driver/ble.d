@@ -440,6 +440,17 @@ byte ble_get_rssi(ref BLE ble, BLEConn conn)
         return ble_hw_get_rssi(ble.port, conn);
 }
 
+// Negotiated ATT MTU, or 0 when the backend cannot report one (callers keep their default).
+ushort ble_get_mtu(ref BLE ble, BLEConn conn)
+{
+    static if (num_ble == 0)
+        assert(false, "no BLE on this platform");
+    else static if (__traits(compiles, ble_hw_get_mtu(ble.port, conn)))
+        return ble_hw_get_mtu(ble.port, conn);
+    else
+        return 0;
+}
+
 // --- Callbacks ---
 
 void ble_set_scan_callback(ref BLE ble, BLEScanCallback cb)

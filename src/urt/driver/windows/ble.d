@@ -279,7 +279,7 @@ bool ble_hw_gatt_discover(uint port, BLEConn conn)
     _pending_discover.async_op = gatt_op;
     _pending_discover.conn_id = conn.id;
     _pending_discover.phase = DiscoverPhase.services;
-    s.num_chars = 0;
+    release_session_gatt(s);
 
     return true;
 }
@@ -308,6 +308,13 @@ bool ble_hw_gatt_read(uint port, BLEConn conn, ushort handle)
     _pending_gatt[_num_pending_gatt++] = PendingGattOp(
         async_op, conn.id, handle, GattOpType.read);
     return true;
+}
+
+// Real negotiated ATT MTU for the connection, or 0 while it is still unknown.
+ushort ble_hw_get_mtu(uint port, BLEConn conn)
+{
+    auto s = find_session(conn.id);
+    return s ? s.max_pdu_size : 0;
 }
 
 bool ble_hw_gatt_write(uint port, BLEConn conn, ushort handle, const(ubyte)[] data, bool with_response)
@@ -548,6 +555,7 @@ private:
 
 enum max_sessions = 8;
 enum max_chars_per_session = 32;
+enum max_services_per_session = 16;
 enum max_gatt_ops = 8;
 enum max_publishers = 8;
 
@@ -581,6 +589,16 @@ struct WinSession
     EventRegistrationToken conn_status_token;
     SessionChar[max_chars_per_session] chars;
     ubyte num_chars;
+    // A GattDeviceService is closable: dropping its last reference closes it and invalidates
+    // every characteristic it handed out (writes then fail RO_E_CLOSED). Hold the services for
+    // as long as we hold their characteristics.
+    IGattDeviceService3[max_services_per_session] services;
+    ubyte num_services;
+    // Held open for the life of the link: Windows tears the connection down once nothing holds a
+    // session with MaintainConnection set, which closes the GATT objects out from under us.
+    IGattSession gatt_session;
+    // Real negotiated ATT MTU, read off the GattSession during discovery. 0 until known.
+    ushort max_pdu_size;
 }
 
 struct PendingConnect
@@ -749,15 +767,10 @@ void remove_session(ubyte id)
     }
 }
 
-void release_session(WinSession* s)
+// Drop everything discovery produced. Characteristics first: they are handed out by the
+// services, and a closed service invalidates them.
+void release_session_gatt(WinSession* s)
 {
-    if (s.device !is null && s.conn_handler !is null)
-    {
-        s.device.remove_ConnectionStatusChanged(s.conn_status_token);
-        defaultAllocator().freeT(s.conn_handler);
-        s.conn_handler = null;
-    }
-
     foreach (ref gc; s.chars[0 .. s.num_chars])
     {
         if (gc.notify_handler !is null)
@@ -771,6 +784,36 @@ void release_session(WinSession* s)
             gc.characteristic.Release();
             gc.characteristic = null;
         }
+    }
+    s.num_chars = 0;
+
+    foreach (ref svc; s.services[0 .. s.num_services])
+    {
+        if (svc !is null)
+        {
+            svc.Release();
+            svc = null;
+        }
+    }
+    s.num_services = 0;
+}
+
+void release_session(WinSession* s)
+{
+    if (s.device !is null && s.conn_handler !is null)
+    {
+        s.device.remove_ConnectionStatusChanged(s.conn_status_token);
+        defaultAllocator().freeT(s.conn_handler);
+        s.conn_handler = null;
+    }
+
+    release_session_gatt(s);
+
+    if (s.gatt_session !is null)
+    {
+        s.gatt_session.put_MaintainConnection(0);
+        s.gatt_session.Release();
+        s.gatt_session = null;
     }
 
     if (s.device3 !is null)
@@ -1041,9 +1084,47 @@ bool discover_next_service()
             continue;
         }
 
+        // The GattSession carries the real negotiated MTU; the ATT emulation needs it to
+        // size write commands, which Windows rejects outright when they exceed one PDU.
+        if (auto s = find_session(_pending_discover.conn_id))
+        {
+            IInspectable session_raw;
+            if (svc3.get_Session(&session_raw) >= 0 && session_raw !is null)
+            {
+                if (auto gatt_session = qi!IGattSession(session_raw, &IID_IGattSession))
+                {
+                    ushort max_pdu;
+                    if (gatt_session.get_MaxPduSize(&max_pdu) >= 0 && max_pdu != 0)
+                        s.max_pdu_size = max_pdu;
+
+                    if (s.gatt_session is null)
+                    {
+                        gatt_session.put_MaintainConnection(1);
+                        s.gatt_session = gatt_session;  // ownership moves to the session
+                    }
+                    else
+                        gatt_session.Release();
+                }
+                session_raw.Release();
+            }
+        }
+
+        // Uncached, to match the service query: the cached path hands back characteristic objects
+        // from a previous connection, which Windows has since closed (writes fail RO_E_CLOSED).
         IInspectable chars_op;
-        svc3.GetCharacteristicsAsync(&chars_op);
-        svc3.Release();
+        svc3.GetCharacteristicsWithCacheModeAsync(1, &chars_op);
+
+        // Keep the service alive; releasing it here would close it and kill the characteristics
+        // it is about to hand us. Ownership passes to the session, or is dropped if it can't fit.
+        if (auto s = find_session(_pending_discover.conn_id))
+        {
+            if (s.num_services < max_services_per_session)
+                s.services[s.num_services++] = svc3;
+            else
+                svc3.Release();
+        }
+        else
+            svc3.Release();
 
         if (chars_op is null)
         {
@@ -1111,6 +1192,9 @@ void poll_gatt(BLE ble)
 
         AsyncStatus status;
         async_info.get_Status(&status);
+        HRESULT error_code = 0;
+        if (status != AsyncStatus.started && status != AsyncStatus.completed)
+            async_info.get_ErrorCode(&error_code);
         async_info.Release();
 
         if (status == AsyncStatus.started)
@@ -1156,7 +1240,8 @@ void poll_gatt(BLE ble)
             }
         }
         else if (pg.op_type != GattOpType.read)
-            log.warning("GATT write handle=", pg.handle, " did not complete: ", status);
+            log.warningf("GATT write handle={0} did not complete: status={1} hr=x{2,08x}",
+                         pg.handle, cast(int)status, cast(uint)error_code);
 
         // fire callback
         if (pg.op_type == GattOpType.read)
@@ -1458,6 +1543,7 @@ static immutable IID_IBluetoothLEDeviceStatics                   = GUID(0xC8CF1A
 static immutable IID_IBluetoothLEDevice3                         = GUID(0xAEE9E493, 0x44AC, 0x40DC, [0xAF,0x33,0xB2,0xC1,0x3C,0x01,0xCA,0x46]);
 static immutable IID_IGattDeviceServicesResult                   = GUID(0x171DD3EE, 0x016D, 0x419D, [0x83,0x8A,0x57,0x6C,0xF4,0x75,0xA3,0xD8]);
 static immutable IID_IGattDeviceService3                         = GUID(0xB293A950, 0x0C53, 0x437C, [0xA9,0xB3,0x5C,0x32,0x10,0xC6,0xE5,0x69]);
+static immutable IID_IGattSession                                = GUID(0xD23B5143, 0xE04E, 0x4C24, [0x99,0x9C,0x9C,0x25,0x6F,0x98,0x56,0xB1]);
 static immutable IID_IGattCharacteristic                         = GUID(0x59CB50C1, 0x5934, 0x4F68, [0xA1,0x98,0xEB,0x86,0x4F,0xA4,0x4E,0x6B]);
 static immutable IID_IGattReadResult                             = GUID(0x63A66F08, 0x1AEA, 0x4C4C, [0xA5,0x0F,0x97,0xBA,0xE4,0x74,0xB3,0x48]);
 static immutable IID_IBluetoothLEAdvertisementPublisher          = GUID(0xCDE820F9, 0xD9FA, 0x43D6, [0xA2,0x64,0xDD,0xD8,0xB7,0xDA,0x8B,0x78]);
@@ -1649,6 +1735,21 @@ nothrow @nogc:
     HRESULT get_DeviceId(HSTRING* value);
     HRESULT get_Uuid(GUID* value);
     HRESULT get_AttributeHandle(ushort* value);
+}
+
+interface IGattSession : IInspectable
+{
+nothrow @nogc:
+    HRESULT get_DeviceId(IInspectable* value);
+    HRESULT get_CanMaintainConnection(BOOL* value);
+    HRESULT put_MaintainConnection(BOOL value);
+    HRESULT get_MaintainConnection(BOOL* value);
+    HRESULT get_MaxPduSize(ushort* value);
+    HRESULT get_SessionStatus(int* value);
+    HRESULT add_MaxPduSizeChanged(IUnknown handler, EventRegistrationToken* token);
+    HRESULT remove_MaxPduSizeChanged(EventRegistrationToken token);
+    HRESULT add_SessionStatusChanged(IUnknown handler, EventRegistrationToken* token);
+    HRESULT remove_SessionStatusChanged(EventRegistrationToken token);
 }
 
 interface IGattDeviceService3 : IInspectable

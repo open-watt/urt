@@ -4,6 +4,10 @@
 // ESP-IDF startup before app_main, so we just call D's main().
 
 #include "esp_event.h"
+#ifdef OW_ENABLE_COREDUMP
+#include "esp_core_dump.h"
+#include "esp_partition.h"
+#endif
 #include "nvs_flash.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -18,6 +22,28 @@ void ow_watchdog_feed(void)
 {
     esp_task_wdt_reset();
 }
+
+#ifdef OW_ENABLE_COREDUMP
+bool ow_crash_dump_size(size_t *size)
+{
+    size_t address;
+    return esp_core_dump_image_check() == ESP_OK &&
+           esp_core_dump_image_get(&address, size) == ESP_OK;
+}
+
+bool ow_crash_dump_read(size_t offset, void *buffer, size_t length)
+{
+    const esp_partition_t *partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    return partition && offset <= partition->size && length <= partition->size - offset &&
+           esp_partition_read(partition, offset, buffer, length) == ESP_OK;
+}
+
+bool ow_crash_dump_clear(void)
+{
+    return esp_core_dump_image_erase() == ESP_OK;
+}
+#endif
 
 void app_main(void)
 {

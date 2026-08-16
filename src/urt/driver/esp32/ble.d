@@ -11,8 +11,10 @@ module urt.driver.esp32.ble;
 
 import urt.atomic : MemoryOrder, atomicExchange, atomicFetchAdd, atomicLoad, atomicStore;
 import urt.driver.ble;
+import urt.log : log_error;
 
 import urt.sync.mpsc : MpscQueue;
+import urt.time : FixedTimer;
 import urt.uuid : GUID;
 
 nothrow @nogc:
@@ -80,6 +82,9 @@ void ble_hw_close(uint port)
     _write_cb = null;
     _notify_cb = null;
     atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)0);
+    atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)0);
+    _scan_retry_pending = false;
     atomicStore!(MemoryOrder.release)(_discover_phase, DiscoverPhase.idle);
     _num_discovered_svcs = 0;
     _current_svc_idx = 0;
@@ -92,22 +97,74 @@ void ble_hw_close(uint port)
 
 bool ble_hw_scan_start(uint port, ref const BLEScanConfig cfg)
 {
-    ble_gap_disc_params params;
-    params.itvl = cast(ushort)(cfg.interval_ms * 1000 / 625); // BLE units of 0.625ms
-    params.window = cast(ushort)(cfg.window_ms * 1000 / 625);
-    if (!cfg.active)
-        params.flags |= 0x02; // passive
-    if (cfg.filter_duplicates)
-        params.flags |= 0x04; // filter_duplicates
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) != 0)
+        return true;
 
-    if (ble_gap_disc(0, 0, &params, &gap_event_trampoline, null) != 0)
-        return false;
-    return true;
+    _scan_config = cfg;
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)1);
+    if (start_scan())
+        return true;
+
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)0);
+    return false;
 }
 
 void ble_hw_scan_stop(uint port)
 {
-    ble_gap_disc_cancel();
+    atomicStore!(MemoryOrder.release)(_scan_requested, cast(ubyte)0);
+    atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)0);
+    _scan_retry_pending = false;
+
+    int rc = ble_gap_disc_cancel();
+    if (rc != 0 && rc != BLE_HS_EALREADY)
+        log_error("ble", "could not stop scan, NimBLE status=", rc);
+}
+
+private bool start_scan()
+{
+    ble_gap_disc_params params;
+    params.itvl = cast(ushort)(_scan_config.interval_ms * 1000 / 625); // BLE units of 0.625ms
+    params.window = cast(ushort)(_scan_config.window_ms * 1000 / 625);
+    if (!_scan_config.active)
+        params.flags |= 0x02; // passive
+    if (_scan_config.filter_duplicates)
+        params.flags |= 0x04; // filter_duplicates
+
+    int rc = ble_gap_disc(0, BLE_HS_FOREVER, &params, &gap_event_trampoline, null);
+    if (rc != 0)
+    {
+        log_error("ble", "could not start scan, NimBLE status=", rc);
+        return false;
+    }
+    return true;
+}
+
+private void request_scan_resume()
+{
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) != 0 && ble_gap_disc_active() == 0)
+        atomicStore!(MemoryOrder.release)(_scan_restart, cast(ubyte)1);
+}
+
+private void resume_scan_if_needed()
+{
+    if (atomicExchange!(MemoryOrder.acq_rel)(&_scan_restart, cast(ubyte)0) == 0)
+    {
+        if (!_scan_retry_pending || !_scan_retry_timer.expired())
+            return;
+    }
+    _scan_retry_pending = false;
+    if (atomicLoad!(MemoryOrder.acquire)(_scan_requested) == 0 || ble_gap_disc_active() != 0)
+        return;
+    if (!start_scan())
+    {
+        _scan_retry_timer.reset();
+        _scan_retry_pending = true;
+    }
+}
+
+private ushort conn_interval_units(ushort ms) pure
+{
+    return cast(ushort)((cast(uint)ms * 1000 + 1249) / 1250);
 }
 
 // --- Advertising ---
@@ -149,6 +206,16 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
     if (atomicLoad!(MemoryOrder.acquire)(_pending_connect) != 0)
         return false;
 
+    if (ble_gap_disc_active() != 0)
+    {
+        int rc = ble_gap_disc_cancel();
+        if (rc != 0 && rc != BLE_HS_EALREADY)
+        {
+            log_error("ble", "could not stop scan before connecting, NimBLE status=", rc);
+            return false;
+        }
+    }
+
     ble_addr_t addr;
     addr.type = cast(ubyte)addr_type;
     // NimBLE uses LSB-first byte order
@@ -156,17 +223,22 @@ bool ble_hw_connect(uint port, ref const ubyte[6] peer_addr, BLEAddrType addr_ty
         addr.val[i] = peer_addr[5 - i];
 
     ble_gap_conn_params params;
-    params.itvl_min = cast(ushort)(cfg.interval_min_ms * 1000 / 1250); // units of 1.25ms
-    params.itvl_max = cast(ushort)(cfg.interval_max_ms * 1000 / 1250);
+    params.scan_itvl = 0x0010;
+    params.scan_window = 0x0010;
+    params.itvl_min = conn_interval_units(cfg.interval_min_ms);
+    params.itvl_max = conn_interval_units(cfg.interval_max_ms);
     params.latency = cfg.latency;
     params.supervision_timeout = cast(ushort)(cfg.timeout_ms / 10); // units of 10ms
     params.min_ce_len = 0;
     params.max_ce_len = 0;
 
     atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)1);
-    if (ble_gap_connect(0, &addr, 30_000, &params, &gap_event_trampoline, null) != 0)
+    int rc = ble_gap_connect(0, &addr, 30_000, &params, &gap_event_trampoline, null);
+    if (rc != 0)
     {
+        log_error("ble", "could not submit connection request, NimBLE status=", rc);
         atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+        request_scan_resume();
         return false;
     }
     return true;
@@ -176,7 +248,10 @@ void ble_hw_connect_cancel(uint port)
 {
     // A successful cancel completes through BLE_GAP_EVENT_CONNECT; a rejected cancel has no callback.
     if (ble_gap_conn_cancel() != 0)
+    {
         atomicStore!(MemoryOrder.release)(_pending_connect, cast(ubyte)0);
+        request_scan_resume();
+    }
 }
 
 bool ble_hw_disconnect(uint port, BLEConn conn)
@@ -253,15 +328,35 @@ bool ble_hw_gatt_subscribe(uint port, BLEConn conn, ushort handle, bool enable)
     if (s is null)
         return false;
 
-    // find CCCD handle (handle + 1 by convention for standard GATT)
-    ushort cccd_handle = cast(ushort)(handle + 1);
+    ushort cccd_handle;
+    ushort properties;
+    foreach (ref c; s.chars[0 .. s.num_chars])
+        if (c.handle == handle)
+        {
+            cccd_handle = c.cccd_handle;
+            properties = c.properties;
+            break;
+        }
+    if (cccd_handle == 0)
+        return false;
 
     ubyte[2] cccd_value;
     if (enable)
-        cccd_value[0] = 0x01; // enable notifications
+    {
+        if ((properties & GattCharProps.notify) != 0)
+            cccd_value[0] = 0x01;
+        else if ((properties & GattCharProps.indicate) != 0)
+            cccd_value[0] = 0x02;
+        else
+            return false;
+    }
 
-    if (ble_gattc_write_flat(s.nimble_handle, cccd_handle, cccd_value.ptr, 2, null, null) != 0)
+    int rc = ble_gattc_write_flat(s.nimble_handle, cccd_handle, cccd_value.ptr, 2, null, null);
+    if (rc != 0)
+    {
+        log_error("ble", "could not write CCCD ", cccd_handle, " for handle ", handle, ", NimBLE status=", rc);
         return false;
+    }
     return true;
 }
 
@@ -289,6 +384,14 @@ byte ble_hw_get_rssi(uint port, BLEConn conn)
     return rssi;
 }
 
+ushort ble_hw_get_mtu(uint port, BLEConn conn)
+{
+    auto s = find_session(conn.id);
+    if (s is null)
+        return 0;
+    return ble_att_mtu(s.nimble_handle);
+}
+
 // --- Callbacks ---
 
 void ble_hw_set_scan_callback(uint port, BLEScanCallback cb) { _scan_cb = cb; }
@@ -306,6 +409,7 @@ bool ble_hw_service(uint port, size_t budget)
 {
     if (port >= num_ble)
         return false;
+    resume_scan_if_needed();
     if (_servicing)
         return queues_pending();
 
@@ -373,6 +477,7 @@ uint ble_hw_take_event_drops(uint port)
 private:
 
 enum int ESP_OK = 0;
+enum int BLE_HS_EALREADY = 2;
 enum max_sessions = 4;
 enum max_chars_per_session = 32;
 enum scan_queue_capacity = 16;
@@ -386,6 +491,8 @@ enum default_service_budget = 32;
 struct SessionCharInfo
 {
     ushort handle;
+    ushort def_handle;
+    ushort svc_end;
     ushort cccd_handle;
     GUID service_uuid;
     GUID char_uuid;
@@ -505,6 +612,7 @@ struct ControlEvent
     ControlEventKind kind;
     ubyte conn_id;
     BLEError error;
+    int status;
 }
 
 void dispatch_scan(BLE ble, ref const ScanEvent scan)
@@ -522,6 +630,8 @@ void dispatch_control(BLE ble, ref const ControlEvent control)
                 _conn_cb(ble, BLEConn(control.conn_id), true, BLEError.none);
             break;
         case ControlEventKind.connect_failed:
+            if (control.status != 0)
+                log_error("ble", "connection failed, NimBLE status=", control.status);
             if (_conn_cb !is null)
                 _conn_cb(ble, BLEConn(control.conn_id), false, control.error);
             break;
@@ -588,7 +698,12 @@ void dispatch_notification(BLE ble, ref const NotifyEvent notification)
 __gshared bool _opened;
 __gshared bool _faulted;
 shared ubyte _pending_connect;
+shared ubyte _scan_requested;
+shared ubyte _scan_restart;
 __gshared ubyte _next_conn_id;
+__gshared BLEScanConfig _scan_config;
+__gshared FixedTimer!1000 _scan_retry_timer;
+__gshared bool _scan_retry_pending;
 
 __gshared Session[max_sessions] _sessions;
 
@@ -721,20 +836,21 @@ bool queues_pending()
     return _have_scan || _have_control || _have_gatt || _have_notification || !_scan_queue.empty || !_control_queue.empty || !_gatt_queue.empty || !_notify_queue.empty;
 }
 
-bool push_control(ControlEventKind kind, ubyte conn_id, BLEError error = BLEError.none)
+bool push_control(ControlEventKind kind, ubyte conn_id, BLEError error = BLEError.none, int status = 0)
 {
     ControlEvent event;
     event.sequence = next_event_sequence();
     event.kind = kind;
     event.conn_id = conn_id;
     event.error = error;
+    event.status = status;
     if (_control_queue.enqueue(event))
         return true;
     count_event_drop();
     return false;
 }
 
-enum DiscoverPhase : ubyte { idle, services, chars, complete }
+enum DiscoverPhase : ubyte { idle, services, chars, descriptors, complete }
 shared DiscoverPhase _discover_phase;
 __gshared ubyte _discovering_conn;
 __gshared bool _discovery_overflow;
@@ -743,6 +859,7 @@ __gshared bool _discovery_overflow;
 __gshared ble_gatt_svc[16] _discovered_svcs;
 __gshared ubyte _num_discovered_svcs;
 __gshared ubyte _current_svc_idx;
+__gshared ubyte _current_chr_idx;
 __gshared GUID _current_svc_uuid;
 
 void finish_discovery(bool success)
@@ -803,20 +920,28 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                 auto s = alloc_session(event.connect.conn_handle);
                 if (s !is null)
                 {
-                    if (!push_control(ControlEventKind.connected, s.id))
-                    {
-                        atomicStore!(MemoryOrder.release)(s.state, SessionState.unannounced);
-                        ble_gap_terminate(event.connect.conn_handle, 0x13);
-                    }
+                    // Exchange MTU before announcing.
+                    atomicStore!(MemoryOrder.release)(s.state, SessionState.unannounced);
+                    if (ble_gattc_exchange_mtu(event.connect.conn_handle, &mtu_exchange_cb, null) != 0)
+                        announce_connection(s);
                 }
                 else
                 {
                     push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.internal);
                     ble_gap_terminate(event.connect.conn_handle, 0x13);
                 }
+                request_scan_resume();
             }
             else
-                push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.timeout);
+            {
+                push_control(ControlEventKind.connect_failed, ubyte.max, BLEError.timeout, event.connect.status);
+                request_scan_resume();
+            }
+            signal_wake();
+            return 0;
+
+        case BLE_GAP_EVENT_DISC_COMPLETE:
+            request_scan_resume();
             signal_wake();
             return 0;
 
@@ -831,6 +956,7 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                     atomicStore!(MemoryOrder.release)(s.state, SessionState.disconnecting);
                 else
                     atomicStore!(MemoryOrder.release)(s.state, SessionState.inactive);
+                request_scan_resume();
             }
             signal_wake();
             return 0;
@@ -869,6 +995,26 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
 }
 
 // --- GATT service discovery callback (NimBLE task) ---
+
+// The 23-byte default is usable.
+extern(C) int mtu_exchange_cb(ushort conn_handle, const(ble_gatt_error)*, ushort, void*) nothrow @nogc
+{
+    auto s = find_session_by_nimble(conn_handle);
+    if (s !is null && atomicLoad!(MemoryOrder.acquire)(s.state) == SessionState.unannounced)
+        announce_connection(s);
+    signal_wake();
+    return 0;
+}
+
+void announce_connection(Session* session) nothrow @nogc
+{
+    atomicStore!(MemoryOrder.release)(session.state, SessionState.active);
+    if (!push_control(ControlEventKind.connected, session.id))
+    {
+        atomicStore!(MemoryOrder.release)(session.state, SessionState.unannounced);
+        ble_gap_terminate(session.nimble_handle, 0x13);
+    }
+}
 
 extern(C) int svc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, const(ble_gatt_svc)* service, void*) nothrow @nogc
 {
@@ -913,8 +1059,8 @@ int discover_next_svc_chars(ushort conn_handle) nothrow @nogc
         return 0;
     }
 
-    finish_discovery(true);
-    return 0;
+    _current_chr_idx = 0;
+    return discover_next_chr_descriptors(conn_handle);
 }
 
 // --- GATT characteristic discovery callback (NimBLE task) ---
@@ -928,7 +1074,9 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, 
         {
             auto ci = &s.chars[s.num_chars++];
             ci.handle = chr.val_handle;
-            ci.cccd_handle = 0; // TODO: discover descriptors for CCCD
+            ci.def_handle = chr.def_handle;
+            ci.svc_end = _discovered_svcs[_current_svc_idx].end_handle;
+            ci.cccd_handle = 0;
             ci.service_uuid = _current_svc_uuid;
             ci.char_uuid = nimble_uuid_to_guid(&chr.uuid);
             ci.properties = chr.properties;
@@ -947,6 +1095,68 @@ extern(C) int chr_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, 
 
     _current_svc_idx++;
     return discover_next_svc_chars(conn_handle);
+}
+
+// NimBLE associates descriptors with the requested start handle.
+int discover_next_chr_descriptors(ushort conn_handle) nothrow @nogc
+{
+    auto s = find_session_by_nimble(conn_handle);
+    if (s is null)
+    {
+        finish_discovery(false);
+        return 0;
+    }
+
+    while (_current_chr_idx < s.num_chars)
+    {
+        auto c = &s.chars[_current_chr_idx];
+        ushort end = c.svc_end;
+        if (_current_chr_idx + 1 < s.num_chars && s.chars[_current_chr_idx + 1].svc_end == c.svc_end)
+            end = cast(ushort)(s.chars[_current_chr_idx + 1].def_handle - 1);
+        if (end <= c.handle)
+        {
+            ++_current_chr_idx;
+            continue;
+        }
+        atomicStore!(MemoryOrder.release)(_discover_phase, DiscoverPhase.descriptors);
+
+        if (ble_gattc_disc_all_dscs(conn_handle, c.handle, end, &dsc_discover_cb, null) == 0)
+            return 0;
+
+        finish_discovery(false);
+        return 0;
+    }
+
+    finish_discovery(true);
+    return 0;
+}
+
+extern(C) int dsc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, ushort chr_val_handle, const(ble_gatt_dsc)* dsc, void*) nothrow @nogc
+{
+    if (error !is null && error.status == 0 && dsc !is null)
+    {
+        if (dsc.uuid.u.type == 16 && dsc.uuid.u16.value == 0x2902)
+        {
+            auto s = find_session_by_nimble(conn_handle);
+            if (s !is null)
+                foreach (ref c; s.chars[0 .. s.num_chars])
+                    if (c.handle == chr_val_handle)
+                    {
+                        c.cccd_handle = dsc.handle;
+                        break;
+                    }
+        }
+        return 0;
+    }
+
+    if (error is null || error.status != BLE_HS_EDONE)
+    {
+        finish_discovery(false);
+        return 0;
+    }
+
+    ++_current_chr_idx;
+    return discover_next_chr_descriptors(conn_handle);
 }
 
 // --- GATT read callback (NimBLE task) ---
@@ -1183,6 +1393,12 @@ struct ble_gatt_chr
     ble_uuid_any uuid;
 }
 
+struct ble_gatt_dsc
+{
+    ushort handle;
+    ble_uuid_any uuid;
+}
+
 struct ble_gatt_attr
 {
     ushort handle;
@@ -1209,8 +1425,12 @@ enum : ubyte
     BLE_GAP_EVENT_CONNECT       = 0,
     BLE_GAP_EVENT_DISCONNECT    = 1,
     BLE_GAP_EVENT_DISC          = 7,
+    BLE_GAP_EVENT_DISC_COMPLETE = 8,
     BLE_GAP_EVENT_NOTIFY_RX     = 12,
 }
+
+// Zero means 10.24s, not forever.
+enum int BLE_HS_FOREVER = int.max;
 
 // C shim functions
 extern(C) nothrow @nogc
@@ -1224,6 +1444,7 @@ extern(C) nothrow @nogc
 {
     int ble_gap_disc(ubyte own_addr_type, int duration_ms, const(ble_gap_disc_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_disc_cancel();
+    int ble_gap_disc_active();
     int ble_gap_connect(ubyte own_addr_type, const(ble_addr_t)* peer_addr, int duration_ms, const(ble_gap_conn_params)* params, int function(ble_gap_event*, void*) cb, void* cb_arg);
     int ble_gap_conn_cancel();
     int ble_gap_terminate(ushort conn_handle, ubyte hci_reason);
@@ -1236,9 +1457,13 @@ extern(C) nothrow @nogc
 
     int ble_gattc_disc_all_svcs(ushort conn_handle, int function(ushort, const(ble_gatt_error)*, const(ble_gatt_svc)*, void*) cb, void* cb_arg);
     int ble_gattc_disc_all_chrs(ushort conn_handle, ushort start_handle, ushort end_handle, int function(ushort, const(ble_gatt_error)*, const(ble_gatt_chr)*, void*) cb, void* cb_arg);
+    int ble_gattc_disc_all_dscs(ushort conn_handle, ushort start_handle, ushort end_handle, int function(ushort, const(ble_gatt_error)*, ushort, const(ble_gatt_dsc)*, void*) cb, void* cb_arg);
     int ble_gattc_read(ushort conn_handle, ushort attr_handle, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_no_rsp_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len);
+    int ble_gattc_exchange_mtu(ushort conn_handle, int function(ushort, const(ble_gatt_error)*, ushort, void*) cb, void* cb_arg);
+
+    ushort ble_att_mtu(ushort conn_handle);
 
     int ble_hs_id_infer_auto(int privacy, ubyte* out_addr_type);
     int ble_hs_id_copy_addr(ubyte addr_type, ubyte* out_addr, int* out_is_nrpa);

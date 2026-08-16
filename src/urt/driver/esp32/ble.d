@@ -418,6 +418,18 @@ byte ble_hw_get_rssi(uint port, BLEConn conn)
     return rssi;
 }
 
+// The MTU the link actually negotiated, which the connect path exchanges for before it announces
+// the session. Callers emulating an ATT server must answer exchange_mtu_req with this and never a
+// constant: an overstated MTU makes the client emit write commands that cannot be split, and a
+// write command too long for one PDU is dropped without any error.
+ushort ble_hw_get_mtu(uint port, BLEConn conn)
+{
+    auto s = find_session(conn.id);
+    if (s is null)
+        return 0;
+    return ble_att_mtu(s.nimble_handle);
+}
+
 // --- Callbacks ---
 
 void ble_hw_set_scan_callback(uint port, BLEScanCallback cb) { _scan_cb = cb; }
@@ -956,11 +968,14 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
                 auto s = alloc_session(event.connect.conn_handle);
                 if (s !is null)
                 {
-                    if (!push_control(ControlEventKind.connected, s.id))
-                    {
-                        atomicStore!(MemoryOrder.release)(s.state, SessionState.unannounced);
-                        ble_gap_terminate(event.connect.conn_handle, 0x13);
-                    }
+                    // NimBLE leaves a central at the 23 byte default until something asks for more,
+                    // and the emulated ATT server answers exchange_mtu_req straight out of
+                    // ble_att_mtu() before it discovers anything. Announcing the link before the
+                    // real exchange settles reports a default the link never negotiated, and every
+                    // write command bigger than one PDU is silently dropped.
+                    atomicStore!(MemoryOrder.release)(s.state, SessionState.unannounced);
+                    if (ble_gattc_exchange_mtu(event.connect.conn_handle, &mtu_exchange_cb, null) != 0)
+                        announce_connection(s);
                 }
                 else
                 {
@@ -1040,6 +1055,27 @@ extern(C) int gap_event_trampoline(ble_gap_event* event, void*) nothrow @nogc
 }
 
 // --- GATT service discovery callback (NimBLE task) ---
+
+// A refused or failed exchange is not fatal: the link keeps the 23 byte default, which still
+// carries short writes. Either way the MTU has settled, so the link can be announced.
+extern(C) int mtu_exchange_cb(ushort conn_handle, const(ble_gatt_error)*, ushort, void*) nothrow @nogc
+{
+    auto s = find_session_by_nimble(conn_handle);
+    if (s !is null && atomicLoad!(MemoryOrder.acquire)(s.state) == SessionState.unannounced)
+        announce_connection(s);
+    signal_wake();
+    return 0;
+}
+
+void announce_connection(Session* session) nothrow @nogc
+{
+    atomicStore!(MemoryOrder.release)(session.state, SessionState.active);
+    if (!push_control(ControlEventKind.connected, session.id))
+    {
+        atomicStore!(MemoryOrder.release)(session.state, SessionState.unannounced);
+        ble_gap_terminate(session.nimble_handle, 0x13);
+    }
+}
 
 extern(C) int svc_discover_cb(ushort conn_handle, const(ble_gatt_error)* error, const(ble_gatt_svc)* service, void*) nothrow @nogc
 {
@@ -1488,6 +1524,9 @@ extern(C) nothrow @nogc
     int ble_gattc_read(ushort conn_handle, ushort attr_handle, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len, int function(ushort, const(ble_gatt_error)*, ble_gatt_attr*, void*) cb, void* cb_arg);
     int ble_gattc_write_no_rsp_flat(ushort conn_handle, ushort attr_handle, const(void)* data, ushort data_len);
+    int ble_gattc_exchange_mtu(ushort conn_handle, int function(ushort, const(ble_gatt_error)*, ushort, void*) cb, void* cb_arg);
+
+    ushort ble_att_mtu(ushort conn_handle);
 
     int ble_hs_id_infer_auto(int privacy, ubyte* out_addr_type);
     int ble_hs_id_copy_addr(ubyte addr_type, ubyte* out_addr, int* out_is_nrpa);

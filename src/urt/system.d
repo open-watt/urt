@@ -288,6 +288,23 @@ uint get_cpu_load()
     return cpu_time * 100 / total_time;
 }
 
+// get_cpu_load() averages the whole ring. This reports the quietest and busiest single bucket
+// in it, so a burst that saturates one ~67ms slice shows through instead of being averaged flat.
+void get_cpu_load_range(out uint low, out uint high)
+{
+    low = 100;
+    for (uint i = 0; i < cpu_counter_buckets; i++)
+    {
+        if (i == g_bucket)      // still filling, so not yet a whole slice
+            continue;
+        uint load = (cpu_bucket_len - g_cpu_time[i]) * 100 / cpu_bucket_len;
+        if (load < low)
+            low = load;
+        if (load > high)
+            high = load;
+    }
+}
+
 unittest
 {
     SystemInfo info = get_sysinfo();

@@ -192,8 +192,8 @@ nothrow @nogc:
             timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
             long add_ns = timeout.as!"nsecs";
-            ts.tv_sec  += add_ns / 1_000_000_000;
-            ts.tv_nsec += add_ns % 1_000_000_000;
+            ts.tv_sec  += cast(time_t)(add_ns / 1_000_000_000);
+            ts.tv_nsec += cast(typeof(ts.tv_nsec))(add_ns % 1_000_000_000);
             if (ts.tv_nsec >= 1_000_000_000)
             {
                 ts.tv_sec  += 1;
@@ -350,13 +350,5 @@ else version (linux)
         bool flag;
     }
 
-    alias time_t = long;
-    struct timespec
-    {
-        time_t tv_sec;
-        long   tv_nsec;
-    }
-    alias clockid_t = int;
-    enum CLOCK_REALTIME = 0;
-    int clock_gettime(clockid_t, timespec*);
+    import urt.internal.sys.posix : timespec, time_t, clock_gettime, CLOCK_REALTIME;
 }

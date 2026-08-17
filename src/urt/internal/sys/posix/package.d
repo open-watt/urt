@@ -9,10 +9,18 @@ extern(C) nothrow @nogc:
 
 // ── types ──
 
+// X86/ARM keep the classic 32-bit time ABI (glibc time64 is opt-in and unused);
+// riscv32 is natively time64, and 64-bit ABIs are 64-bit throughout
+version (X86)      version = Time32;
+else version (ARM) version = Time32;
+
 alias off_t = long;
 alias mode_t = uint;
 alias ssize_t = ptrdiff_t;
-alias time_t = long;
+version (Time32)
+    alias time_t = int;
+else
+    alias time_t = long;
 alias clockid_t = int;
 alias blkcnt_t = long;
 alias dev_t = ulong;
@@ -315,7 +323,10 @@ pure int posix_memalign(void** memptr, size_t alignment, size_t size);
 struct timespec
 {
     time_t tv_sec;
-    long tv_nsec;
+    version (Time32)
+        int tv_nsec;
+    else
+        long tv_nsec;
 }
 
 struct tm

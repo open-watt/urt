@@ -49,6 +49,7 @@ version (BouffaloUnifiedAlloc):
 
 import urt.attribute : fast_data;
 import urt.mem.alloc : MemFlags;
+import urt.mem.pressure : note_pool_usage;
 import urt.sync.critical : Critical;
 
 @nogc nothrow:
@@ -61,6 +62,7 @@ enum has_exec     = false;
 enum has_retain   = false;
 enum has_memflags = true;
 enum account_usable_size = true;
+enum has_pool_usage = true;
 
 
 void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
@@ -424,6 +426,7 @@ void[] alloc_impl(size_t size, size_t alignment, MemFlags flags) nothrow @nogc
             _pools[allocated_in].used += block;
             if (_pools[allocated_in].used > _pools[allocated_in].peak_used)
                 _pools[allocated_in].peak_used = _pools[allocated_in].used;
+            note_pool_usage(allocated_in, _pools[allocated_in].used);
         }
     }
 
@@ -454,6 +457,7 @@ void[] realloc_impl(void[] mem, size_t new_size, size_t alignment, MemFlags flag
     owner.used = owner.used - old_block + new_block;
     if (owner.used > owner.peak_used)
         owner.peak_used = owner.used;
+    note_pool_usage(owner - _pools.ptr, owner.used);
     return p[0 .. new_size];
 }
 
@@ -465,6 +469,7 @@ void free_impl(void* ptr) nothrow @nogc
         return;
     owner.used -= tlsf_block_size(ptr);
     tlsf_free(owner.tlsf, ptr);
+    note_pool_usage(owner - _pools.ptr, owner.used);
 }
 
 size_t memsize_impl(void* ptr) nothrow @nogc

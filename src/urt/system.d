@@ -235,8 +235,8 @@ void count_system_load(MonoTime reference)
     enum shift = log2(cpu_bucket_len);
     enum uint offset_mask = cpu_bucket_len - 1;
 
-    ulong idle_from = (reference - MonoTime()).as!"nsecs";
-    ulong idle_to = (get_time() - MonoTime()).as!"nsecs";
+    ulong idle_from = (reference - MonoTime()).as!"usecs";
+    ulong idle_to = (get_time() - MonoTime()).as!"usecs";
 
     // Roll to where the idle span begins before crediting anything. The busy stretch since the
     // previous wake can itself cross a boundary, and the buckets it crossed hold no idle at
@@ -265,7 +265,7 @@ uint get_cpu_load()
             idle_time += g_cpu_time[i];
     enum total_time = cpu_bucket_len*(cpu_counter_buckets - 1);
     uint cpu_time = total_time - idle_time;
-    return cast(uint)(cpu_time*100 / total_time);
+    return cpu_time * 100 / total_time;
 }
 
 unittest
@@ -289,7 +289,11 @@ package:
 
 import urt.attribute : fast_data;
 
-enum uint cpu_bucket_len = 0x400_0000; // nanosecond buckets of ~67ms
+// Microsecond buckets of ~65ms. Nanoseconds put total_time near 1e9, so the percentage in
+// get_cpu_load needed 64-bit arithmetic to survive its own multiply; microseconds keep a whole
+// window inside 20 bits and leave the load calculation as 32-bit multiply and divide, which is
+// what the 32-bit targets want.
+enum uint cpu_bucket_len = 0x1_0000;
 enum cpu_counter_buckets = 16;
 
 __gshared @fast_data uint[16] g_cpu_time;

@@ -227,33 +227,34 @@ void set_system_idle_params(IdleParams params)
         static assert(0, "Not implemented");
 }
 
+// `reference` is when the loop went idle and the wake is now, so everything between the two
+// is idle and everything since the previous wake was busy.
 void count_system_load(MonoTime reference)
 {
-    MonoTime now = get_time();
-
-    size_t a = cast(size_t)(reference - MonoTime()).as!"nsecs";
-    size_t b = cast(size_t)(now - MonoTime()).as!"nsecs";
-
     import urt.util : log2;
     enum shift = log2(cpu_bucket_len);
-    size_t full_intervals = (b >> shift) - (a >> shift);
+    enum uint offset_mask = cpu_bucket_len - 1;
 
-    if (full_intervals == 0)
-        g_cpu_time[g_bucket] += b - a;
-    else
+    ulong idle_from = (reference - MonoTime()).as!"nsecs";
+    ulong idle_to = (get_time() - MonoTime()).as!"nsecs";
+
+    // Roll to where the idle span begins before crediting anything. The busy stretch since the
+    // previous wake can itself cross a boundary, and the buckets it crossed hold no idle at
+    // all; measuring the span from `reference` alone leaves the ring pointing wherever it was
+    // and dumps this idle into a bucket that has already closed, taking it over capacity.
+    roll_cpu_buckets(idle_from >> shift, 0);
+
+    uint from_offset = idle_from & offset_mask;
+    uint to_offset = idle_to & offset_mask;
+    if ((idle_to >> shift) == g_bucket_base)
     {
-        enum mask = cpu_counter_buckets - 1;
-        enum cpu_bucket_mask = cpu_bucket_len - 1;
-
-        if (full_intervals > cpu_counter_buckets)
-            full_intervals = cpu_counter_buckets;
-
-        g_cpu_time[g_bucket++] += cpu_bucket_len - (a & cpu_bucket_mask);
-        for (uint i = 1; i < full_intervals; i++)
-            g_cpu_time[g_bucket++ & mask] = cpu_bucket_len;
-        g_bucket = g_bucket & mask;
-        g_cpu_time[g_bucket] = b & cpu_bucket_mask;
+        g_cpu_time[g_bucket] += to_offset - from_offset;
+        return;
     }
+
+    g_cpu_time[g_bucket] += cpu_bucket_len - from_offset;
+    roll_cpu_buckets(idle_to >> shift, cpu_bucket_len);     // buckets lying wholly inside the span
+    g_cpu_time[g_bucket] = to_offset;
 }
 
 uint get_cpu_load()
@@ -293,6 +294,25 @@ enum cpu_counter_buckets = 16;
 
 __gshared @fast_data uint[16] g_cpu_time;
 __gshared @fast_data ubyte g_bucket = 0;
+// absolute bucket number sitting in g_bucket; 64 bits so it never wraps, and only ever
+// shifted and compared, so a 32-bit target pays nothing for the width
+__gshared @fast_data ulong g_bucket_base;
+
+// step the ring forward to absolute bucket `to`, writing `fill` into every bucket passed over
+void roll_cpu_buckets(ulong to, uint fill)
+{
+    ulong steps = to - g_bucket_base;
+    if (steps == 0)
+        return;
+    if (steps > cpu_counter_buckets)
+        steps = cpu_counter_buckets;
+    foreach (i; 0 .. steps)
+    {
+        g_bucket = (g_bucket + 1) & (cpu_counter_buckets - 1);
+        g_cpu_time[g_bucket] = fill;
+    }
+    g_bucket_base = to;
+}
 
 version (Bouffalo)
 {

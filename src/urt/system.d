@@ -251,30 +251,7 @@ void set_system_idle_params(IdleParams params)
 // is idle and everything since the previous wake was busy.
 void count_system_load(MonoTime reference)
 {
-    import urt.util : log2;
-    enum shift = log2(cpu_bucket_len);
-    enum uint offset_mask = cpu_bucket_len - 1;
-
-    ulong idle_from = (reference - MonoTime()).as!"usecs";
-    ulong idle_to = (get_time() - MonoTime()).as!"usecs";
-
-    // Roll to where the idle span begins before crediting anything. The busy stretch since the
-    // previous wake can itself cross a boundary, and the buckets it crossed hold no idle at
-    // all; measuring the span from `reference` alone leaves the ring pointing wherever it was
-    // and dumps this idle into a bucket that has already closed, taking it over capacity.
-    roll_cpu_buckets(idle_from >> shift, 0);
-
-    uint from_offset = idle_from & offset_mask;
-    uint to_offset = idle_to & offset_mask;
-    if ((idle_to >> shift) == g_bucket_base)
-    {
-        g_cpu_time[g_bucket] += to_offset - from_offset;
-        return;
-    }
-
-    g_cpu_time[g_bucket] += cpu_bucket_len - from_offset;
-    roll_cpu_buckets(idle_to >> shift, cpu_bucket_len);     // buckets lying wholly inside the span
-    g_cpu_time[g_bucket] = to_offset;
+    account_idle((reference - MonoTime()).as!"usecs", (get_time() - MonoTime()).as!"usecs");
 }
 
 uint get_cpu_load()
@@ -319,6 +296,58 @@ unittest
         writelnf("  {0}: {1}kb used / {2}kb total (peak {3}kb)",
             p.name, p.used / 1024, p.total / 1024, p.peak_used / 1024);
     }
+
+    // cpu load accounting, driven through account_idle so the timestamps are ours to choose
+    static void reset_load_ring()
+    {
+        g_cpu_time[] = 0;
+        g_bucket = 0;
+        g_bucket_base = 0;
+    }
+
+    // a 20Hz loop busy for a quarter of every period. The busy stretch crosses bucket
+    // boundaries of its own, which is what used to push buckets past their capacity.
+    reset_load_ring();
+    foreach (i; 0 .. 400)
+        account_idle(i * 50_000 + 12_500, i * 50_000 + 50_000);
+    foreach (c; g_cpu_time)
+        assert(c <= cpu_bucket_len, "a bucket cannot hold more idle than it is long");
+    uint load = get_cpu_load();
+    assert(load >= 23 && load <= 27, "a quarter busy should read as roughly 25%");
+
+    // fully busy and fully idle are the ends of the range
+    reset_load_ring();
+    foreach (i; 0 .. 400)
+        account_idle(i * 50_000 + 50_000, i * 50_000 + 50_000);
+    assert(get_cpu_load() == 100);
+    reset_load_ring();
+    foreach (i; 0 .. 400)
+        account_idle(i * 50_000, i * 50_000 + 50_000);
+    assert(get_cpu_load() == 0);
+
+    // the timestamps outrun a 32-bit microsecond counter after ~72 minutes, so the accounting
+    // has to keep working either side of that
+    reset_load_ring();
+    ulong base = (1UL << 32) - 5_000_000;
+    foreach (i; 0 .. 400)
+        account_idle(base + i * 50_000 + 12_500, base + i * 50_000 + 50_000);
+    load = get_cpu_load();
+    assert(load >= 23 && load <= 27, "the bucket number must not wrap with the 32-bit stamp");
+
+    // one saturated bucket inside an otherwise quiet second: the average hides it, the range
+    // is the whole reason this pair exists
+    reset_load_ring();
+    foreach (i; 0 .. 100)
+    {
+        bool burst = i >= 96;
+        account_idle(i * 50_000 + (burst ? 50_000 : 2_500), i * 50_000 + 50_000);
+    }
+    uint low, high;
+    get_cpu_load_range(low, high);
+    assert(get_cpu_load() < 30 && high > 70, "a saturated bucket must show in the range");
+    assert(low < 20, "the quiet buckets must still read quiet");
+
+    reset_load_ring();
 }
 
 
@@ -338,6 +367,32 @@ __gshared @fast_data ubyte g_bucket = 0;
 // absolute bucket number sitting in g_bucket; 64 bits so it never wraps, and only ever
 // shifted and compared, so a 32-bit target pays nothing for the width
 __gshared @fast_data ulong g_bucket_base;
+
+// Both stamps are microseconds since the monotonic epoch. Roll to where the idle span begins
+// before crediting anything: the busy stretch since the previous wake can itself cross a
+// boundary, and the buckets it crossed hold no idle at all. Measuring the span from `idle_from`
+// alone leaves the ring pointing wherever it was and dumps this idle into a bucket that closed
+// a while ago, taking it over capacity.
+void account_idle(ulong idle_from, ulong idle_to)
+{
+    import urt.util : log2;
+    enum shift = log2(cpu_bucket_len);
+    enum uint offset_mask = cpu_bucket_len - 1;
+
+    roll_cpu_buckets(idle_from >> shift, 0);
+
+    uint from_offset = idle_from & offset_mask;
+    uint to_offset = idle_to & offset_mask;
+    if ((idle_to >> shift) == g_bucket_base)
+    {
+        g_cpu_time[g_bucket] += to_offset - from_offset;
+        return;
+    }
+
+    g_cpu_time[g_bucket] += cpu_bucket_len - from_offset;
+    roll_cpu_buckets(idle_to >> shift, cpu_bucket_len);     // buckets lying wholly inside the span
+    g_cpu_time[g_bucket] = to_offset;
+}
 
 // step the ring forward to absolute bucket `to`, writing `fill` into every bucket passed over
 void roll_cpu_buckets(ulong to, uint fill)

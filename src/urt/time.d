@@ -995,7 +995,7 @@ MonoTime get_time()
     {
         timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
-        return MonoTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
+        return MonoTime(ts.tv_sec * 1_000_000_000L + ts.tv_nsec);
     }
     else version (Embedded)
     {
@@ -1022,7 +1022,7 @@ SysTime get_sys_time()
     {
         timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        return SysTime(ts.tv_sec * 1_000_000_000 + ts.tv_nsec);
+        return SysTime(ts.tv_sec * 1_000_000_000L + ts.tv_nsec);
     }
     else version (Embedded)
     {
@@ -1294,7 +1294,7 @@ package(urt) void init_clock()
         {
             clock_gettime(CLOCK_MONOTONIC, &mt);
             clock_gettime(CLOCK_REALTIME, &rt);
-            boot_time = min(boot_time, rt.tv_sec*1_000_000_000 + rt.tv_nsec - mt.tv_sec*1_000_000_000 - mt.tv_nsec);
+            boot_time = min(boot_time, rt.tv_sec*1_000_000_000L + rt.tv_nsec - mt.tv_sec*1_000_000_000L - mt.tv_nsec);
         }
         cast()sys_time_offset = boot_time;
         has_wall_time = true;

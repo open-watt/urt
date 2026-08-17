@@ -161,7 +161,7 @@ nothrow @nogc:
         flags = b ? Flags.True : Flags.False;
     }
 
-    this(I)(I i)
+    this(I)(const I i)
         if (is_some_int!I)
     {
         static if (is_signed_int!I)
@@ -207,9 +207,11 @@ nothrow @nogc:
             else if (i <= long.max)
                 flags |= Flags.Int64Flag;
         }
+        else
+            static assert(false, "no flags for integer type " ~ I.stringof);
     }
 
-    this(F)(F f)
+    this(F)(const F f)
         if (is_some_float!F)
     {
         import urt.math : float_is_integer;
@@ -1530,6 +1532,7 @@ package:
 unittest
 {
     import urt.inet;
+    import urt.meta : AliasSeq;
     import urt.si.quantity : Metres;
 
     // fabricate some variants
@@ -1560,6 +1563,16 @@ unittest
     assert(empty != "x");
     assert(Variant("x") == "x");
     assert(Variant("x") != "");
+
+    // qualified scalars must tag exactly like their mutable form
+    static foreach (T; AliasSeq!(byte, ubyte, short, ushort, int, uint, long, ulong, float, double))
+    {{
+        const T c = cast(T)42;
+        immutable T i = cast(T)42;
+        assert(Variant(c).isNumber && Variant(c).asLong == 42);
+        assert(Variant(i).isNumber && Variant(i).asLong == 42);
+        assert(Variant(c).flags == Variant(cast(T)42).flags);
+    }}
 }
 
 

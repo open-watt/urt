@@ -1,5 +1,6 @@
 module urt.system;
 
+import urt.mem.pressure : MaxUsagePools, sample_pool_usage;
 import urt.platform;
 import urt.processor;
 import urt.time;
@@ -92,9 +93,12 @@ struct MemoryPool
     ulong used;         // currently allocated
     ulong peak_used;    // high-water mark of used (0 if unavailable)
     ulong largest_free; // largest contiguous allocatable block (0 if unknown)
+    ulong low;          // interval watermarks; only sample_memory_watermarks() fills these
+    ulong high;
 }
 
 enum MaxMemoryPools = 4;
+static assert(MaxMemoryPools <= MaxUsagePools, "the allocator tracks fewer pools than sysinfo reports");
 
 struct SystemInfo
 {
@@ -201,6 +205,22 @@ SystemInfo get_sysinfo()
         r.uptime = get_app_time();
     }
     return r;
+}
+
+// The least and greatest usage the allocator saw between this call and the previous one, which
+// is where a transient spike or a creeping floor shows itself -- a once-a-second reading of
+// `used` walks straight past both. Reading re-arms the interval, so exactly one caller owns the
+// cadence. Where the allocator owns the pool outright (the embedded targets) the watermarks
+// follow `used`; elsewhere they follow urt's own heap total, which `used` does not report.
+void sample_memory_watermarks(ref SystemInfo info)
+{
+    foreach (i, ref p; info.pools)
+    {
+        size_t low, high;
+        sample_pool_usage(i, low, high);
+        p.low = low;
+        p.high = high;
+    }
 }
 
 void set_system_idle_params(IdleParams params)

@@ -9,31 +9,38 @@ version (Windows)
 
 debug
 {
-    enum DefaultStackSize = 64*1024;
-    enum GuardBand = 1024;
+    enum default_stack_size = 64*1024;
+    enum guard_band = 1024;
 }
 else
 {
-    enum DefaultStackSize = 16*1024;
-    enum GuardBand = 0;
+    enum default_stack_size = 16*1024;
+    enum guard_band = 0;
 }
 
-@nogc:
+nothrow @nogc:
 
+
+enum YieldResult : ubyte
+{
+    resumed,
+    aborted
+}
 
 extern(C++) class AwakenEvent
 {
 extern(D):
 nothrow @nogc:
-    bool abort;
     abstract bool ready() { return true; }
     void update() {}
 }
 
-alias FibreEntryFunc = void function(void*) @nogc;
-alias FibreEntryDelegate = void delegate() @nogc;
+alias FibreEntryFunc = void function(void*) nothrow @nogc;
+alias FibreEntryDelegate = void delegate() nothrow @nogc;
 alias ResumeHandler = void delegate() nothrow @nogc;
-alias YieldHandler = ResumeHandler function(ref Fibre yielding, AwakenEvent awakenEvent) nothrow @nogc;
+alias YieldHandler = ResumeHandler function(ref Fibre yielding, AwakenEvent awaken_event) nothrow @nogc;
+
+enum abort_yield_limit = 1000;
 
 struct Fibre
 {
@@ -43,79 +50,60 @@ nothrow @nogc:
     this(ref typeof(this)) @disable;    // disable copy
     this(typeof(this)) @disable;        // disable move
 
-    this(size_t stackSize)
+    this(size_t stack_size)
     {
-        if (!mainFibre)
-            mainFibre = co_active();
+        if (!main_fibre)
+            main_fibre = co_active();
 
         // TODO: i think it's a bug that this stuff isn't initialised!
         is_delegate = false;
-        abortRequested = false;
+        abort_requested = false;
         finished = true; // init in a state ready to be recycled...
         aborted = false;
+        abort_yields = 0;
 
-        static void fibreFunc() nothrow
+        static void fibre_func() nothrow
         {
-            import urt.system : abort;
-
-            auto thisFibre = cast(Fibre*)co_data();
+            auto this_fibre = cast(Fibre*)co_data();
             while (true)
             {
-                try {
-                    if (thisFibre.is_delegate)
-                    {
-                        FibreEntryDelegate dg;
-                        dg.ptr = thisFibre.userData;
-                        dg.funcptr = cast(void function() @nogc)thisFibre.fibreEntry;
-                        dg();
-                    }
-                    else
-                        thisFibre.fibreEntry(thisFibre.userData);
-                }
-                catch (AbortException e)
+                if (this_fibre.is_delegate)
                 {
-                    thisFibre.abortRequested = false;
-                    thisFibre.aborted = true;
+                    FibreEntryDelegate dg;
+                    dg.ptr = this_fibre.user_data;
+                    dg.funcptr = cast(void function() nothrow @nogc)this_fibre.fibre_entry;
+                    dg();
                 }
-                catch (Exception e)
-                {
-                    assert(false, "Unhandled exception!");
-                    abort();
-                }
-                catch (Throwable e)
-                {
-                    import urt.io;
-                    writef_to!(WriteTarget.stderr, true)("abort: {0}:{1} - {2}", e.file, e.line, e.msg);
-                    abort();
-                }
+                else
+                    this_fibre.fibre_entry(this_fibre.user_data);
 
-                thisFibre.finished = true;
+                this_fibre.finished = true;
 
                 // fibre is finished; we'll just yield immediately anytime it is awakened...
-                while (thisFibre.finished)
-                    co_switch(mainFibre);
+                while (this_fibre.finished)
+                    co_switch(main_fibre);
 
                 // fibre was recycled...
             }
         }
 
-        fibre = co_create(stackSize, &fibreFunc, &this);
+        fibre = co_create(stack_size, &fibre_func, &this);
     }
 
-    this(FibreEntryDelegate fibreEntry, YieldHandler yieldHandler, size_t stackSize = DefaultStackSize)
+    this(FibreEntryDelegate fibre_entry, YieldHandler yield_handler, size_t stack_size = default_stack_size)
     {
-        this(cast(FibreEntryFunc)fibreEntry.funcptr, yieldHandler, fibreEntry.ptr, stackSize);
+        this(cast(FibreEntryFunc)fibre_entry.funcptr, yield_handler, fibre_entry.ptr, stack_size);
 
         is_delegate = true;
     }
 
-    this(FibreEntryFunc fibreEntry, YieldHandler yieldHandler, void* userData = null, size_t stackSize = DefaultStackSize)
+    this(FibreEntryFunc fibre_entry, YieldHandler yield_handler, void* user_data = null, size_t stack_size = default_stack_size)
     {
-        this(stackSize);
+        this(stack_size);
 
-        this.fibreEntry = fibreEntry;
-        this.yieldHandler = yieldHandler;
-        this.userData = userData;
+        this.fibre_entry = fibre_entry;
+        this.yield_handler = yield_handler;
+        this.user_data = user_data;
 
         finished = false;
     }
@@ -140,96 +128,112 @@ nothrow @nogc:
 
     void abort()
     {
-        assert(co_active() == mainFibre, "Can't abort when active; use urt.fibre.abort() instead.");
+        assert(co_active() == main_fibre, "Can't abort the running fibre!");
 
-        // request abort and switch to the fibre
-        abortRequested = true;
+        if (finished)
+            return;
+
+        // every yield in the fibre returns `aborted` from here on, so it falls out through its own error paths
+        abort_requested = true;
+        aborted = true;
         co_switch(fibre);
+        abort_requested = false;
+
+        assert(finished, "Fibre did not return in response to abort!");
     }
 
-    void recycle(FibreEntryDelegate fibreEntry) pure
+    void recycle(FibreEntryDelegate fibre_entry) pure
     {
-        assert(isFinished(), "Can't recycle a fibre that hasn't finished yet!");
+        assert(is_finished(), "Can't recycle a fibre that hasn't finished yet!");
 
-        this.fibreEntry = cast(FibreEntryFunc)fibreEntry.funcptr;
-        userData = fibreEntry.ptr;
+        this.fibre_entry = cast(FibreEntryFunc)fibre_entry.funcptr;
+        user_data = fibre_entry.ptr;
         is_delegate = true;
-        abortRequested = false;
+        abort_requested = false;
         finished = false;
         aborted = false;
+        abort_yields = 0;
     }
 
-    void recycle(FibreEntryFunc fibreEntry, void* userData = null) pure
+    void recycle(FibreEntryFunc fibre_entry, void* user_data = null) pure
     {
-        assert(isFinished(), "Can't recycle a fibre that hasn't finished yet!");
+        assert(is_finished(), "Can't recycle a fibre that hasn't finished yet!");
 
-        this.fibreEntry = fibreEntry;
-        this.userData = userData;
+        this.fibre_entry = fibre_entry;
+        this.user_data = user_data;
         is_delegate = false;
-        abortRequested = false;
+        abort_requested = false;
         finished = false;
         aborted = false;
+        abort_yields = 0;
     }
 
     void reset() pure
     {
-        assert(isFinished(), "Can't restart a fibre that hasn't finished yet!");
+        assert(is_finished(), "Can't restart a fibre that hasn't finished yet!");
 
-        abortRequested = false;
+        abort_requested = false;
         finished = false;
         aborted = false;
+        abort_yields = 0;
     }
 
-    bool isFinished() const pure
+    bool is_finished() const pure
         => finished;
 
-    bool wasAborted() const pure
+    bool was_aborted() const pure
         => aborted;
 
-    size_t stackSize() const pure
+    size_t stack_size() const pure
     {
         assert(fibre, "Fibre not created!");
         auto fdata = co_get_fibre_data(fibre);
         return fdata.stack_size;
     }
 
-    void* userData;
+    void* user_data;
 
 private:
-    FibreEntryFunc fibreEntry;
-    YieldHandler yieldHandler;
+    FibreEntryFunc fibre_entry;
+    YieldHandler yield_handler;
 
     cothread_t fibre;
     bool is_delegate;
-    bool abortRequested;
+    bool abort_requested;
     bool finished;
     bool aborted;
+    ushort abort_yields;
 }
 
 
-void yield(AwakenEvent ev = null)
+YieldResult yield(AwakenEvent ev = null)
 {
-    debug assert(isInFibre(), "Can't yield the main thread!");
+    debug assert(is_in_fibre(), "Can't yield the main thread!");
 
-    Fibre* thisFibre = &getFibre();
-    assert(!thisFibre.wasAborted(), "Can't yield during fibre abort!");
+    Fibre* this_fibre = &get_fibre();
+
+    // once abort is pending we never suspend again; the fibre must unwind itself and return
+    if (this_fibre.abort_requested)
+    {
+        assert(++this_fibre.abort_yields < abort_yield_limit, "Fibre is ignoring the abort request!");
+        return YieldResult.aborted;
+    }
 
     ResumeHandler resume = null;
-    if (thisFibre.yieldHandler)
-        resume = thisFibre.yieldHandler(*thisFibre, ev);
+    if (this_fibre.yield_handler)
+        resume = this_fibre.yield_handler(*this_fibre, ev);
 
-    co_switch(mainFibre);
+    co_switch(main_fibre);
 
     if (resume)
         resume();
 
-    if (thisFibre.abortRequested)
-        abort("Abort requested");
+    return this_fibre.abort_requested ? YieldResult.aborted : YieldResult.resumed;
 }
 
-void sleep(Duration dur)
+YieldResult sleep(Duration dur)
 {
-    debug assert(isInFibre(), "Can't sleep from the main thread!");
+    debug assert(is_in_fibre(), "Can't sleep from the main thread!");
 
     static class SleepEvent : AwakenEvent
     {
@@ -252,86 +256,99 @@ void sleep(Duration dur)
     import urt.util : InPlace;
     auto ev = InPlace!SleepEvent(dur);
 
-    yield(ev);
+    return yield(ev);
 }
 
-noreturn abort(string message)
-{
-    version (Windows)
-    {
-        version (UseWindowsFibreAPI) {} else
-            assert(false, "TODO: Windows raw fibres don't support exceptions (yet - needs more work!)");
-    }
+bool aborting()
+    => is_in_fibre() && get_fibre().abort_requested;
 
-    debug assert(isInFibre(), "Can't abort the main thread!");
-
-    if (!abortException)
-        abortException = defaultAllocator().allocT!AbortException(message);
-    else
-        abortException.msg = message;
-    throw abortException;
-}
-
-ref Fibre getFibre() nothrow
+ref Fibre get_fibre()
 {
     return *cast(Fibre*)co_data();
 }
 
-bool isInFibre() nothrow
+bool is_in_fibre()
 {
-    return co_active() != mainFibre;
+    // before the first fibre is created main_fibre is null, and co_active() never is
+    return main_fibre !is null && co_active() != main_fibre;
 }
 
 
 private:
 
-class AbortException : Exception
-{
-    this(string msg) nothrow @nogc
-    {
-        super(msg);
-    }
-}
-
-__gshared void* mainFibre = null;
-
-AbortException abortException;
+__gshared void* main_fibre = null;
 
 
 unittest
 {
-    __gshared x = 0;
+    // no fibre has necessarily been created yet in a fresh process; is_in_fibre() must say so
+    {
+        void* saved = main_fibre;
+        main_fibre = null;
+        assert(!is_in_fibre());
+        assert(!aborting());
+        main_fibre = saved;
+    }
 
-    static void entry(void* userData) @nogc
+    __gshared x = 0;
+    __gshared cleaned_up = false;
+
+    static void entry(void* user_data) nothrow @nogc
     {
         x = 1;
-        yield();
+        if (yield() == YieldResult.aborted)
+        {
+            cleaned_up = true;
+            return;
+        }
         assert(x == 2);
         x = 3;
         yield();
     }
 
-    static ResumeHandler yield(ref Fibre yielding, AwakenEvent awakenEvent) nothrow @nogc
+    static ResumeHandler yield_handler(ref Fibre yielding, AwakenEvent awaken_event) nothrow @nogc
     {
         x += 10;
         return null;
     }
 
-    auto f = Fibre(&entry, &yield);
+    auto f = Fibre(&entry, &yield_handler);
     f.resume();
     assert(x == 11);
     x = 2;
     f.resume();
     assert(x == 13);
     f.resume();
-    assert(f.isFinished);
+    assert(f.is_finished);
+    assert(!f.was_aborted);
+    assert(!cleaned_up);
 
     f.reset();
     f.resume();
     assert(x == 11);
     f.abort();
-    assert(f.isFinished);
-    assert(f.wasAborted);
+    assert(f.is_finished);
+    assert(f.was_aborted);
+    assert(cleaned_up);
+
+    // a fibre that yields again while unwinding never suspends; it runs straight out
+    __gshared uint yields_after_abort = 0;
+
+    static void stubborn(void* user_data) nothrow @nogc
+    {
+        yield();
+        while (yields_after_abort < 4)
+        {
+            if (yield() == YieldResult.aborted)
+                ++yields_after_abort;
+        }
+    }
+
+    auto g = Fibre(&stubborn, &yield_handler);
+    g.resume();
+    g.abort();
+    assert(g.is_finished && g.was_aborted);
+    assert(yields_after_abort == 4);
 }
 
 
@@ -358,7 +375,7 @@ else
     private inout(co_fibre_data)* co_get_fibre_data(inout cothread_t fibre) pure
         => cast(co_fibre_data*)fibre - 1;
 
-    align(16) size_t[SaveStateLen] co_active_buffer;
+    align(16) size_t[save_state_len] co_active_buffer;
     cothread_t co_active_handle = null;
 
     cothread_t co_active()
@@ -434,15 +451,15 @@ else
         // Bare metal:
         //  this code should be fine, check the guard-band from time to time...?
 
-        void[] memory = defaultAllocator().alloc(stack_size + co_fibre_data.sizeof + GuardBand, max(co_fibre_data.alignof, 16));
+        void[] memory = defaultAllocator().alloc(stack_size + co_fibre_data.sizeof + guard_band, max(co_fibre_data.alignof, 16));
         if(!memory)
             return null;
 
-        static if (GuardBand > 0)
+        static if (guard_band > 0)
         {
-            (cast(uint[])memory[0 .. GuardBand/2])[] = 0x0DF0ADBA;
-            (cast(uint[])memory[$-GuardBand/2 .. $])[] = 0x0DF0ADBA;
-            memory = memory[GuardBand/2 .. $-GuardBand/2];
+            (cast(uint[])memory[0 .. guard_band/2])[] = 0x0DF0ADBA;
+            (cast(uint[])memory[$-guard_band/2 .. $])[] = 0x0DF0ADBA;
+            memory = memory[guard_band/2 .. $-guard_band/2];
         }
 
         cothread_t co = co_derive(memory, entry, data);
@@ -457,8 +474,8 @@ else
         if (fdata.flags & 1)
         {
             void[] memory = (cast(void*)fdata)[0 .. co_fibre_data.sizeof + fdata.stack_size];
-            static if (GuardBand > 0)
-                memory = (memory.ptr - GuardBand/2)[0 .. memory.length + GuardBand];
+            static if (guard_band > 0)
+                memory = (memory.ptr - guard_band/2)[0 .. memory.length + guard_band];
             defaultAllocator().free(memory);
         }
     }
@@ -509,10 +526,10 @@ else
                 // TODO: we may want a version that omits the SSE stuff if we know SSE is not in use...
 
                 // State: rsp, rbp, rsi, rdi, rbx, r12-r15, [padd], xmm6-xmm15 (16-bytes each)
-                enum SaveStateLen = 30;
+                enum save_state_len = 30;
 
                 pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx)
                 {
                     asm nothrow @nogc
                     {
@@ -567,10 +584,10 @@ else
                 // SystemV has way less save-regs
 
                 // State: rsp, rbp, rbx, r12-r15
-                enum SaveStateLen = 7;
+                enum save_state_len = 7;
 
                 pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx)
                 {
                     asm nothrow @nogc
                     {
@@ -598,20 +615,20 @@ else
         else version (X86)
         {
             // State: esp, ebp, esi, edi, ebx
-            enum SaveStateLen = 5;
+            enum save_state_len = 5;
 
             // x86 cdecl and fastcall are the same for Windows and SystemV
             // DMD doesn't support `fastcall` though
             version (DigitalMars)
             {
                 pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx)
+                extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx)
                 {
                     asm nothrow @nogc
                     {
                         naked;
-                        mov ECX, [ESP + 4]; // load newCtx (no fastcall)
-                        mov EDX, [ESP + 8]; // load oldCtx
+                        mov ECX, [ESP + 4]; // load new_ctx (no fastcall)
+                        mov EDX, [ESP + 8]; // load old_ctx
                         mov [EDX], ESP;
                         mov ESP, [ECX];
                         pop EAX;
@@ -631,7 +648,7 @@ else
             {
                 pragma(inline, false)
                 @callingConvention("fastcc") // `fastcall` calling convention
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+                extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
                 {
                     asm nothrow @nogc
                     {
@@ -657,7 +674,7 @@ else
     else version (ARM)
     {
         // State: r4-r11, sp, lr
-        enum SaveStateLen = 10;
+        enum save_state_len = 10;
 
         void co_init_stack(void* base, void* top, coentry_t entry)
         {
@@ -669,7 +686,7 @@ else
         }
 
         pragma(inline, false)
-        extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+        extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
         {
             // thumb-mode: compiler is generating Thumb instructions (Cortex-M micros)
             // thumb2: ISA supports Thumb-2 (true for both Cortex-M4+ and Cortex-A7+)
@@ -701,7 +718,7 @@ else
                     `
 //                    bx lr ; TODO: why is this even here? the prior instruction loads `pc`... maybe it's a hint to the branch predictor?
                     : // no outputs
-                    : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
+                    : // "r"(new_ctx), "r"(old_ctx) // function is @naked, so the ABI takes care of this
                     : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "lr", "memory";
                 }
             }
@@ -723,7 +740,7 @@ else
                     bx r3
                     `
                     : // no outputs
-                    : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
+                    : // "r"(new_ctx), "r"(old_ctx) // function is @naked, so the ABI takes care of this
                     : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "lr", "memory";
                 }
             }
@@ -737,7 +754,7 @@ else
                     ldmia r0!, {r4-r11,sp,pc}
                     `
                     : // no outputs
-                    : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
+                    : // "r"(new_ctx), "r"(old_ctx) // function is @naked, so the ABI takes care of this
                     : "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "sp", "lr", "memory";
                 }
             }
@@ -746,7 +763,7 @@ else
     else version (AArch64)
     {
         // State: x19-x30 (x29=fp, x30=lr), sp, [padd], v8-v15 (128bits each)
-        enum SaveStateLen = 12 + 1 + 1 + 8*2;
+        enum save_state_len = 12 + 1 + 1 + 8*2;
 
         void co_init_stack(void* base, void* top, coentry_t entry)
         {
@@ -759,7 +776,7 @@ else
         }
 
         pragma(inline, false)
-        extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+        extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
         {
             asm nothrow @nogc
             {
@@ -791,7 +808,7 @@ else
                 br x30
                 `
                 : // no outputs
-                : // "r"(newCtx), "r"(oldCtx) // function is @naked, so the ABI takes care of this
+                : // "r"(new_ctx), "r"(old_ctx) // function is @naked, so the ABI takes care of this
                 : "x16", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory";
             }
         }
@@ -801,9 +818,9 @@ else
         // RISC-V 64-bit: callee-saved sp, ra, s0-s11 (14 regs × 8 bytes)
         // With D extension: also fs0-fs11 (12 regs × 8 bytes)
         version (D_HardFloat)
-            enum SaveStateLen = 26; // 14 integer + 12 FP
+            enum save_state_len = 26; // 14 integer + 12 FP
         else
-            enum SaveStateLen = 14;
+            enum save_state_len = 14;
 
         void co_init_stack(void* base, void* top, coentry_t entry)
         {
@@ -818,7 +835,7 @@ else
         version (D_HardFloat)
         {
             pragma(inline, false)
-            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+            extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
             {
                 asm nothrow @nogc
                 {
@@ -878,7 +895,7 @@ else
                     ret
                     `
                     : // no outputs
-                    : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                    : // a0=new_ctx, a1=old_ctx (@naked, ABI handles register assignment)
                     : "memory";
                 }
             }
@@ -886,7 +903,7 @@ else
         else
         {
             pragma(inline, false)
-            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+            extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
             {
                 asm nothrow @nogc
                 {
@@ -922,7 +939,7 @@ else
                     ret
                     `
                     : // no outputs
-                    : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                    : // a0=new_ctx, a1=old_ctx (@naked, ABI handles register assignment)
                     : "memory";
                 }
             }
@@ -930,13 +947,13 @@ else
     }
     else version (RISCV32)
     {
-        // SaveStateLen must be defined before co_active_buffer (line 444)
+        // save_state_len must be defined before co_active_buffer (line 444)
         version (RISCV32E)
-            enum SaveStateLen = 4;  // RV32E: sp, ra, s0-s1
+            enum save_state_len = 4;  // RV32E: sp, ra, s0-s1
         else version (D_HardFloat)
-            enum SaveStateLen = 26; // RV32I: 14 integer + 12 FP
+            enum save_state_len = 26; // RV32I: 14 integer + 12 FP
         else
-            enum SaveStateLen = 14; // RV32I: sp, ra, s0-s11
+            enum save_state_len = 14; // RV32I: sp, ra, s0-s11
 
         version (RISCV32E)
         {
@@ -951,7 +968,7 @@ else
             }
 
             pragma(inline, false)
-            extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+            extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
             {
                 asm nothrow @nogc
                 {
@@ -967,7 +984,7 @@ else
                     ret
                     `
                     : // no outputs
-                    : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                    : // a0=new_ctx, a1=old_ctx (@naked, ABI handles register assignment)
                     : "memory";
                 }
             }
@@ -988,7 +1005,7 @@ else
             version (D_HardFloat)
             {
                 pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+                extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
                 {
                     asm nothrow @nogc
                     {
@@ -1048,7 +1065,7 @@ else
                         ret
                         `
                         : // no outputs
-                        : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                        : // a0=new_ctx, a1=old_ctx (@naked, ABI handles register assignment)
                         : "memory";
                     }
                 }
@@ -1056,7 +1073,7 @@ else
             else
             {
                 pragma(inline, false)
-                extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+                extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
                 {
                     asm nothrow @nogc
                     {
@@ -1092,7 +1109,7 @@ else
                         ret
                         `
                         : // no outputs
-                        : // a0=newCtx, a1=oldCtx (@naked, ABI handles register assignment)
+                        : // a0=new_ctx, a1=old_ctx (@naked, ABI handles register assignment)
                         : "memory";
                     }
                 }
@@ -1103,7 +1120,7 @@ else
     {
         // Xtensa call0 ABI: callee-saved a0 (return addr), a1 (sp), a12-a15
         // TODO: if windowed ABI is used, need register window spill (entry/retw)
-        enum SaveStateLen = 6;
+        enum save_state_len = 6;
 
         void co_init_stack(void* base, void* top, coentry_t entry)
         {
@@ -1115,7 +1132,7 @@ else
         }
 
         pragma(inline, false)
-        extern(C) void co_swap(cothread_t newCtx, cothread_t oldCtx) @naked
+        extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
         {
             asm nothrow @nogc
             {
@@ -1135,7 +1152,7 @@ else
                 ret
                 `
                 : // no outputs
-                : // a2=newCtx, a3=oldCtx (@naked, call0 ABI)
+                : // a2=new_ctx, a3=old_ctx (@naked, call0 ABI)
                 : "memory";
             }
         }

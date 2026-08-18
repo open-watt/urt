@@ -27,7 +27,7 @@ import urt.mem       : memset;
 import urt.driver.bl618.irq   : irq_disable, irq_enable, set_interrupts;
 import urt.driver.bl618.timer : mtime_read, mtime_freq_hz;
 import urt.fibre              : Fibre, AwakenEvent, FibreEntryFunc, ResumeHandler,
-                                yield, isInFibre;
+                                yield, is_in_fibre;
 import urt.util               : InPlace;
 import urt.lifetime           : emplace;
 
@@ -188,14 +188,11 @@ int bl_ops_msleep(long ms)
 {
     if (ms <= 0)
         return 0;
-    if (isInFibre())
+    if (is_in_fibre())
     {
         import urt.fibre : fibre_sleep = sleep;
         import urt.time : msecs;
-        try
-            fibre_sleep(ms.msecs);
-        catch (Throwable)
-            assert(false, "wifi fibre msleep yield threw unexpectedly");
+        fibre_sleep(ms.msecs);
         return 0;
     }
     // Host context: no fibre to yield to. Honour the duration with a spin.
@@ -287,10 +284,10 @@ int  bl_ops_sem_take(BL_Sem_t h, uint ticks)
 
     while (s.count == 0)
     {
-        if (isInFibre())
+        if (is_in_fibre())
         {
             auto ev = InPlace!SemAwaken(s);
-            yield_nothrow(ev);
+            yield(ev);
         }
         else if (!wifi_pump_one_for_host())
             return -1;
@@ -336,10 +333,10 @@ uint bl_ops_event_group_wait(BL_EventGroup_t h, uint wait_bits, int clear_on_exi
             return got;
         }
 
-        if (isInFibre())
+        if (is_in_fibre())
         {
             auto ev = InPlace!EventGroupAwaken(e, wait_bits, waitAll);
-            yield_nothrow(ev);
+            yield(ev);
         }
         else if (!wifi_pump_one_for_host())
             return 0;
@@ -405,16 +402,6 @@ private extern (D) ResumeHandler wifi_yield_handler(ref Fibre yielding, AwakenEv
     return null;
 }
 
-/// nothrow wrapper around urt.fibre.yield. The only path yield() can
-/// throw on is fibre-abort, which we never trigger.
-private void yield_nothrow(AwakenEvent ev) nothrow @nogc
-{
-    try
-        yield(ev);
-    catch (Throwable)
-        assert(false, "wifi fibre yield threw unexpectedly");
-}
-
 /// Set to true once wifi_main has reached its event-loop entry (first
 /// call to bl_sleep_check). Used by wifi_hw_open to pump wifi_main
 /// through its init *before* writing A2E_TRIGGER -- otherwise vendor's
@@ -427,7 +414,7 @@ public __gshared bool wifi_main_in_main_loop;
 /// when the fibre is finished or blocked on an unsatisfied event.
 public void wifi_fibre_pump()
 {
-    if (_wifi_fibre is null || _wifi_fibre.isFinished)
+    if (_wifi_fibre is null || _wifi_fibre.is_finished)
         return;
     if (_wifi_pending_event !is null && !_wifi_pending_event.ready())
         return;
@@ -447,7 +434,7 @@ public void wifi_fibre_pump()
 /// and that's the bug to fix.
 private bool wifi_pump_one_for_host()
 {
-    if (_wifi_fibre is null || _wifi_fibre.isFinished)
+    if (_wifi_fibre is null || _wifi_fibre.is_finished)
         return false;
     wifi_fibre_pump();
     return true;
@@ -549,10 +536,10 @@ void bl_ops_task_wait(BL_TaskHandle_t h, uint ticks)
         return;
     while (t.notify_count == 0)
     {
-        if (isInFibre())
+        if (is_in_fibre())
         {
             auto ev = InPlace!TaskAwaken(t);
-            yield_nothrow(ev);
+            yield(ev);
         }
         else if (!wifi_pump_one_for_host())
             return;
@@ -620,10 +607,10 @@ int bl_ops_queue_recv(BL_MessageQueue_t h, void* item, uint len, uint ticks)
 
     while (q.count == 0)
     {
-        if (isInFibre())
+        if (is_in_fibre())
         {
             auto ev = InPlace!QueueAwaken(q);
-            yield_nothrow(ev);
+            yield(ev);
         }
         else if (!wifi_pump_one_for_host())
             return -1;

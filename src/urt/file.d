@@ -120,6 +120,7 @@ enum FileAttributeFlag
     Directory       = (1 << 0),
     Hidden          = (1 << 1),
     ReadOnly        = (1 << 2),
+    Symlink         = (1 << 3),
 }
 
 struct FileAttributes
@@ -158,6 +159,8 @@ struct DirEntry
 
     bool is_directory() const pure nothrow @nogc
         => (attributes & FileAttributeFlag.Directory) != 0;
+    bool is_symlink() const pure nothrow @nogc
+        => (attributes & FileAttributeFlag.Symlink) != 0;
 }
 
 struct Directory
@@ -667,6 +670,8 @@ bool read(ref Directory dir, out DirEntry entry)
                 entry.attributes |= FileAttributeFlag.Hidden;
             if (dir.find_data.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
                 entry.attributes |= FileAttributeFlag.ReadOnly;
+            if (dir.find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                entry.attributes |= FileAttributeFlag.Symlink;
             return true;
         }
     }
@@ -686,17 +691,28 @@ bool read(ref Directory dir, out DirEntry entry)
             if (name == "." || name == "..")
                 continue;
 
-            // d_type is not filled in by every filesystem, so the stat below
-            // settles both the size and the kind.
+            // d_type is not filled in by every filesystem, so the stat below settles
+            // both the size and the kind. It must not follow, or a link to a directory
+            // is indistinguishable from the directory itself.
             stat_t st;
-            if (fstatat(dirfd(dir.dir), e.d_name.ptr, &st, 0) == 0)
+            if (fstatat(dirfd(dir.dir), e.d_name.ptr, &st, AT_SYMLINK_NOFOLLOW) == 0)
             {
+                if (S_ISLNK(st.st_mode))
+                {
+                    entry.attributes |= FileAttributeFlag.Symlink;
+                    // the kind and size reported stay those of the target, as before
+                    stat_t target;
+                    if (fstatat(dirfd(dir.dir), e.d_name.ptr, &target, 0) == 0)
+                        st = target;
+                }
                 entry.size = st.st_size;
                 if (S_ISDIR(st.st_mode))
                     entry.attributes |= FileAttributeFlag.Directory;
             }
             else if (e.d_type == DT_DIR)
                 entry.attributes |= FileAttributeFlag.Directory;
+            else if (e.d_type == DT_LNK)
+                entry.attributes |= FileAttributeFlag.Symlink;
 
             if (name.length && name[0] == '.')
                 entry.attributes |= FileAttributeFlag.Hidden;

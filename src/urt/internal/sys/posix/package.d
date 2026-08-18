@@ -138,6 +138,7 @@ enum : ubyte
     DT_UNKNOWN = 0,
     DT_DIR     = 4,
     DT_REG     = 8,
+    DT_LNK     = 10,
 }
 
 version (Darwin)
@@ -292,6 +293,16 @@ bool S_ISREG(mode_t mode)
 
 bool S_ISDIR(mode_t mode)
     => (mode & 0xF000) == 0x4000;
+
+bool S_ISLNK(mode_t mode)
+    => (mode & 0xF000) == 0xA000;
+
+version (Darwin)
+    enum AT_SYMLINK_NOFOLLOW = 0x0020;
+else version (FreeBSD)
+    enum AT_SYMLINK_NOFOLLOW = 0x0200;
+else
+    enum AT_SYMLINK_NOFOLLOW = 0x0100;
 
 version (X86)
 {

@@ -319,8 +319,17 @@ ubyte wifi_hw_supported_bands(uint port) pure
 
 bool wifi_hw_get_mac(uint port, WifiVif vif, ref ubyte[6] mac)
 {
-    // ESP_MAC_WIFI_STA=0, ESP_MAC_WIFI_SOFTAP=1
+    // WIFI_IF_* and ESP_MAC_WIFI_* both run STA=0, AP=1; efuse is only the pre-start default
+    if (_opened)
+        return esp_wifi_get_mac(cast(int)vif, mac.ptr) == ESP_OK;
     return esp_read_mac(mac.ptr, cast(int)vif) == ESP_OK;
+}
+
+bool wifi_hw_set_mac(uint port, WifiVif vif, ref const ubyte[6] mac)
+{
+    if (port >= num_wifi || !_opened)
+        return false;
+    return esp_wifi_set_mac(cast(int)vif, mac.ptr) == ESP_OK;
 }
 
 ubyte wifi_hw_get_channel(uint port)
@@ -1045,5 +1054,7 @@ extern(C) nothrow @nogc
     int esp_wifi_get_bandwidth(int ifx, int* bw);
     int esp_wifi_get_bandwidths(int ifx, WifiBandwidths* bandwidths);
     int esp_read_mac(ubyte* mac, int type);
+    int esp_wifi_get_mac(int ifx, ubyte* mac);
+    int esp_wifi_set_mac(int ifx, const(ubyte)* mac);
     int esp_wifi_internal_tx(int ifx, void* buffer, ushort len);
 }

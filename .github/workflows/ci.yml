@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# A 20-job matrix saturates the runner pool on its own; superseded runs just queue behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/release' }}
+
 jobs:
   # ─── Host: build + run unittest exes on every supported host arch/OS ───
   host:

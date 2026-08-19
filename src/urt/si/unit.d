@@ -51,66 +51,13 @@ enum Kelvin = Unit(UnitType.Temperature);
 enum Candela = Unit(UnitType.Luma);
 enum Radian = Unit(UnitType.Angle);
 
-// non-si units
-enum Minute = ScaledUnit(Second, PrefixFactor.Minute);
-enum Hour = ScaledUnit(Second, PrefixFactor.Hour);
-enum Day = ScaledUnit(Second, ScaleFactor.Day);
-enum Inch = ScaledUnit(Metre, ScaleFactor.Inch);
-enum Foot = ScaledUnit(Metre, ScaleFactor.Foot);
-enum Mile = ScaledUnit(Metre, ScaleFactor.Mile);
-enum Ounce = ScaledUnit(Kilogram, ScaleFactor.Ounce);
-enum Pound = ScaledUnit(Kilogram, ScaleFactor.Pound);
-enum Celsius = ScaledUnit(Kelvin, BiasedScaleFactor.Celsius);
-enum Fahrenheit = ScaledUnit(Kelvin, BiasedScaleFactor.Fahrenheit);
-enum Cycle = ScaledUnit(Radian, PrefixFactor.Cycles);
-enum Degree = ScaledUnit(Radian, ScaleFactor.Degrees);
-
-// derived units
-enum Percent = ScaledUnit(Unit(), -2);
-enum Permille = ScaledUnit(Unit(), -3);
-enum Centimetre = ScaledUnit(Metre, -2);
-enum Millimetre = ScaledUnit(Metre, -3);
-enum Kilometre = ScaledUnit(Metre, 3);
+// unscaled derived units
 enum SquareMetre = Metre^^2;
 enum CubicMetre = Metre^^3;
-enum Litre = ScaledUnit(CubicMetre, -3);
-enum Gram = ScaledUnit(Kilogram, -3);
-enum Milligram = ScaledUnit(Kilogram, -6);
-enum Nanosecond = ScaledUnit(Second, -9);
-enum Hertz = Cycle / Second;
-enum Kilohertz = ScaledUnit(Hertz, SiPrefix.Kilo);
-enum Megahertz = ScaledUnit(Hertz, SiPrefix.Mega);
-enum Gigahertz = ScaledUnit(Hertz, SiPrefix.Giga);
 enum Newton = Kilogram * Metre / Second^^2;
 enum Pascal = Newton / Metre^^2;
-enum PSI = ScaledUnit(Pascal, ScaleFactor.PSI);
 enum Joule = Newton * Metre;
 enum Watt = Joule / Second;
-enum Kilowatt = ScaledUnit(Watt, 3);
-enum AmpereHour = ScaledUnit(Coulomb, PrefixFactor.Hour);
-enum WattHour = ScaledUnit(Joule, PrefixFactor.Hour);
-
-enum ScaledUnits : ScaledUnit
-{
-    @("m/s")
-    metre_per_second = ScaledUnit(Metre / Second),
-    @("m/h")
-    metre_per_hour = ScaledUnit(Metre / Second, PrefixFactor.Hour, true),
-    @("km/h", "kph")
-    kilometre_per_hour = ScaledUnit(ScaledUnit(Metre / Second, PrefixFactor.Hour, true), SiPrefix.Kilo),
-    @("rpm", "r/min", "rev/min")
-    revolutions_per_minute = ScaledUnit(Radian / Second, PrefixFactor.RPM),
-}
-
-// the canonical spelling is the first; the rest are accepted on input only
-template unit_spellings(alias member)
-{
-    enum unit_spellings = __traits(getAttributes, member);
-}
-
-enum KilowattHour = ScaledUnit(WattHour, SiPrefix.Kilo);
-enum MegawattHour = ScaledUnit(WattHour, SiPrefix.Mega);
-enum GigawattHour = ScaledUnit(WattHour, SiPrefix.Giga);
 enum Coulomb = Ampere * Second;
 enum Volt = Watt / Ampere;
 enum Ohm = Volt / Ampere;
@@ -121,6 +68,123 @@ enum Tesla = Weber / Metre^^2;
 enum Henry = Weber / Ampere;
 enum Lumen = Candela * Radian^^2;
 enum Lux = Lumen / Metre^^2;
+
+enum SiPrefixable;
+
+enum ScaledUnits : ScaledUnit
+{
+    @("min", "mins")
+    minute = ScaledUnit(Second, PrefixFactor.Minute),
+    @("hr", "h", "hrs")
+    hour = ScaledUnit(Second, PrefixFactor.Hour),
+    @("day", "days")
+    day = ScaledUnit(Second, ScaleFactor.Day),
+    @("in", "'")
+    inch = ScaledUnit(Metre, ScaleFactor.Inch),
+    @("ft", "\"")
+    foot = ScaledUnit(Metre, ScaleFactor.Foot),
+    @("mi")
+    mile = ScaledUnit(Metre, ScaleFactor.Mile),
+    @("oz")
+    ounce = ScaledUnit(Kilogram, ScaleFactor.Ounce),
+    @("lb")
+    pound = ScaledUnit(Kilogram, ScaleFactor.Pound),
+    @("°C")
+    celsius = ScaledUnit(Kelvin, BiasedScaleFactor.Celsius),
+    @("°F")
+    fahrenheit = ScaledUnit(Kelvin, BiasedScaleFactor.Fahrenheit),
+    @("cy")
+    cycle = ScaledUnit(Radian, PrefixFactor.Cycles),
+    @("°", "deg")
+    degree = ScaledUnit(Radian, ScaleFactor.Degrees),
+
+    @("%")
+    percent = ScaledUnit(Unit(), -2),
+    @("‰")
+    permille = ScaledUnit(Unit(), -3),
+    @("‱")
+    basis_point = ScaledUnit(Unit(), -4),
+    @("ppm")
+    parts_per_million = ScaledUnit(Unit(), -6),
+    @("cm")
+    centimetre = ScaledUnit(Metre, -2),
+    @("mm")
+    millimetre = ScaledUnit(Metre, -3),
+    @("km")
+    kilometre = ScaledUnit(Metre, 3),
+    @SiPrefixable @("l")
+    litre = ScaledUnit(CubicMetre, -3),
+    @SiPrefixable @("g")
+    gram = ScaledUnit(Kilogram, -3),
+    @("mg")
+    milligram = ScaledUnit(Kilogram, -6),
+    @("ns")
+    nanosecond = ScaledUnit(Second, -9),
+    @SiPrefixable @("Hz")
+    hertz = cycle / Second,
+    @("kHz")
+    kilohertz = ScaledUnit(hertz, SiPrefix.Kilo),
+    @("MHz")
+    megahertz = ScaledUnit(hertz, SiPrefix.Mega),
+    @("GHz")
+    gigahertz = ScaledUnit(hertz, SiPrefix.Giga),
+    @("psi")
+    psi = ScaledUnit(Pascal, ScaleFactor.PSI),
+    @("kW")
+    kilowatt = ScaledUnit(Watt, 3),
+    @SiPrefixable @("Ah")
+    ampere_hour = ScaledUnit(Coulomb, PrefixFactor.Hour),
+    @SiPrefixable @("Wh", "VAh", "varh")
+    watt_hour = ScaledUnit(Joule, PrefixFactor.Hour),
+    @("kWh")
+    kilowatt_hour = ScaledUnit(watt_hour, SiPrefix.Kilo),
+    @("MWh")
+    megawatt_hour = ScaledUnit(watt_hour, SiPrefix.Mega),
+    @("GWh")
+    gigawatt_hour = ScaledUnit(watt_hour, SiPrefix.Giga),
+
+    @("m/s")
+    metre_per_second = ScaledUnit(Metre / Second),
+    @("m/h")
+    metre_per_hour = ScaledUnit(Metre / Second, PrefixFactor.Hour, true),
+    @("km/h", "kph")
+    kilometre_per_hour = ScaledUnit(ScaledUnit(Metre / Second, PrefixFactor.Hour, true), SiPrefix.Kilo),
+    @("rpm", "r/min", "rev/min")
+    revolutions_per_minute = ScaledUnit(Radian / Second, PrefixFactor.RPM),
+}
+
+enum Minute = ScaledUnits.minute;
+enum Hour = ScaledUnits.hour;
+enum Day = ScaledUnits.day;
+enum Inch = ScaledUnits.inch;
+enum Foot = ScaledUnits.foot;
+enum Mile = ScaledUnits.mile;
+enum Ounce = ScaledUnits.ounce;
+enum Pound = ScaledUnits.pound;
+enum Celsius = ScaledUnits.celsius;
+enum Fahrenheit = ScaledUnits.fahrenheit;
+enum Cycle = ScaledUnits.cycle;
+enum Degree = ScaledUnits.degree;
+enum Percent = ScaledUnits.percent;
+enum Permille = ScaledUnits.permille;
+enum Centimetre = ScaledUnits.centimetre;
+enum Millimetre = ScaledUnits.millimetre;
+enum Kilometre = ScaledUnits.kilometre;
+enum Litre = ScaledUnits.litre;
+enum Gram = ScaledUnits.gram;
+enum Milligram = ScaledUnits.milligram;
+enum Nanosecond = ScaledUnits.nanosecond;
+enum Hertz = ScaledUnits.hertz;
+enum Kilohertz = ScaledUnits.kilohertz;
+enum Megahertz = ScaledUnits.megahertz;
+enum Gigahertz = ScaledUnits.gigahertz;
+enum PSI = ScaledUnits.psi;
+enum Kilowatt = ScaledUnits.kilowatt;
+enum AmpereHour = ScaledUnits.ampere_hour;
+enum WattHour = ScaledUnits.watt_hour;
+enum KilowattHour = ScaledUnits.kilowatt_hour;
+enum MegawattHour = ScaledUnits.megawatt_hour;
+enum GigawattHour = ScaledUnits.gigawatt_hour;
 
 
 enum UnitType : ubyte
@@ -485,8 +549,7 @@ nothrow:
     static uint encode_prefix_factor(PrefixFactor factor, bool inverse, int e) pure
     {
         debug assert(uint(e + 3) <= 6, "Prefix-factor exponent is outside the standard encoding");
-        return ((uint(e) & 7) << 29) | (uint(inverse) << 28) |
-               (uint(factor) << 26) | 0x02000000;
+        return ((uint(e) & 7) << 29) | (uint(inverse) << 28) | (uint(factor) << 26) | 0x02000000;
     }
 
     uint inverse_prefix_factor() const pure
@@ -818,19 +881,12 @@ nothrow:
             s = s[1 .. $];
         }
 
-        // A registered spelling must match the whole input; a prefix match would accept
-        // "km/hour" as "km/h".
-        static foreach (m; __traits(allMembers, ScaledUnits))
-        {{
-            foreach (spelling; unit_spellings!(__traits(getMember, ScaledUnits, m)))
-            {
-                if (s == spelling)
-                {
-                    this = __traits(getMember, ScaledUnits, m);
-                    return len;
-                }
-            }
-        }}
+        size_t spelling_index = find_scaled_unit_spelling(s);
+        if (spelling_index < g_unit_spellings.length)
+        {
+            this = scaled_unit_from_spelling(spelling_index);
+            return len;
+        }
 
         ScaledUnit r;
 
@@ -888,9 +944,9 @@ nothrow:
                     return -1;
                 pre_scale *= 10.0^^e;
             }
-            else if (const ScaledUnit* su = term[offset .. $] in noScaleUnitMap)
+            else if ((spelling_index = find_scaled_unit_spelling(term[offset .. $])) < g_unit_spellings.length)
             {
-                if (!combine(*su, invert ? -p : p))
+                if (!combine(scaled_unit_from_spelling(spelling_index), invert ? -p : p))
                     return -1;
                 pre_scale *= 10.0^^e;
             }
@@ -952,26 +1008,29 @@ nothrow:
                     if (!combine(ScaledUnit(*u, e), invert ? -p : p))
                         return -1;
                 }
-                else if (const ScaledUnit* su = term in scaledUnitMap)
+                else if ((spelling_index = find_scaled_unit_spelling(term, true)) < g_unit_spellings.length)
                 {
-                    if (!combine(ScaledUnit(su.unit, su.exp + e), invert ? -p : p))
-                        return -1;
-                }
-                else if (const ScaledUnit* su = term in noScaleUnitMapSI)
-                {
-                    int prefix = su.prefix_exp() + e / 3;
-                    if (su.isPrefixFactor() && e % 3 == 0 && uint(prefix + 3) <= 6)
+                    ScaledUnit su = scaled_unit_from_spelling(spelling_index);
+                    if (su.siScale())
                     {
-                        ScaledUnit prefixed = ScaledUnit(su.unit.pack |
-                            encode_prefix_factor(su.pf(), su.factor_inv(), prefix));
-                        if (!combine(prefixed, invert ? -p : p))
+                        if (!combine(ScaledUnit(su.unit, su.exp + e), invert ? -p : p))
                             return -1;
                     }
                     else
                     {
-                        if (!combine(*su, invert ? -p : p))
-                            return -1;
-                        pre_scale *= 10.0^^e;
+                        int prefix = su.prefix_exp() + e / 3;
+                        if (su.isPrefixFactor() && e % 3 == 0 && uint(prefix + 3) <= 6)
+                        {
+                            ScaledUnit prefixed = ScaledUnit(su.unit.pack | encode_prefix_factor(su.pf(), su.factor_inv(), prefix));
+                            if (!combine(prefixed, invert ? -p : p))
+                                return -1;
+                        }
+                        else
+                        {
+                            if (!combine(su, invert ? -p : p))
+                                return -1;
+                            pre_scale *= 10.0^^e;
+                        }
                     }
                 }
                 else
@@ -990,6 +1049,17 @@ nothrow:
     {
         assert(allow_unit_scale == true, "TODO: support for no-scale formatting (require pre-scale)");
         pre_scale = 1;
+
+        if (const(char)[] spelling = scaled_unit_spelling(this))
+        {
+            if (buffer.ptr)
+            {
+                if (buffer.length < spelling.length)
+                    return -1;
+                buffer[0 .. spelling.length] = spelling[];
+            }
+            return spelling.length;
+        }
 
         if (!unit.pack)
         {
@@ -1021,27 +1091,6 @@ nothrow:
         size_t len = 0;
         if (siScale)
         {
-            if (const string* name = this in scaledUnitNames)
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < name.length)
-                        return -1;
-                    buffer[0 .. name.length] = *name;
-                }
-                return name.length;
-            }
-            if (const(char)[] spelling = scaled_unit_spelling(this))
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < spelling.length)
-                        return -1;
-                    buffer[0 .. spelling.length] = spelling[];
-                }
-                return spelling.length;
-            }
-
             if (const string* name = unit in unitNames)
             {
                 const(char)[] spelling = *name;
@@ -1097,43 +1146,21 @@ nothrow:
         }
         else
         {
-            if (const string* name = this in scaledUnitNames)
+            if (const(char)[] spelling = scaled_unit_spelling(this ^^ -1))
             {
+                if (spelling.findFirst('/') < spelling.length || spelling.findFirst('*') < spelling.length)
+                    return -1;
                 if (buffer.ptr)
                 {
-                    if (buffer.length < len + name.length)
+                    if (buffer.length < 1 + spelling.length)
                         return -1;
-                    buffer[len .. len + name.length] = *name;
+                    buffer[0] = '/';
+                    buffer[1 .. 1 + spelling.length] = spelling[];
                 }
-                len += name.length;
-            }
-            else if (const(char)[] spelling = scaled_unit_spelling(this))
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < len + spelling.length)
-                        return -1;
-                    buffer[len .. len + spelling.length] = spelling[];
-                }
-                len += spelling.length;
-            }
-            else if (const string* name = (this ^^ -1) in scaledUnitNames)
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < len + 1 + name.length)
-                        return -1;
-                    buffer[len] = '/';
-                    buffer[len + 1 .. len + 1 + name.length] = *name;
-                }
-                len += 1 + name.length;
+                len = 1 + spelling.length;
             }
             else
-            {
-                // "/km/h" would not parse back, and a scale with no spelling cannot be
-                // synthesised from the dimension alone; refuse rather than emit a lie
                 return -1;
-            }
         }
         return len;
     }
@@ -1325,7 +1352,6 @@ unittest
         assert(t.parse_unit("g/s", ps) > 0);
         round_trip(t, "g/s");
     }
-    // a reciprocal whose spelling would not parse back is refused, not faked
     {
         char[64] b = void;
         assert((ScaledUnits.kilometre_per_hour^^-1).toString(b[], null, null) < 0);
@@ -1345,15 +1371,28 @@ unittest
     char[16] fmt_buf;
     assert((Hour^^-1).format_unit(fmt_buf[], pre) == 3 && fmt_buf[0..3] == "/hr" && pre == 1);
     assert((ScaledUnit(Second)^^-1).format_unit(fmt_buf[], pre) == 2 && fmt_buf[0..2] == "/s");
+
+    foreach (i, entry; g_unit_spellings)
+    {
+        const(char)[] spelling = scaled_unit_spelling_text(entry);
+        assert(find_scaled_unit_spelling(spelling) == i);
+        if (i)
+            assert(uni_compare(scaled_unit_spelling_text(g_unit_spellings[i - 1]), spelling) < 0);
+    }
+    foreach (i, unit; g_units)
+    {
+        size_t spelling_index = g_canonical_string[i];
+        assert(scaled_unit_from_spelling(spelling_index) == unit);
+        assert(scaled_unit_spelling(unit) == scaled_unit_spelling_text(g_unit_spellings[spelling_index]));
+    }
 }
 
 
 private:
 
+import urt.algorithm : binary_search, qsort;
 import urt.math : PI, fabs;
-
-bool valid_si_exp(long e) pure
-    => e >= -31 && e <= 31;
+import urt.string.uni : uni_compare;
 
 immutable byte[8] decodeExp = [ 1, 2, 3, 4, -1, -2, -3, -4 ];
 immutable ubyte[9] encodeExp = [ 7, 6, 5, 4, 0, 0, 1, 2, 3 ];
@@ -1432,14 +1471,166 @@ immutable double[8] biasedOffsets = [
     double.nan,
 ];
 
+struct ScaledUnitSpelling
+{
+    ushort spelling_offset;
+    ubyte unit_offset;
+    bool is_prefixable;
+}
+
+static assert(ScaledUnitSpelling.sizeof == 4);
+
+align(2) immutable char[packed_scaled_unit_spelling_strings.cache.length] g_spelling_strings = packed_scaled_unit_spelling_strings.cache;
+immutable ScaledUnit[sorted_scaled_units.length] g_units = sorted_scaled_units;
+immutable ScaledUnitSpelling[sorted_scaled_unit_spelling_specs.length] g_unit_spellings = scaled_unit_lookup_tables.spellings;
+immutable ubyte[sorted_scaled_units.length] g_canonical_string = scaled_unit_lookup_tables.canonical;
+
+enum ScaledUnitSpellingFlags : ubyte
+{
+    canonical = 1,
+    si_prefixable = 2,
+}
+
+struct ScaledUnitSpellingSpec
+{
+    ScaledUnit unit;
+    string spelling;
+    ubyte flags;
+}
+
+enum scaled_unit_spelling_count = () {
+    size_t count;
+    static foreach (name; __traits(allMembers, ScaledUnits))
+    {{
+        alias member = __traits(getMember, ScaledUnits, name);
+        static foreach (attribute; __traits(getAttributes, member))
+            static if (is(typeof(attribute) == string))
+                ++count;
+    }}
+    return count;
+}();
+
+enum sorted_scaled_unit_spelling_specs = () {
+    ScaledUnitSpellingSpec[scaled_unit_spelling_count] specs;
+    size_t index;
+    static foreach (name; __traits(allMembers, ScaledUnits))
+    {{
+        alias member = __traits(getMember, ScaledUnits, name);
+        bool si_prefixable;
+        static foreach (attribute; __traits(getAttributes, member))
+            static if (__traits(isSame, attribute, SiPrefixable))
+                si_prefixable = true;
+
+        bool canonical = true;
+        static foreach (attribute; __traits(getAttributes, member))
+        {
+            static if (is(typeof(attribute) == string))
+            {
+                specs[index++] = ScaledUnitSpellingSpec(member, attribute, (canonical ? ScaledUnitSpellingFlags.canonical : 0) | (si_prefixable ? ScaledUnitSpellingFlags.si_prefixable : 0));
+                canonical = false;
+            }
+        }
+    }}
+    specs.qsort!((ref a, ref b) => uni_compare(a.spelling, b.spelling));
+    foreach (i; 1 .. specs.length)
+        assert(specs[i - 1].spelling != specs[i].spelling, "Duplicate scaled unit spelling");
+    return specs;
+}();
+
+enum scaled_unit_spelling_texts = () {
+    string[sorted_scaled_unit_spelling_specs.length] spellings;
+    foreach (i, spec; sorted_scaled_unit_spelling_specs)
+        spellings[i] = spec.spelling;
+    return spellings;
+}();
+
+enum sorted_scaled_units = () {
+    ScaledUnit[__traits(allMembers, ScaledUnits).length] units;
+    static foreach (i, name; __traits(allMembers, ScaledUnits))
+        units[i] = __traits(getMember, ScaledUnits, name);
+    units.qsort!((ref a, ref b) => a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : 0);
+    foreach (i; 1 .. units.length)
+        assert(units[i - 1] != units[i], "Duplicate scaled unit value");
+    return units;
+}();
+
+static assert(sorted_scaled_unit_spelling_specs.length <= ubyte.max);
+static assert(sorted_scaled_units.length <= ubyte.max);
+
+enum packed_scaled_unit_spelling_strings = make_table!(scaled_unit_spelling_texts, false);
+
+struct ScaledUnitLookupTables
+{
+    ScaledUnitSpelling[sorted_scaled_unit_spelling_specs.length] spellings;
+    ubyte[sorted_scaled_units.length] canonical;
+}
+
+enum scaled_unit_lookup_tables = () {
+    ScaledUnitLookupTables tables;
+    tables.canonical[] = ubyte.max;
+    foreach (i, spec; sorted_scaled_unit_spelling_specs)
+    {
+        size_t spelling_offset = cast(size_t)packed_scaled_unit_spelling_strings.offsets[i] << packed_scaled_unit_spelling_strings.offset_shift;
+        assert(spelling_offset <= ushort.max);
+
+        size_t unit_offset = size_t.max;
+        foreach (j, unit; sorted_scaled_units)
+            if (unit == spec.unit)
+            {
+                unit_offset = j;
+                break;
+            }
+        assert(unit_offset != size_t.max);
+
+        tables.spellings[i] = ScaledUnitSpelling(cast(ushort)spelling_offset, cast(ubyte)unit_offset, (spec.flags & ScaledUnitSpellingFlags.si_prefixable) != 0);
+        if (spec.flags & ScaledUnitSpellingFlags.canonical)
+        {
+            assert(tables.canonical[unit_offset] == ubyte.max);
+            tables.canonical[unit_offset] = cast(ubyte)i;
+        }
+    }
+    foreach (index; tables.canonical)
+        assert(index != ubyte.max);
+    return tables;
+}();
+
+bool valid_si_exp(long e) pure
+    => e >= -31 && e <= 31;
+
+size_t find_scaled_unit_spelling(const(char)[] spelling, bool require_si_prefix = false) pure nothrow @nogc
+{
+    size_t index = binary_search!scaled_unit_spelling_compare(g_unit_spellings[], spelling);
+    if (index == g_unit_spellings.length || (require_si_prefix && !g_unit_spellings[index].is_prefixable))
+        return g_unit_spellings.length;
+    return index;
+}
+
+int scaled_unit_spelling_compare(const ScaledUnitSpelling entry, const(char)[] spelling) pure nothrow @nogc
+{
+    return uni_compare(scaled_unit_spelling_text(entry), spelling);
+}
+
+int scaled_unit_compare(const ScaledUnit a, const ScaledUnit b) pure nothrow @nogc
+{
+    return a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : 0;
+}
+
+ScaledUnit scaled_unit_from_spelling(size_t index) pure nothrow @nogc
+{
+    return g_units[g_unit_spellings[index].unit_offset];
+}
+
+const(char)[] scaled_unit_spelling_text(const ScaledUnitSpelling entry) pure nothrow @nogc
+{
+    return as_string(g_spelling_strings.ptr + entry.spelling_offset)[];
+}
+
 const(char)[] scaled_unit_spelling(ScaledUnit u) pure nothrow @nogc
 {
-    static foreach (m; __traits(allMembers, ScaledUnits))
-    {{
-        if (u == __traits(getMember, ScaledUnits, m))
-            return unit_spellings!(__traits(getMember, ScaledUnits, m))[0];
-    }}
-    return null;
+    size_t unit_index = binary_search!scaled_unit_compare(g_units[], u);
+    if (unit_index == g_units.length)
+        return null;
+    return scaled_unit_spelling_text(g_unit_spellings[g_canonical_string[unit_index]]);
 }
 
 ptrdiff_t format_si_scale(int e, char[] buffer) pure nothrow @nogc
@@ -1527,8 +1718,7 @@ ptrdiff_t synth_unit_name(Unit u, char[] buffer, int scale_exp = 0) pure nothrow
                     term_scale += 3;
                     name = "g";
                 }
-                ptrdiff_t scale_len = format_si_scale(term_scale,
-                    buffer.ptr ? buffer[len .. $] : null);
+                ptrdiff_t scale_len = format_si_scale(term_scale, buffer.ptr ? buffer[len .. $] : null);
                 if (scale_len < 0)
                     return -1;
                 len += scale_len;
@@ -1576,44 +1766,6 @@ immutable string[Unit] unitNames = [
     Lux         : "lx",
 ];
 
-immutable string[ScaledUnit] scaledUnitNames = [
-    Minute      : "min",
-//    Minute      : "mins",
-    Hour        : "hr",
-//    Hour        : "hrs",
-    Day         : "day",
-
-    Inch        : "in",
-    Foot        : "ft",
-    Mile        : "mi",
-    Ounce       : "oz",
-    Pound       : "lb",
-    Celsius     : "°C",
-    Fahrenheit  : "°F",
-    Cycle       : "cy",
-    Degree      : "°",
-
-    Percent     : "%",
-    Permille    : "‰",
-    Centimetre  : "cm",
-    Millimetre  : "mm",
-    Kilometre   : "km",
-    Litre       : "l",
-    Gram        : "g",
-    Milligram   : "mg",
-    Hertz       : "Hz",
-    Kilohertz   : "kHz",
-    Megahertz   : "MHz",
-    Gigahertz   : "GHz",
-    PSI         : "psi",
-    Kilowatt    : "kW",
-    AmpereHour  : "Ah",
-    WattHour    : "Wh",
-    KilowattHour : "kWh",
-    MegawattHour : "MWh",
-    GigawattHour : "GWh",
-];
-
 immutable Unit[string] unitMap = [
     // base units
     "m"     : Metre,
@@ -1643,51 +1795,6 @@ immutable Unit[string] unitMap = [
     // questionable... :/
     "VA"    : Watt,
     "var"   : Watt,
-];
-
-immutable ScaledUnit[string] noScaleUnitMap = [
-    "min"   : Minute,
-    "mins"  : Minute,
-    "h"     : Hour,
-    "hr"    : Hour,
-    "hrs"   : Hour,
-    "day"   : Day,
-    "days"  : Day,
-    "'"     : Inch,
-    "in"    : Inch,
-    "\""    : Foot,
-    "ft"    : Foot,
-    "mi"    : Mile,
-    "oz"    : Ounce,
-    // TODO: us/uk floz/gallon?
-    "lb"    : Pound,
-    "°"     : Degree,
-    "deg"   : Degree,
-    "°C"    : Celsius,
-    "°F"    : Fahrenheit,
-    "cy"    : Cycle,
-    "psi"   : PSI,
-    "%"     : Percent,
-    "‰"     : Permille,
-    "‱"    : ScaledUnit(Unit(), -4),
-    "ppm"   : ScaledUnit(Unit(), -6),
-];
-
-// these can have SI prefixes
-immutable ScaledUnit[string] scaledUnitMap = [
-    "l"     : Litre,
-    "g"     : Gram,
-];
-
-// these can have SI prefixes, but scale must be converted to coefficient
-immutable ScaledUnit[string] noScaleUnitMapSI = [
-    "Ah"    : AmpereHour,
-    "Wh"    : WattHour,
-    "Hz"    : Hertz,
-
-    // questionable... :/
-    "VAh"   : WattHour,
-    "varh"  : WattHour,
 ];
 
 int take_power(ref const(char)[] s) pure

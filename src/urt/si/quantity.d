@@ -604,8 +604,25 @@ unittest
     assert("10V".parse_quantity(&taken) == Volts(10) && taken == 3);
     assert("10.2e+2Wh".parse_quantity(&taken) == WattHours(1020) && taken == 9);
 
+    VarQuantity q = "1ms".parse_quantity(&taken);
+    assert(taken == 3 && q.value == 1 && q.unit == ScaledUnit(Second, -3));
+    q = "1m*s".parse_quantity(&taken);
+    assert(taken == 4 && q.value == 1 && q.unit == Metre * Second);
+    q = "1/ms".parse_quantity(&taken);
+    assert(taken == 4 && q.value == 1 && q.unit == ScaledUnit(Second, -3)^^-1);
+    q = "1m^-1*s^-1".parse_quantity(&taken);
+    assert(taken == 10 && q.value == 1 && q.unit == (Metre * Second)^^-1);
+
+    q = "1km^2".parse_quantity(&taken);
+    assert(taken == 5 && q.value == 1 && q.unit == Kilometre^^2);
+    assert(q.normalise() == VarQuantity(1e6, ScaledUnit(Metre^^2)));
+    q = "100m^2".parse_quantity(&taken);
+    assert(taken == 6 && q.value == 100 && q.unit == ScaledUnit(Metre^^2));
+    q = "10000m^2".parse_quantity(&taken);
+    assert(taken == 8 && q.value == 10000 && q.unit == ScaledUnit(Metre^^2));
+
     // reciprocal units (leading '/' and ascii powers)
-    VarQuantity q = "3/hr".parse_quantity(&taken);
+    q = "3/hr".parse_quantity(&taken);
     assert(taken == 4 && q.value == 3 && q.unit == Hour^^-1);
     q = "3/h".parse_quantity(&taken);
     assert(taken == 3 && q.value == 3 && q.unit == Hour^^-1);
@@ -617,8 +634,14 @@ unittest
     assert(taken == 5 && q.value == 4 && q.unit == Minute^^-1);
     assert("12/hr".parse_quantity().normalise().opEquals!1e-12(VarQuantity(12.0 / 3600, ScaledUnit(Second)^^-1)));
 
-    // scale factors that can't combine must reject the unit, not assert
+    // km/h is a named unit now, so it parses whole rather than being rejected
     q = "3km/h".parse_quantity(&taken);
+    assert(taken == 5 && q.unit == ScaledUnits.kilometre_per_hour);
+    q = "1800rpm".parse_quantity(&taken);
+    assert(taken == 7 && q.value == 1800 && q.unit == ScaledUnits.revolutions_per_minute);
+
+    // scale factors that can't combine must still reject the unit, not assert
+    q = "3hr*min".parse_quantity(&taken);
     assert(taken == 1 && q.unit == ScaledUnit());
 
     // fromString round-trip, including unit conversion to the target scale

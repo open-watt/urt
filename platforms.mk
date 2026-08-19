@@ -796,6 +796,41 @@ else
     $(error "Unknown D compiler: $(COMPILER)")
 endif
 
+# Masks the throw runtime and drops the unwind tables. Defaults on for
+# bare-metal and Tiny, whose crash driver walks the frame-pointer chain.
+# Override with NOEXCEPTIONS=1/0.
+ifdef BAREMETAL_DIR
+    NOEXCEPTIONS ?= 1
+endif
+ifeq ($(TINY),1)
+    NOEXCEPTIONS ?= 1
+endif
+NOEXCEPTIONS ?= 0
+
+ifeq ($(NOEXCEPTIONS),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)NoExceptions
+    ifeq ($(COMPILER),ldc)
+        DFLAGS := $(DFLAGS) --fno-exceptions
+    endif
+
+    # Only safe where the backtrace does not walk them: posix ARM/AArch64/
+    # RISC-V and Espressif capture via _Unwind_Backtrace and keep theirs.
+    NOEH_DISCARD := 0
+    ifdef BAREMETAL_DIR
+        NOEH_DISCARD := 1
+    endif
+    ifeq ($(OS),linux)
+      ifneq ($(filter x86 x86_64,$(ARCH)),)
+        NOEH_DISCARD := 1
+      endif
+    endif
+    ifeq ($(COMPILER),ldc)
+      ifeq ($(NOEH_DISCARD),1)
+        DFLAGS := $(DFLAGS) -L-T$(URT_ROOT)platforms/noeh.ld
+      endif
+    endif
+endif
+
 # User-specified D version idents, comma-separated (e.g. VERSIONS=Foo,Bar)
 ifdef VERSIONS
     comma := ,

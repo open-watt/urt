@@ -20,7 +20,8 @@ import urt.driver.uart;
 // loops inside libgcc looking for an unwind table and pegs the CPU.
 extern(C) void exception_init()
 {
-    __register_frame_info(&__eh_frame_start, &__eh_frame_object);
+    version (NoExceptions) {} else
+        __register_frame_info(&__eh_frame_start, &__eh_frame_object);
 }
 
 

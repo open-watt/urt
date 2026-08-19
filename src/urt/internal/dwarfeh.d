@@ -12,7 +12,7 @@
 /// Ported from druntime rt/dwarfeh.d.
 module urt.internal.dwarfeh;
 
-version (Windows) {} else:
+version (Windows) {} else version (NoExceptions) {} else:
 
 import urt.internal.exception : ClassInfo, _d_isbaseof, _d_createTrace;
 

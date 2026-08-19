@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# A 20-job matrix saturates the runner pool on its own; superseded runs just queue behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/release' }}
+
 jobs:
   # ─── Host: build + run unittest exes on every supported host arch/OS ───
   host:
@@ -26,7 +31,7 @@ jobs:
     env:
       MAKE_OS: ${{ matrix.os == 'ubuntu' && 'linux' || matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup D compiler
         uses: dlang-community/setup-dlang@v2
@@ -35,14 +40,18 @@ jobs:
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'
-        run: sudo apt-get update && sudo apt-get install -y libmbedtls-dev
+        uses: ./.github/actions/apt-install
+        with:
+          key: mbedtls
+          packages: libmbedtls-dev
 
       - name: Install 32-bit deps (Linux x86)
         if: matrix.os == 'ubuntu' && matrix.arch == 'x86'
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib libmbedtls-dev:i386
+        uses: ./.github/actions/apt-install
+        with:
+          key: multilib-i386
+          foreign-arch: i386
+          packages: gcc-multilib libmbedtls-dev:i386
 
       - name: Build unittest
         run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=${{ matrix.compiler }}
@@ -80,23 +89,27 @@ jobs:
           - { name: stm4xx,   toolchain: arm,   args: PLATFORM=stm4xx }
           - { name: stm7xx,   toolchain: arm,   args: PLATFORM=stm7xx }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dlang-community/setup-dlang@v2
         with:
           compiler: ldc
 
+      # arm links newlib's libc.a through the gcc-arm-none-eabi-lib alternative, so newlib
+      # is explicit here; its libstdc++-arm-none-eabi-newlib recommend (463MB) is not linked.
       - name: Install ARM cross-toolchain
         if: matrix.target.toolchain == 'arm'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi picolibc-arm-none-eabi
+        uses: ./.github/actions/apt-install
+        with:
+          key: arm-none-eabi
+          packages: gcc-arm-none-eabi picolibc-arm-none-eabi libnewlib-arm-none-eabi
 
       - name: Install RISC-V cross-toolchain
         if: matrix.target.toolchain == 'riscv'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
+        uses: ./.github/actions/apt-install
+        with:
+          key: riscv64-unknown-elf
+          packages: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
 
       - name: Build flashable unittest image
         run: make ${{ matrix.target.args }} CONFIG=unittest
@@ -124,7 +137,7 @@ jobs:
           - { name: esp32-s3, arch: xtensa, ext: bc }   # LX7
           - { name: esp32-p4, arch: riscv,  ext: o  }   # RV32IMAFDCV
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dlang-community/setup-dlang@v2
         with:
@@ -132,9 +145,10 @@ jobs:
 
       - name: Install RISC-V toolchain
         if: matrix.target.arch == 'riscv'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
+        uses: ./.github/actions/apt-install
+        with:
+          key: riscv64-unknown-elf
+          packages: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
 
       # TODO: Xtensa needs LDC built with Xtensa target. Recent upstream LDC
       # has experimental support; if dlang-community/setup-dlang's LDC build

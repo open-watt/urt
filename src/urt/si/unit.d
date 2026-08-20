@@ -1622,6 +1622,16 @@ ScaledUnit scaled_unit_from_spelling(size_t index) pure nothrow @nogc
 
 const(char)[] scaled_unit_spelling_text(const ScaledUnitSpelling entry) pure nothrow @nogc
 {
+    // CTFE cannot follow a pointer into a global, so read the length prefix by index
+    if (__ctfe)
+    {
+        size_t o = entry.spelling_offset;
+        version (LittleEndian)
+            size_t len = (g_spelling_strings[o - 2] | (g_spelling_strings[o - 1] << 8)) & 0x7FFF;
+        else
+            size_t len = (g_spelling_strings[o - 1] | (g_spelling_strings[o - 2] << 8)) & 0x7FFF;
+        return g_spelling_strings[o .. o + len];
+    }
     return as_string(g_spelling_strings.ptr + entry.spelling_offset)[];
 }
 

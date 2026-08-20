@@ -940,9 +940,14 @@ nothrow:
             }
             else if (const Unit* u = term[offset .. $] in unitMap)
             {
-                if (!combine(ScaledUnit(*u), invert ? -p : p))
-                    return -1;
-                pre_scale *= 10.0^^e;
+                // prefer folding the decimal exponent into the unit; records then
+                // stay integral instead of carrying a runtime scale
+                if (!valid_si_exp(e) || !combine(ScaledUnit(*u, e), invert ? -p : p))
+                {
+                    if (!combine(ScaledUnit(*u), invert ? -p : p))
+                        return -1;
+                    pre_scale *= 10.0^^e;
+                }
             }
             else if ((spelling_index = find_scaled_unit_spelling(term[offset .. $])) < g_unit_spellings.length)
             {

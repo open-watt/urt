@@ -31,6 +31,19 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     assert(is_power_of_2(alignment), "Alignment must be a power of two!");
 
     void[] mem = _alloc(size, alignment, flags);
+    if (mem.ptr is null && size > 0)
+    {
+        import urt.mem.reclaim : reclaim_memory;
+        alias ReclaimFn = size_t function(size_t) pure nothrow @nogc;
+        if ((cast(ReclaimFn) &reclaim_memory)(size) > 0)
+            mem = _alloc(size, alignment, flags);
+    }
+    if (mem.ptr !is null)
+    {
+        import urt.mem.reclaim : account_alloc;
+        alias AccountFn = void function(size_t) pure nothrow @nogc;
+        (cast(AccountFn) &account_alloc)(mem.length);
+    }
     version (AllocTracking)
     {
         import urt.mem.profile.record : track_alloc;
@@ -69,6 +82,22 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
         void* old_ptr = mem.ptr;
         size_t old_size = mem.length;
         void[] new_mem = _realloc(mem, new_size, alignment, flags);
+        if (new_mem.ptr is null)
+        {
+            import urt.mem.reclaim : reclaim_memory;
+            alias ReclaimFn = size_t function(size_t) pure nothrow @nogc;
+            if ((cast(ReclaimFn) &reclaim_memory)(new_size) > 0)
+                new_mem = _realloc(mem, new_size, alignment, flags);
+        }
+        if (new_mem.ptr !is null)
+        {
+            import urt.mem.reclaim : account_alloc, account_free;
+            alias AccountFn = void function(size_t) pure nothrow @nogc;
+            if (new_mem.length > old_size)
+                (cast(AccountFn) &account_alloc)(new_mem.length - old_size);
+            else if (new_mem.length < old_size)
+                (cast(AccountFn) &account_free)(old_size - new_mem.length);
+        }
         version (AllocTracking)
         {
             import urt.mem.profile.record : track_realloc;
@@ -107,6 +136,11 @@ void free(void[] mem) pure
 {
     if (mem.ptr is null)
         return;
+    {
+        import urt.mem.reclaim : account_free;
+        alias AccountFn = void function(size_t) pure nothrow @nogc;
+        (cast(AccountFn) &account_free)(mem.length);
+    }
     version (AllocTracking)
     {
         import urt.mem.profile.record : untrack_alloc;
@@ -138,6 +172,15 @@ void[] expand(void[] mem, size_t new_size) pure
     {
         void[] new_mem = null;
         assert(false, "unsupported");
+    }
+    if (new_mem.ptr !is null && new_mem.length != mem.length)
+    {
+        import urt.mem.reclaim : account_alloc, account_free;
+        alias AccountFn = void function(size_t) pure nothrow @nogc;
+        if (new_mem.length > mem.length)
+            (cast(AccountFn) &account_alloc)(new_mem.length - mem.length);
+        else
+            (cast(AccountFn) &account_free)(mem.length - new_mem.length);
     }
     version (AllocProfile)
     {

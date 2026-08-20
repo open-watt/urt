@@ -40,6 +40,9 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 {
     import urt.mem;
 
+    import urt.thread : set_main_thread;
+    set_main_thread();
+
     import urt.mem.string : init_string_heap, deinit_string_heap;
     init_string_heap(ushort.max);
 

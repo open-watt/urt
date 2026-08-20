@@ -115,37 +115,66 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     return result;
 }
 
+// Windows DMD is the only config left with a real runtime to catch into
+version (NoExceptions)
+{
+    version (Windows)
+    {
+        version (LDC)
+            version = NoTryCatch;
+    }
+    else
+        version = NoTryCatch;
+}
+
 version (unittest)
 {
     // separated from main() because DMD cannot mix alloca() and exception handling
     bool run_test(void function() nothrow @nogc test) nothrow @nogc @trusted
     {
-        try
+        version (NoTryCatch)
         {
             test();
             writeln_err("ok");
             return true;
         }
-        catch (Throwable t)
+        else
         {
-            writeln_err(t.msg);
-            return false;
+            try
+            {
+                test();
+                writeln_err("ok");
+                return true;
+            }
+            catch (Throwable t)
+            {
+                writeln_err(t.msg);
+                return false;
+            }
         }
     }
 }
 else
 {
-    extern(C) int _Dmain(scope string[] args) @nogc;
+    version (NoTryCatch)
+        extern(C) int _Dmain(scope string[] args) nothrow @nogc;
+    else
+        extern(C) int _Dmain(scope string[] args) @nogc;
 
     int call_dmain(scope string[] args) nothrow @nogc @trusted
     {
         int result;
-        try
+        version (NoTryCatch)
             result = _Dmain(args);
-        catch (Throwable t)
+        else
         {
-            writeln_err("Uncaught exception: ", t.msg);
-            result = 1;
+            try
+                result = _Dmain(args);
+            catch (Throwable t)
+            {
+                writeln_err("Uncaught exception: ", t.msg);
+                result = 1;
+            }
         }
         return result;
     }

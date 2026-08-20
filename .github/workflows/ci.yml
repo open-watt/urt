@@ -59,6 +59,12 @@ jobs:
       - name: Run unittest
         run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }}
 
+      - name: Build unittest (NOEXCEPTIONS=1)
+        run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=${{ matrix.compiler }} NOEXCEPTIONS=1
+
+      - name: Run unittest (NOEXCEPTIONS=1)
+        run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }}
+
       - name: Build release library
         if: github.ref == 'refs/heads/release'
         run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=release COMPILER=${{ matrix.compiler }}

@@ -290,8 +290,13 @@ template reduce(fun...)
         // no need to throw if range is statically known to be non-empty
         static if (!__traits(compiles, { static assert(r.length > 0); }))
         {
-            if (!initialized)
-                throw new Exception("Cannot reduce an empty iterable w/o an explicit seed value.");
+            version (NoExceptions)
+                assert(initialized, "Cannot reduce an empty iterable w/o an explicit seed value.");
+            else
+            {
+                if (!initialized)
+                    throw new Exception("Cannot reduce an empty iterable w/o an explicit seed value.");
+            }
         }
 
         static if (Args.length == 1)

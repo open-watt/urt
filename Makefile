@@ -112,6 +112,8 @@ endif
 # Build rule
 # =======================================================================
 
+FLAGSTAMP = $(OBJDIR)/build.flags
+
 $(TARGET): $(BAREMETAL_OBJS) $(VENDOR_OBJS)
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
@@ -127,6 +129,7 @@ endif
 ifeq ($(BUILD_MODE),embedded-exe)
 	$(BAREMETAL_OBJCOPY) -O binary $(OBJCOPY_FLAGS) $(TARGET) $(TARGETDIR)/$(TARGETNAME).bin
 endif
+	@printf '%s' '$(BUILD_FLAGS)' > $(FLAGSTAMP)
 
 # =======================================================================
 # CI: build the full cross-target matrix
@@ -164,3 +167,12 @@ clean:
 
 clean-all:
 	rm -rf obj bin
+
+BUILD_FLAGS := $(DFLAGS) $(BUILD_CMD_FLAGS) $(URT_SOURCES)
+FLAGS_CHANGED := $(shell printf '%s' '$(BUILD_FLAGS)' | cmp -s - $(FLAGSTAMP) || echo 1)
+
+ifneq ($(FLAGS_CHANGED),)
+.PHONY: flags_changed
+flags_changed:
+$(TARGET): flags_changed
+endif

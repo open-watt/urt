@@ -52,12 +52,7 @@ nothrow:
         if (!is(T == class))
     {
         T* item = cast(T*)alloc(T.sizeof, T.alignof).ptr;
-        try
-            item.emplace(forward!args);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        item.emplace(forward!args);
         return item;
     }
 
@@ -65,36 +60,21 @@ nothrow:
         if (is(T == class))
     {
         T item = cast(T)alloc(__traits(classInstanceSize, T), __traits(classInstanceAlignment, T)).ptr;
-        try
-            item.emplace(forward!args);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        item.emplace(forward!args);
         return item;
     }
 
     final void freeT(T)(T* item)
         if (!is(T == class))
     {
-        try
-            destroy!false(*item);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        destroy!false(*item);
         free((cast(void*)item)[0..T.sizeof]);
     }
 
     final void freeT(T)(T item)
         if (is(T == class))
     {
-        try
-            item.destroy!false;
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        item.destroy!false;
         free((cast(void*)item)[0..__traits(classInstanceSize, T)]);
     }
 
@@ -105,14 +85,9 @@ nothrow:
             return null;
 
         T[] items = cast(T[])alloc(T.sizeof * count, T.alignof);
-        try
-        {
-            for (size_t i = 0; i < count - 1; ++i)
-                emplace(&items[i], args);
-            emplace(&items[$-1], forward!args);
-        }
-        catch(Exception e)
-            assert(false, e.msg);
+        for (size_t i = 0; i < count - 1; ++i)
+            emplace(&items[i], args);
+        emplace(&items[$-1], forward!args);
         return items;
     }
 
@@ -121,29 +96,19 @@ nothrow:
     {
         if (newCount < arr.length)
         {
-            try
-            {
-                foreach(ref i; arr[newCount..$])
-                    destroy!false(i);
-            }
-            catch(Exception e)
-                assert(false, e.msg);
+            foreach(ref i; arr[newCount..$])
+                destroy!false(i);
             return arr[0..newCount];
         }
         else if (newCount > arr.length)
         {
             T[] newArr = cast(T[])alloc(T.sizeof * newCount, T.alignof);
-            try
-            {
-                size_t i = 0;
-                for (; i < arr.length; ++i)
-                    emplace(&newArr[i], arr[i].move);
-                for (; i < newCount - 1; ++i)
-                    emplace(&newArr[i], args);
-                emplace(&newArr[$-1], forward!args);
-            }
-            catch(Exception e)
-                assert(false, e.msg);
+            size_t i = 0;
+            for (; i < arr.length; ++i)
+                emplace(&newArr[i], arr[i].move);
+            for (; i < newCount - 1; ++i)
+                emplace(&newArr[i], args);
+            emplace(&newArr[$-1], forward!args);
             free(arr);
             return newArr;
         }
@@ -153,15 +118,8 @@ nothrow:
     final void freeArray(T)(T[] items)
         if (!is(T == class))
     {
-        try
-        {
-            foreach(ref i; items)
-                i.destroy!false;
-        }
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        foreach(ref i; items)
+            i.destroy!false;
         free(cast(void[])items[]);
     }
 }
@@ -221,12 +179,7 @@ nothrow @nogc:
         if (!is(T == class))
     {
         T* item = cast(T*)alloc(T.sizeof, T.alignof).ptr;
-        try
-            item.emplace(forward!args);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        item.emplace(forward!args);
         return item;
     }
 
@@ -234,24 +187,14 @@ nothrow @nogc:
         if (is(T == class))
     {
         T item = cast(T)alloc(__traits(classInstanceSize, T), __traits(classInstanceAlignment, T)).ptr;
-        try
-            item.emplace(forward!args);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        item.emplace(forward!args);
         return item;
     }
 
     final void freeT(T)(T* item)
         if (!is(T == class))
     {
-        try
-            destroy!false(*item);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        destroy!false(*item);
         free((cast(void*)item)[0..T.sizeof]);
     }
 
@@ -262,12 +205,7 @@ nothrow @nogc:
         void function(T) nothrow destroyFun = &destroy!(false, T);
         auto forceDestroy = cast(void function(T) nothrow @nogc)destroyFun;
 
-        try
-            forceDestroy(item);
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        forceDestroy(item);
         free((cast(void*)item)[0..__traits(classInstanceSize, T)]);
     }
 
@@ -277,14 +215,9 @@ nothrow @nogc:
         if (count == 0)
             return null;
         T[] items = cast(T[])alloc(T.sizeof * count, T.alignof);
-        try
-        {
-            for (size_t i = 0; i < count - 1; ++i)
-                emplace(&items[i], args);
-            emplace(&items[$-1], forward!args);
-        }
-        catch(Exception e)
-            assert(false, e.msg);
+        for (size_t i = 0; i < count - 1; ++i)
+            emplace(&items[i], args);
+        emplace(&items[$-1], forward!args);
         return items;
     }
 
@@ -305,29 +238,19 @@ nothrow @nogc:
     {
         if (newCount < arr.length)
         {
-            try
-            {
-                foreach(ref i; arr[newCount..$])
-                    destroy!false(i);
-            }
-            catch(Exception e)
-                assert(false, e.msg);
+            foreach(ref i; arr[newCount..$])
+                destroy!false(i);
             return arr[0..newCount];
         }
         else if (newCount > arr.length)
         {
             T[] newArr = cast(T[])alloc(T.sizeof * newCount, T.alignof);
-            try
-            {
-                size_t i = 0;
-                for (; i < arr.length; ++i)
-                    emplace(&newArr[i], arr[i].move);
-                for (; i < newCount - 1; ++i)
-                    emplace(&newArr[i], args);
-                emplace(&newArr[$-1], forward!args);
-            }
-            catch(Exception e)
-                assert(false, e.msg);
+            size_t i = 0;
+            for (; i < arr.length; ++i)
+                emplace(&newArr[i], arr[i].move);
+            for (; i < newCount - 1; ++i)
+                emplace(&newArr[i], args);
+            emplace(&newArr[$-1], forward!args);
             if (arr)
                 free(arr);
             return newArr;
@@ -338,15 +261,8 @@ nothrow @nogc:
     final void freeArray(T)(T[] items)
         if (!is(T == class))
     {
-        try
-        {
-            foreach(ref i; items)
-                destroy!false(i);
-        }
-        catch(Exception e)
-        {
-            assert(false, e.msg);
-        }
+        foreach(ref i; items)
+            destroy!false(i);
         free(cast(void[])items[]);
     }
 
@@ -426,6 +342,7 @@ unittest
 {
     struct S
     {
+    nothrow @nogc:
         int x;
         this(int arg)
         {
@@ -438,6 +355,7 @@ unittest
     }
     class C
     {
+    nothrow @nogc:
         int x;
         this()
         {

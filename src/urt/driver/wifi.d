@@ -539,6 +539,21 @@ Result wifi_get_mac(ref Wifi wifi, WifiVif vif, ref ubyte[6] mac)
     }
 }
 
+// Reprogramming may restart the affected interface, so callers must expect its link to drop.
+Result wifi_set_mac(ref Wifi wifi, WifiVif vif, ref const ubyte[6] mac)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else static if (__traits(compiles, wifi_hw_set_mac(wifi.port, vif, mac)))
+    {
+        if (!wifi_hw_set_mac(wifi.port, vif, mac))
+            return InternalResult.failed;
+        return Result.success;
+    }
+    else
+        return InternalResult.unsupported;
+}
+
 Result wifi_set_channel(ref Wifi wifi, ubyte channel)
 {
     static if (num_wifi == 0)

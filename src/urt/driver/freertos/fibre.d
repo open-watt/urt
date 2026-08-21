@@ -56,7 +56,7 @@ cothread_t co_create(size_t stack_size, coentry_t entry, void* data)
     assert(stack_size <= uint.max, "Stack size too large");
     co_active(); // ensure main fibre initialized
 
-    auto fdata = defaultAllocator().allocT!co_fibre_data();
+    auto fdata = alloc!co_fibre_data(MemFlags.fast);
     if (!fdata) return null;
 
     fdata.user_data = data;
@@ -68,7 +68,7 @@ cothread_t co_create(size_t stack_size, coentry_t entry, void* data)
     if (xTaskCreate(&co_freertos_entry, "fibre", cast(uint)stack_size,
                     fdata, priority, &fdata.task_handle) != pdPASS)
     {
-        defaultAllocator().freeT(fdata);
+        free(fdata);
         return null;
     }
 
@@ -82,7 +82,7 @@ void co_delete(cothread_t handle)
     {
         if (fdata.task_handle)
             vTaskDelete(fdata.task_handle);
-        defaultAllocator().freeT(fdata);
+        free(fdata);
     }
 }
 

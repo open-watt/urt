@@ -451,7 +451,7 @@ else
         // Bare metal:
         //  this code should be fine, check the guard-band from time to time...?
 
-        void[] memory = defaultAllocator().alloc(stack_size + co_fibre_data.sizeof + guard_band, max(co_fibre_data.alignof, 16));
+        void[] memory = alloc(stack_size + co_fibre_data.sizeof + guard_band, max(co_fibre_data.alignof, 16), MemFlags.fast);
         if(!memory)
             return null;
 
@@ -476,7 +476,7 @@ else
             void[] memory = (cast(void*)fdata)[0 .. co_fibre_data.sizeof + fdata.stack_size];
             static if (guard_band > 0)
                 memory = (memory.ptr - guard_band/2)[0 .. memory.length + guard_band];
-            defaultAllocator().free(memory);
+            free(memory);
         }
     }
 

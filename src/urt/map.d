@@ -790,13 +790,12 @@ unittest
     // Heterogeneous remove: search key type differs from the key type, so the search compare
     // must not reinterpret the search key as a K (String vs slice have different layouts)
     {
-        import urt.mem.allocator : defaultAllocator;
-        import urt.string.string : String, makeString;
+        import urt.string.string : String, StringAlloc, makeString;
 
         Map!(String, int) map;
-        map.insert("alpha".makeString(defaultAllocator), 1);
-        map.insert("beta".makeString(defaultAllocator), 2);
-        map.insert("gamma".makeString(defaultAllocator), 3);
+        map.insert("alpha".makeString(StringAlloc.Default), 1);
+        map.insert("beta".makeString(StringAlloc.Default), 2);
+        map.insert("gamma".makeString(StringAlloc.Default), 3);
 
         const(char)[] k = "beta";
         assert(k in map);

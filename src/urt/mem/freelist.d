@@ -1,7 +1,7 @@
 module urt.mem.freelist;
 
 import urt.lifetime;
-import urt.mem.allocator;
+import urt.mem;
 
 nothrow @nogc:
 
@@ -37,7 +37,7 @@ struct FreeList(T, size_t blockSize = 1)
             {
                 Node* n = head;
                 head = head.next;
-                defaultAllocator().freeT(n);
+                .free(n);
                 --itemCount;
             }
         }
@@ -56,12 +56,13 @@ struct FreeList(T, size_t blockSize = 1)
         {
             static if (blockSize == 1)
             {
-                n = defaultAllocator().allocT!Node();
+                n = .alloc!Node(MemFlags.fast);
                 ++itemCount;
             }
             else
             {
-                Node[] items = cast(Node[0 .. blockSize])defaultAllocator().alloc(Node.sizeof * blockSize, Node.alignof);
+                void[] block = .alloc(Node.sizeof * blockSize, Node.alignof, MemFlags.fast);
+                Node[] items = cast(Node[0 .. blockSize])block;
                 foreach (i; 1 .. blockSize)
                     items[i].next = i == blockSize - 1 ? head : &items[i + 1];
                 head = &items[1];

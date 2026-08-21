@@ -1165,7 +1165,7 @@ private:
         static if (Embed > 0)
             if (len <= Embed - 2)
                 return embed.ptr + 2;
-        char* buffer = cast(char*)defaultAllocator().alloc(len + 4, 2).ptr;
+        char* buffer = cast(char*)alloc(len + 4, 2).ptr;
         *cast(ushort*)buffer = cast(ushort)len;
         return buffer + 4;
     }
@@ -1178,7 +1178,7 @@ private:
             if (buffer == embed.ptr + 2)
                 return;
         buffer -= 4;
-        defaultAllocator().free(buffer[0 .. 4 + *cast(ushort*)buffer]);
+        free(buffer[0 .. 4 + *cast(ushort*)buffer]);
     }
 
     ref MutableString!Embed insert_impl(size_t offset, const(void)* raw_args, size_t arg_mask)
@@ -1388,14 +1388,14 @@ package(urt) void initStringAllocators() nothrow @nogc
     alias PureFree = void delegate(void[]) pure nothrow @nogc;
 
     stringAllocators[StringAlloc.Default].alloc = (ushort bytes, void* userData) pure {
-        char* buffer = cast(char*)(cast(PureAlloc)&defaultAllocator().alloc)(bytes + 4, ushort.alignof).ptr;
+        char* buffer = cast(char*)alloc(bytes + 4, ushort.alignof).ptr;
         *cast(ushort*)buffer = StringAlloc.Default << 14; // allocator = default, rc = 0
         return buffer + 4;
     };
     stringAllocators[StringAlloc.Default].free = (char* str) pure {
         ushort len = (cast(ushort*)str)[-1] & 0x7FFF;
         str -= 4;
-        (cast(PureFree)&defaultAllocator().free)(str[0 .. 4 + len]);
+        free(str[0 .. 4 + len]);
     };
 
     stringAllocators[StringAlloc.Explicit].alloc = (ushort bytes, void* userData) pure {

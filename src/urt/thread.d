@@ -1,6 +1,6 @@
 module urt.thread;
 
-import urt.mem.allocator : defaultAllocator;
+import urt.mem;
 
 nothrow @nogc:
 
@@ -19,7 +19,7 @@ alias ThreadEntry = void delegate() nothrow @nogc;
 // stack_size = 0: platform default (Windows: 1MB; POSIX: ~8MB; FreeRTOS: 4096 bytes).
 Thread thread_spawn(ThreadEntry entry, size_t stack_size = 0)
 {
-    auto entry_ptr = defaultAllocator().allocT!ThreadEntry();
+    auto entry_ptr = alloc!ThreadEntry();
     if (!entry_ptr)
         return null;
     *entry_ptr = entry;
@@ -63,7 +63,7 @@ Thread thread_spawn(ThreadEntry entry, size_t stack_size = 0)
 
     if (!handle)
     {
-        defaultAllocator().freeT(entry_ptr);
+        free(entry_ptr);
         return null;
     }
     return handle;
@@ -96,7 +96,7 @@ version (Windows)
     {
         auto entry_ptr = cast(ThreadEntry*)arg;
         ThreadEntry entry = *entry_ptr;
-        defaultAllocator().freeT(entry_ptr);
+        free(entry_ptr);
         entry();
         return 0;
     }
@@ -107,7 +107,7 @@ else version (Posix)
     {
         auto entry_ptr = cast(ThreadEntry*)arg;
         ThreadEntry entry = *entry_ptr;
-        defaultAllocator().freeT(entry_ptr);
+        free(entry_ptr);
         entry();
         return null;
     }
@@ -119,7 +119,7 @@ else version (FreeRTOS)
         import urt.internal.sys.freertos : vTaskDelete;
         auto entry_ptr = cast(ThreadEntry*)arg;
         ThreadEntry entry = *entry_ptr;
-        defaultAllocator().freeT(entry_ptr);
+        free(entry_ptr);
         entry();
         vTaskDelete(null);
     }

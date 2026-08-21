@@ -25,13 +25,13 @@ nothrow @nogc:
         }
         else version (linux)
         {
-            import urt.mem.allocator;
-            auto p = cast(sem_t*)defaultAllocator().alloc(sem_t.sizeof, sem_t.alignof);
+            import urt.mem;
+            sem_t* p = alloc!sem_t(MemFlags.fast);
             if (!p)
                 return false;
             if (sem_init(p, 0, initial) != 0)
             {
-                defaultAllocator().free(p[0..1]);
+                free(p);
                 return false;
             }
             _internal = p;
@@ -67,11 +67,11 @@ nothrow @nogc:
         }
         else version (linux)
         {
-            import urt.mem.allocator;
+            import urt.mem;
             if (_internal)
             {
                 sem_destroy(cast(sem_t*)_internal);
-                defaultAllocator().free(_internal[0..1]);
+                free(cast(sem_t*)_internal);
                 _internal = null;
             }
         }

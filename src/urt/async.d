@@ -2,7 +2,7 @@ module urt.async;
 
 import urt.fibre;
 import urt.lifetime;
-import urt.mem.allocator;
+import urt.mem;
 import urt.mem.freelist;
 import urt.meta.tuple;
 import urt.traits;
@@ -23,7 +23,7 @@ Promise!(ReturnType!Fun)* async(size_t stack_size = default_stack_size, Fun, Arg
     if (is_some_function!Fun)
 {
     alias Result = ReturnType!Fun;
-    Promise!Result* r = cast(Promise!Result*)defaultAllocator().alloc(Promise!Result.sizeof, Promise!Result.alignof);
+    Promise!Result* r = cast(Promise!Result*)alloc(Promise!Result.sizeof, Promise!Result.alignof);
 
     // this shim is used as the entry-point for the async call
     // the function arguments must be copied to the fibre's stack:
@@ -61,7 +61,7 @@ Promise!(ReturnType!Fun)* async(size_t stack_size = default_stack_size, Fun, Arg
 void free_promise(T)(ref Promise!T* promise)
 {
     assert(promise.state() != PromiseState.pending, "Promise still pending!");
-    defaultAllocator().freeT(promise);
+    free(promise);
     promise = null;
 }
 
@@ -162,7 +162,7 @@ private:
             async.fibre.reset();
         }
         else
-            async = defaultAllocator().allocT!AsyncCall(stack_size);
+            async = alloc!AsyncCall(stack_size);
         async.set_entry(entry, user_data);
 
         // TODO: HACK, this should be void-init, and then result emplaced at the assignment
@@ -318,7 +318,7 @@ shared static ~this()
     {
         AsyncCall* t = free_list;
         free_list = free_list.next;
-        defaultAllocator().freeT(t);
+        free(t);
     }
 }
 

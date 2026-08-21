@@ -70,7 +70,7 @@ cothread_t co_create(size_t stack_size, coentry_t entry, void* data)
         assert(false, "Error: returned from fibre!");
     }
 
-    auto fdata = defaultAllocator().allocT!co_fibre_data();
+    auto fdata = alloc!co_fibre_data(MemFlags.fast);
     fdata.user_data = data;
     fdata.coentry = entry;
     fdata.stack_size = cast(uint)stack_size;
@@ -82,7 +82,7 @@ void co_delete(cothread_t cothread)
 {
     auto fdata = cast(co_fibre_data*)cothread;
     DeleteFiber(fdata.fiber);
-    defaultAllocator().freeT(fdata);
+    free(fdata);
 }
 
 void co_switch(cothread_t cothread)

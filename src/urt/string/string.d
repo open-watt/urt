@@ -1116,7 +1116,7 @@ private:
         static if (Embed > 0)
             if (len <= Embed - 2)
                 return embed.ptr + 2;
-        char* buffer = cast(char*)defaultAllocator().alloc(len + 4, 2).ptr;
+        char* buffer = cast(char*)alloc(len + 4, 2).ptr;
         *cast(ushort*)buffer = cast(ushort)len;
         return buffer + 4;
     }
@@ -1129,7 +1129,7 @@ private:
             if (buffer == embed.ptr + 2)
                 return;
         buffer -= 4;
-        defaultAllocator().free(buffer[0 .. 4 + *cast(ushort*)buffer]);
+        free(buffer[0 .. 4 + *cast(ushort*)buffer]);
     }
 
     ref MutableString!Embed insert_impl(size_t offset, const(void)* raw_args, size_t arg_mask)
@@ -1349,7 +1349,7 @@ void free_string(char* str, uint allocator_index) pure nothrow @nogc
     {
         assert(allocator_index == 0, "Invalid string allocator index");
         str -= 4;
-        defaultAllocator().free(str[0 .. 4 + length]);
+        free(str[0 .. 4 + length]);
     }
 }
 

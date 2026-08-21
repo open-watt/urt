@@ -28,13 +28,13 @@ nothrow @nogc:
         }
         else version (Posix)
         {
-            import urt.mem.allocator;
-            auto p = cast(pthread_mutex_t*)defaultAllocator().alloc(pthread_mutex_t.sizeof, pthread_mutex_t.alignof);
+            import urt.mem;
+            pthread_mutex_t* p = alloc!pthread_mutex_t(MemFlags.fast);
             if (!p)
                 return false;
             if (pthread_mutex_init(p, null) != 0)
             {
-                defaultAllocator().free(p[0..1]);
+                free(p);
                 return false;
             }
             _internal = p;
@@ -63,11 +63,11 @@ nothrow @nogc:
         }
         else version (Posix)
         {
-            import urt.mem.allocator;
+            import urt.mem;
             if (_internal)
             {
                 pthread_mutex_destroy(cast(pthread_mutex_t*)_internal);
-                defaultAllocator().free(_internal[0..1]);
+                free(cast(pthread_mutex_t*)_internal);
                 _internal = null;
             }
         }

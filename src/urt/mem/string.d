@@ -79,7 +79,7 @@ void init_string_heap(uint string_heap_size) nothrow @nogc
     assert(stringHeapInitialised == false, "String heap already initialised!");
     assert(string_heap_size <= ushort.max, "String heap too large!");
 
-    stringHeap = defaultAllocator.allocArray!char(string_heap_size);
+    stringHeap = alloc_array!char(string_heap_size);
 
     // write the null string to the start
     stringHeap[0..2] = 0;
@@ -90,7 +90,7 @@ void init_string_heap(uint string_heap_size) nothrow @nogc
 
 void deinit_string_heap() nothrow @nogc
 {
-    defaultAllocator.freeArray(stringHeap);
+    free(stringHeap);
 }
 
 uint getStringHeapAllocated() nothrow @nogc

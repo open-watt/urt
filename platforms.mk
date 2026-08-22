@@ -139,6 +139,9 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     # BK7231N adds BLE 5.0; BK7231T is Wi-Fi only. Same MCU peripherals.
     BUILDNAME := $(PLATFORM)
     PROCESSOR := arm968e-s
+    # ARMv5TE silently rounds unaligned halfword stores down.
+    STRICT_ALIGN := 1
+    MATTR = +strict-align
     OS = baremetal
 else ifeq ($(PLATFORM),rp2350)
     # Raspberry Pi RP2350 -- dual Cortex-M33, 150MHz, 520KB SRAM, XIP QSPI flash
@@ -637,6 +640,12 @@ ifeq ($(COMPILER),ldc)
         DFLAGS := $(DFLAGS) -gcc=arm-none-eabi-gcc
         ifdef MARCH
             DFLAGS := $(DFLAGS) -mcpu=$(MARCH)
+        endif
+        ifdef MATTR
+            DFLAGS := $(DFLAGS) -mattr=$(MATTR)
+        endif
+        ifeq ($(STRICT_ALIGN),1)
+            DFLAGS := $(DFLAGS) $(VERSION_FLAG)StrictAlign
         endif
     else ifeq ($(ARCH),riscv64)
         DFLAGS := $(DFLAGS) -mtriple=riscv64-unknown-elf -gcc=riscv64-unknown-elf-gcc -code-model=medium

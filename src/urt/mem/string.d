@@ -18,8 +18,8 @@ nothrow @nogc:
     string toString() const pure
     {
         // HACK: deploy the pure hack!
-        static char[] pureHack() nothrow @nogc => stringHeap[];
-        string heap = (cast(immutable(char[]) function() pure nothrow @nogc)&pureHack)();
+        static char[] pure_hack() nothrow @nogc => string_heap[];
+        string heap = (cast(immutable(char[]) function() pure nothrow @nogc)&pure_hack)();
 
         ushort len = *cast(ushort*)(heap.ptr + offset);
         return heap[offset + 2 .. offset + 2 + len];
@@ -73,48 +73,48 @@ private:
 
 void init_string_heap(uint string_heap_size) nothrow @nogc
 {
-    assert(stringHeapInitialised == false, "String heap already initialised!");
+    assert(!string_heap_initialised, "String heap already initialised!");
     assert(string_heap_size <= ushort.max, "String heap too large!");
 
-    stringHeap.reserve(string_heap_size);
-    stringHeap.resize(2);
+    string_heap.reserve(string_heap_size);
+    string_heap.resize(2);
 
     // write the null string to the start
-    stringHeap[][0 .. 2] = '\0';
-    stringHeapCursor = 2;
+    string_heap[][0 .. 2] = '\0';
+    string_heap_cursor = 2;
 
-    stringHeapInitialised = true;
+    string_heap_initialised = true;
 }
 
 void deinit_string_heap() nothrow @nogc
 {
-    destroy(stringHeap);
-    stringHeapCursor = 0;
-    stringHeapInitialised = false;
+    destroy(string_heap);
+    string_heap_cursor = 0;
+    string_heap_initialised = false;
 }
 
-uint getStringHeapAllocated() nothrow @nogc
+uint get_string_heap_allocated() nothrow @nogc
 {
-    return stringHeapCursor;
+    return string_heap_cursor;
 }
 
-uint getStringHeapRemaining() nothrow @nogc
+uint get_string_heap_remaining() nothrow @nogc
 {
-    return ushort.max - stringHeapCursor;
+    return ushort.max - string_heap_cursor;
 }
 
-CacheString addString(const(char)[] str) pure nothrow @nogc
+CacheString add_string(const(char)[] str) pure nothrow @nogc
 {
     // HACK: even though this mutates global state, the string cache is immutable after it's emplaced
     //       so, multiple calls with the same source string will always return the same result!
     static CacheString impl(const(char)[] str) nothrow @nogc
     {
-        return CacheString(add_string(stringHeap, stringHeapCursor, str));
+        return CacheString(find_or_add_string(string_heap, string_heap_cursor, str));
     }
     return (cast(CacheString function(const(char)[]) pure nothrow @nogc)&impl)(str);
 }
 
-void* allocWithStringCache(size_t bytes, String[] cachedStrings, const(char[])[] strings) nothrow @nogc
+void* alloc_with_string_cache(size_t bytes, String[] cached_strings, const(char[])[] strings) nothrow @nogc
 {
     import urt.mem.alloc;
 
@@ -126,27 +126,20 @@ void* allocWithStringCache(size_t bytes, String[] cachedStrings, const(char[])[]
     char* buffer = cast(char*)ptr + bytes;
     foreach (size_t i, str; strings)
     {
-        cachedStrings[i] = str.makeString(buffer[0..extra]);
+        cached_strings[i] = str.makeString(buffer[0..extra]);
         buffer += 2 + str.length + (str.length & 1);
     }
 
     return ptr;
 }
 
-//T* allocWithStringCache(T)(char*[] cachedStrings, const(char)[] strings...)
-//{
-//    T* item = cast(T*)allocWithStringCache(T.sizeof, cachedStrings, strings);
-//    // construct!
-//    return item;
-//}
-
 private:
 
-__gshared bool stringHeapInitialised = false;
-__gshared Array!char stringHeap;
-__gshared ushort stringHeapCursor = 0;
+__gshared bool string_heap_initialised = false;
+__gshared Array!char string_heap;
+__gshared ushort string_heap_cursor = 0;
 
-ushort add_string(ref Array!char heap, ref ushort cursor, const(char)[] str) nothrow @nogc
+ushort find_or_add_string(ref Array!char heap, ref ushort cursor, const(char)[] str) nothrow @nogc
 {
     if (str.length == 0)
         return 0;
@@ -185,18 +178,18 @@ unittest
     heap[][0 .. 2] = '\0';
     ushort cursor = 2;
 
-    ushort hello = add_string(heap, cursor, "hello");
+    ushort hello = find_or_add_string(heap, cursor, "hello");
     assert(hello == 2);
     assert(*cast(ushort*)(heap.ptr + hello) == 5);
     assert(heap[hello + 2 .. hello + 7] == "hello");
-    assert(add_string(heap, cursor, "hello") == hello);
+    assert(find_or_add_string(heap, cursor, "hello") == hello);
 
     char* old_heap = heap.ptr;
-    ushort world = add_string(heap, cursor, "world!");
+    ushort world = find_or_add_string(heap, cursor, "world!");
     assert(heap.ptr !is old_heap);
     assert(world == 10);
     assert(*cast(ushort*)(heap.ptr + hello) == 5);
     assert(heap[hello + 2 .. hello + 7] == "hello");
     assert(heap[world + 2 .. world + 8] == "world!");
-    assert(add_string(heap, cursor, null) == 0);
+    assert(find_or_add_string(heap, cursor, null) == 0);
 }

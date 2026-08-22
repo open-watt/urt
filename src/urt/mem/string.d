@@ -1,5 +1,6 @@
 module urt.mem.string;
 
+import urt.array;
 import urt.mem;
 import urt.string;
 
@@ -18,7 +19,7 @@ nothrow @nogc:
     string toString() const pure
     {
         // HACK: deploy the pure hack!
-        static char[] pureHack() nothrow @nogc => stringHeap;
+        static char[] pureHack() nothrow @nogc => stringHeap[];
         string heap = (cast(immutable(char[]) function() pure nothrow @nogc)&pureHack)();
 
         ushort len = *cast(ushort*)(heap.ptr + offset);
@@ -79,10 +80,11 @@ void init_string_heap(uint string_heap_size) nothrow @nogc
     assert(stringHeapInitialised == false, "String heap already initialised!");
     assert(string_heap_size <= ushort.max, "String heap too large!");
 
-    stringHeap = defaultAllocator.allocArray!char(string_heap_size);
+    stringHeap.reserve(string_heap_size);
+    stringHeap.resize(2);
 
     // write the null string to the start
-    stringHeap[0..2] = 0;
+    stringHeap[][0 .. 2] = char(0);
     stringHeapCursor = 2;
 
     stringHeapInitialised = true;
@@ -90,7 +92,9 @@ void init_string_heap(uint string_heap_size) nothrow @nogc
 
 void deinit_string_heap() nothrow @nogc
 {
-    defaultAllocator.freeArray(stringHeap);
+    stringHeap.clear();
+    stringHeapCursor = 0;
+    stringHeapInitialised = false;
 }
 
 uint getStringHeapAllocated() nothrow @nogc
@@ -100,7 +104,7 @@ uint getStringHeapAllocated() nothrow @nogc
 
 uint getStringHeapRemaining() nothrow @nogc
 {
-    return cast(uint)stringHeap.length - stringHeapCursor;
+    return ushort.max - stringHeapCursor;
 }
 
 CacheString addString(const(char)[] str) pure nothrow @nogc
@@ -127,16 +131,19 @@ CacheString addString(const(char)[] str) pure nothrow @nogc
         }
 
         // add the string to the heap...
-        assert(stringHeapCursor + str.length < stringHeap.length, "String heap overflow!");
+        size_t end = stringHeapCursor + 2 + str.length + (str.length & 1);
+        assert(end <= ushort.max, "String cache exhausted the 16bit offset space!");
+        if (end > stringHeap.length)
+            stringHeap.resize(end);
 
-        char[] heap = stringHeap[stringHeapCursor .. $];
+        char[] heap = stringHeap[][stringHeapCursor .. $];
         ushort offset = stringHeapCursor;
 
         *cast(ushort*)heap.ptr = cast(ushort)str.length;
         heap[2 .. 2 + str.length] = str[];
         stringHeapCursor += str.length + 2;
         if (stringHeapCursor & 1)
-            stringHeap[stringHeapCursor++] = '\0';
+            stringHeap[][stringHeapCursor++] = char(0);
 
         return CacheString(offset);
     }
@@ -169,33 +176,10 @@ void* allocWithStringCache(size_t bytes, String[] cachedStrings, const(char[])[]
 //    return item;
 //}
 
-class StringAllocator : NoGCAllocator
-{
-    override void[] alloc(size_t bytes, size_t alignment = 1) pure nothrow @nogc
-    {
-        static void[] impl(size_t bytes, size_t alignment) nothrow @nogc
-        {
-            assert(stringHeapCursor + bytes < stringHeap.length, "String heap overflow!");
-
-            char[] heap = cast(char[])stringHeap;
-            return heap[stringHeapCursor .. stringHeapCursor + bytes];
-        }
-        alias PureHack = void[] function(size_t, size_t) pure nothrow @nogc;
-        return (cast(PureHack)&impl)(bytes, alignment);
-    }
-
-    override void free(void[] mem) pure nothrow @nogc
-    {
-        // you don't free cached strings!
-    }
-}
-
-
-
 private:
 
 __gshared bool stringHeapInitialised = false;
-__gshared char[] stringHeap = null;
+__gshared Array!char stringHeap;
 __gshared ushort stringHeapCursor = 0;
 
 

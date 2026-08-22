@@ -216,7 +216,10 @@ else version (AArch64)
     enum SupportUnalignedLoadStore = true;
 else version (ARM)
 {
-    enum SupportUnalignedLoadStore = !ProcFeatures.strict_align;
+    version (StrictAlign)
+        enum SupportUnalignedLoadStore = false;
+    else
+        enum SupportUnalignedLoadStore = !ProcFeatures.strict_align;
 }
 else version (RISCV64)
 {

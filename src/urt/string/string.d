@@ -107,7 +107,7 @@ template StringLit(const(char)[] lit, bool zeroTerminate = true)
 
     private enum LitLen = 2 + lit.length + (zeroTerminate ? 1 : 0);
     private enum char[LitLen] LiteralData = () {
-        pragma(aligned, 2) char[LitLen] buffer;
+        align(2) char[LitLen] buffer;
         version (LittleEndian)
         {
             buffer[0] = lit.length & 0xFF;
@@ -123,7 +123,8 @@ template StringLit(const(char)[] lit, bool zeroTerminate = true)
             buffer[$-1] = '\0'; // add a zero terminator for good measure
         return buffer;
     }();
-    pragma(aligned, 2)
+    // ARMv5 silently reads the neighbouring halfword when this is unaligned.
+    align(2)
     private __gshared immutable literal = LiteralData;
 
     enum StringLit = immutable(String)(literal.ptr + 2, false);

@@ -42,7 +42,7 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 
     import urt.mem.string : init_string_heap, deinit_string_heap;
     version (Embedded)
-        init_string_heap(1024);
+        init_string_heap(256);
     else
         init_string_heap(ushort.max);
 

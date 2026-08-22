@@ -216,7 +216,12 @@ else version (AArch64)
     enum SupportUnalignedLoadStore = true;
 else version (ARM)
 {
-    enum SupportUnalignedLoadStore = !ProcFeatures.strict_align;
+    // Pre-v6 cores have no unaligned access at all, and the target feature is
+    // not always set by the triple -- platforms.mk states it outright.
+    version (StrictAlign)
+        enum SupportUnalignedLoadStore = false;
+    else
+        enum SupportUnalignedLoadStore = !ProcFeatures.strict_align;
 }
 else version (RISCV64)
 {

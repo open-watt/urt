@@ -9,7 +9,6 @@ import urt.string;
 struct CacheString
 {
 nothrow @nogc:
-    alias toString this;
 
     this(typeof(null)) pure 
     {
@@ -25,9 +24,6 @@ nothrow @nogc:
         ushort len = *cast(ushort*)(heap.ptr + offset);
         return heap[offset + 2 .. offset + 2 + len];
     }
-
-    immutable(char)* ptr() const pure
-        => toString().ptr;
 
     size_t length() const pure
         => toString().length;
@@ -84,7 +80,7 @@ void init_string_heap(uint string_heap_size) nothrow @nogc
     stringHeap.resize(2);
 
     // write the null string to the start
-    stringHeap[][0 .. 2] = char(0);
+    stringHeap[][0 .. 2] = '\0';
     stringHeapCursor = 2;
 
     stringHeapInitialised = true;
@@ -92,7 +88,7 @@ void init_string_heap(uint string_heap_size) nothrow @nogc
 
 void deinit_string_heap() nothrow @nogc
 {
-    stringHeap.clear();
+    destroy(stringHeap);
     stringHeapCursor = 0;
     stringHeapInitialised = false;
 }
@@ -113,39 +109,7 @@ CacheString addString(const(char)[] str) pure nothrow @nogc
     //       so, multiple calls with the same source string will always return the same result!
     static CacheString impl(const(char)[] str) nothrow @nogc
     {
-        // null string
-        if (str.length == 0)
-            return CacheString(0);
-
-        assert(str.length < 2^^14, "String longer than max string len (32768 chars)");
-
-        // first we scan to see if it's already in here...
-        for (ushort i = 2; i < stringHeapCursor;)
-        {
-            ushort offset = i;
-            ushort len = *cast(ushort*)(stringHeap.ptr + i);
-            i += 2;
-            if (len == str.length && stringHeap[i .. i + len] == str[])
-                return CacheString(offset);
-            i += len + (len & 1);
-        }
-
-        // add the string to the heap...
-        size_t end = stringHeapCursor + 2 + str.length + (str.length & 1);
-        assert(end <= ushort.max, "String cache exhausted the 16bit offset space!");
-        if (end > stringHeap.length)
-            stringHeap.resize(end);
-
-        char[] heap = stringHeap[][stringHeapCursor .. $];
-        ushort offset = stringHeapCursor;
-
-        *cast(ushort*)heap.ptr = cast(ushort)str.length;
-        heap[2 .. 2 + str.length] = str[];
-        stringHeapCursor += str.length + 2;
-        if (stringHeapCursor & 1)
-            stringHeap[][stringHeapCursor++] = char(0);
-
-        return CacheString(offset);
+        return CacheString(add_string(stringHeap, stringHeapCursor, str));
     }
     return (cast(CacheString function(const(char)[]) pure nothrow @nogc)&impl)(str);
 }
@@ -182,33 +146,57 @@ __gshared bool stringHeapInitialised = false;
 __gshared Array!char stringHeap;
 __gshared ushort stringHeapCursor = 0;
 
+ushort add_string(ref Array!char heap, ref ushort cursor, const(char)[] str) nothrow @nogc
+{
+    if (str.length == 0)
+        return 0;
+
+    assert(str.length < 2^^14, "String longer than max string len (32768 chars)");
+
+    for (ushort i = 2; i < cursor;)
+    {
+        ushort offset = i;
+        ushort len = *cast(ushort*)(heap.ptr + i);
+        i += 2;
+        if (len == str.length && heap[i .. i + len] == str[])
+            return offset;
+        i += len + (len & 1);
+    }
+
+    size_t record_length = 2 + str.length + (str.length & 1);
+    size_t end = cursor + record_length;
+    assert(end <= ushort.max, "String cache exhausted the 16bit offset space!");
+
+    ushort offset = cursor;
+    char[] record = heap.extend!false(record_length);
+    *cast(ushort*)record.ptr = cast(ushort)str.length;
+    record[2 .. 2 + str.length] = str[];
+    if (str.length & 1)
+        record[$ - 1] = '\0';
+    cursor = cast(ushort)end;
+    return offset;
+}
+
 
 unittest
 {
-    // TODO: uncomment this when all the global/static boot-time string allocations are removed
-/+
-    initStringHeap(1024);
+    Array!char heap;
+    heap.resize(2);
+    heap[][0 .. 2] = '\0';
+    ushort cursor = 2;
 
-    CacheString s1 = addString("hello");
-    assert(s1.offset == 1);
-    assert(s1.length == 5);
-    assert(s1[] == "hello");
-    assert(!!s1 == true);
-    CacheString s2 = addString("hello");
-    assert(s2.offset == 1);
-    CacheString s3 = addString("hello", false);
-    assert(s3.offset == 7);
-    CacheString s4 = addString(null);
-    assert(s4.offset == 0);
-    assert(s4.ptr == stringHeap.ptr + 1);
-    assert(!!s4 == false);
-    CacheString s5 = addString("");
-    assert(s5.offset == 0);
-    CacheString s6 = addString("really really really really really really really really really really really really really really really really really long string!");
-    assert(s6.length == 131);
-    assert(s6.ptr == stringHeap.ptr + s6.offset + 2);
-    assert(s6[] == "really really really really really really really really really really really really really really really really really long string!");
-    CacheString s7 = addString("really really really really really really really really really really really really really really really really really long string!");
-    assert(s7.offset == s6.offset);
-+/
+    ushort hello = add_string(heap, cursor, "hello");
+    assert(hello == 2);
+    assert(*cast(ushort*)(heap.ptr + hello) == 5);
+    assert(heap[hello + 2 .. hello + 7] == "hello");
+    assert(add_string(heap, cursor, "hello") == hello);
+
+    char* old_heap = heap.ptr;
+    ushort world = add_string(heap, cursor, "world!");
+    assert(heap.ptr !is old_heap);
+    assert(world == 10);
+    assert(*cast(ushort*)(heap.ptr + hello) == 5);
+    assert(heap[hello + 2 .. hello + 7] == "hello");
+    assert(heap[world + 2 .. world + 8] == "world!");
+    assert(add_string(heap, cursor, null) == 0);
 }

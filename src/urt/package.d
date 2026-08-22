@@ -41,8 +41,8 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     import urt.mem;
 
     import urt.mem.string : init_string_heap, deinit_string_heap;
-    version (Tiny)
-        init_string_heap(1024);   // reserve hint only; the heap grows on demand
+    version (Embedded)
+        init_string_heap(1024);
     else
         init_string_heap(ushort.max);
 

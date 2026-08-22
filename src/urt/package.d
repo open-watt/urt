@@ -41,7 +41,10 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     import urt.mem;
 
     import urt.mem.string : init_string_heap, deinit_string_heap;
-    init_string_heap(ushort.max);
+    version (Embedded)
+        init_string_heap(256);
+    else
+        init_string_heap(ushort.max);
 
     import urt.time : init_clock;
     init_clock();

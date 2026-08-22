@@ -2,7 +2,6 @@ module urt.string.string;
 
 import urt.lifetime : forward, move;
 import urt.mem;
-import urt.mem.string : CacheString;
 import urt.hash : fnv1a, fnv1a64;
 import urt.string.tailstring : TailString;
 
@@ -21,9 +20,6 @@ enum StringAlloc : ubyte
     Explicit,   // carries an allocator with the string
 
     TempString, // allocates in the temp ring buffer; could be overwritten at any time!
-
-    // these must be last... (because comparison logic)
-    StringCache,    // writes to the immutable string cache with de-duplication
 }
 
 struct StringAllocator
@@ -141,13 +137,6 @@ String makeString(const(char)[] s, StringAlloc allocator, void* userData = null)
     {
         return String(writeString(cast(char*)tempAllocator().alloc(2 + s.length, 2).ptr + 2, s), false);
     }
-    else if (allocator == StringAlloc.StringCache)
-    {
-        import urt.mem.string : CacheString, addString;
-
-        CacheString cs = s.addString();
-        return String(cs.ptr, false);
-    }
     assert(false, "Invalid string allocator");
 }
 
@@ -263,11 +252,6 @@ nothrow @nogc:
         ptr = ts.ptr;
     }
 
-    this(inout CacheString cs) inout
-    {
-        ptr = cs.ptr;
-    }
-
     ~this() pure
     {
         if (ptr)
@@ -312,14 +296,6 @@ nothrow @nogc:
             decRef();
 
         ptr = ts.ptr;
-    }
-
-    void opAssign(const(CacheString) cs)
-    {
-        if (ptr)
-            decRef();
-
-        ptr = cs.ptr;
     }
 
     bool opEquals(const(char)[] rhs) const pure
@@ -528,14 +504,6 @@ unittest
     assert(String(null).opCmp("") == 0);
     assert(String(null).opCmp("a") < 0);
     assert(StringLit!"a".opCmp("") > 0);
-
-
-    // Test assignment from CacheString/TailString (conceptual - requires setup)
-    // import urt.mem.string : addString;
-    // auto cs = "Cached".addString();
-    // String s8;
-    // s8 = cs;
-    // assert(s8 == "Cached");
 }
 
 

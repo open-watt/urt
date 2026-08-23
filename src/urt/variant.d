@@ -317,7 +317,7 @@ nothrow @nogc:
         }
         flags = Flags.String;
         flags |= Flags.NeedDestruction;
-        String t = s.makeString(defaultAllocator);
+        String t = s.make_string(defaultAllocator);
         value.s = t.ptr.swap(null);
         count = cast(uint)s.length;
     }
@@ -1063,7 +1063,7 @@ nothrow @nogc:
                     return String();
                 assert(isString);
                 if (flags & Flags.Embedded)
-                    return embed[0 .. embed[$-1]].makeString(defaultAllocator);
+                    return embed[0 .. embed[$-1]].make_string(defaultAllocator);
                 return *cast(String*)&value.s;
             }
         }
@@ -1090,7 +1090,7 @@ nothrow @nogc:
             return String();
         assert(isString);
         if (flags & Flags.Embedded)
-            return embed[0 .. embed[$-1]].makeString(defaultAllocator);
+            return embed[0 .. embed[$-1]].make_string(defaultAllocator);
         String s;
         s.ptr = value.s;
         value.s = null;

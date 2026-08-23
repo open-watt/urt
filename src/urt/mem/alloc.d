@@ -31,6 +31,8 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     assert(is_power_of_2(alignment), "Alignment must be a power of two!");
 
     void[] mem = _alloc(size, alignment, flags);
+    if (mem.ptr !is null)
+        account(mem.length, false);
     version (AllocTracking)
     {
         import urt.mem.profile.record : track_alloc;
@@ -69,6 +71,9 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
         void* old_ptr = mem.ptr;
         size_t old_size = mem.length;
         void[] new_mem = _realloc(mem, new_size, alignment, flags);
+        if (new_mem.ptr !is null && new_mem.length != old_size)
+            account(new_mem.length > old_size ? new_mem.length - old_size : old_size - new_mem.length,
+                    new_mem.length < old_size);
         version (AllocTracking)
         {
             import urt.mem.profile.record : track_realloc;
@@ -109,6 +114,7 @@ void free(T)(T[] mem) pure
 {
     if (mem.ptr is null)
         return;
+    account(mem.length, true);
     version (AllocTracking)
     {
         import urt.mem.profile.record : untrack_alloc;
@@ -239,6 +245,9 @@ void[] expand(void[] mem, size_t new_size) pure
         void[] new_mem = null;
         assert(false, "unsupported");
     }
+    if (new_mem.ptr !is null && new_mem.length != mem.length)
+        account(new_mem.length > mem.length ? new_mem.length - mem.length : mem.length - new_mem.length,
+                new_mem.length < mem.length);
     version (AllocProfile)
     {
         import urt.mem.profile.log : profile_expand;
@@ -292,6 +301,30 @@ void free_retain(void[] mem) pure
     {
         if (mem.ptr !is null)
             _free_retain(mem);
+    }
+}
+
+
+// Feed the interval watermarks for drivers that cannot name the pool a block came from. The
+// entry points above are `pure` and the accounting is not, so the crossing casts the impurity
+// away; collected here so the cast appears once. Drivers that do track their own per-pool usage
+// nudge the watermarks at the point they update it, and compile this out entirely.
+private void account(size_t bytes, bool freed) pure
+{
+    static if (!has_pool_usage)
+    {
+        static void impl(size_t bytes, bool freed) nothrow @nogc
+        {
+            import urt.mem.pressure : account_pool_alloc, account_pool_free;
+
+            if (freed)
+                account_pool_free(bytes);
+            else
+                account_pool_alloc(bytes);
+        }
+
+        alias Fn = void function(size_t, bool) pure nothrow @nogc;
+        (cast(Fn) &impl)(bytes, freed);
     }
 }
 

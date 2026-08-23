@@ -40,9 +40,6 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 {
     import urt.mem;
 
-    import urt.mem.string : init_string_heap, deinit_string_heap;
-    init_string_heap(ushort.max);
-
     import urt.time : init_clock;
     init_clock();
 
@@ -51,9 +48,6 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 
     import urt.rand;
     init_rand();
-
-    import urt.string.string : initStringAllocators;
-    initStringAllocators();
 
     string* args = cast(string*)alloca(string.sizeof * argc);
     string[] d_args = args[0 .. argc];
@@ -109,8 +103,6 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     run_module_dtors(modules);
 
     uart_deinit();
-
-    deinit_string_heap();
 
     return result;
 }

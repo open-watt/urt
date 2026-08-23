@@ -15,7 +15,7 @@ void[] talloc(size_t size) pure
     debug version (DebugTempAlloc)
     {
         import urt.string.format : InFormatFunction;
-        assert(InFormatFunction == false, "It is illegal to use the temp allocator inside string conversion functions. Consider using stack or scratchpad.");
+        assert(InFormatFunction == false, "It is illegal to use the temp allocator inside string conversion functions. Consider using stack storage.");
     }
 
     assert(size <= TempMemSize / 2, "Requested temp memory size is too large");

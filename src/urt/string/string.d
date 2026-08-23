@@ -2,7 +2,6 @@ module urt.string.string;
 
 import urt.lifetime : forward, move;
 import urt.mem;
-import urt.mem.string : CacheString;
 import urt.hash : fnv1a, fnv1a64;
 import urt.string.tailstring : TailString;
 
@@ -13,34 +12,18 @@ alias Format = Format_T.Value;
 
 enum MaxStringLen = 0x7FFF;
 
-enum StringAlloc : ubyte
-{
-    Default,
-    User1,
-    User2,
-    Explicit,   // carries an allocator with the string
-
-    TempString, // allocates in the temp ring buffer; could be overwritten at any time!
-
-    // these must be last... (because comparison logic)
-    StringCache,    // writes to the immutable string cache with de-duplication
-}
-
-struct StringAllocator
-{
-    char* delegate(ushort bytes, void* userData) pure nothrow @nogc alloc;
-    void delegate(char* s) pure nothrow @nogc free;
-}
-
 struct StringCacheBuilder
 {
 nothrow @nogc:
     this(char[] buffer) pure
     {
         assert(buffer.length >= 2 && buffer.length <= ushort.max, "Invalid buffer length");
-        buffer[0..2] = 0;
-        this._buffer = buffer;
-        this._offset = 2;
+        if (__ctfe)
+            buffer[0] = buffer[1] = '\0';
+        else
+            *cast(ushort*)buffer.ptr = 0;
+        _buffer = buffer;
+        _offset = 2;
     }
 
     ushort add_string(const(char)[] s) pure
@@ -49,17 +32,36 @@ nothrow @nogc:
             return 0;
 
         assert(s.length <= MaxStringLen, "String too long");
+        for (ushort offset = 2; offset < _offset;)
+        {
+            ushort length;
+            if (__ctfe)
+            {
+                version (LittleEndian)
+                    length = cast(ushort)(_buffer[offset] | (_buffer[offset + 1] << 8));
+                else
+                    length = cast(ushort)(_buffer[offset + 1] | (_buffer[offset] << 8));
+            }
+            else
+                length = *cast(ushort*)(_buffer.ptr + offset);
+
+            ushort result = cast(ushort)(offset + 2);
+            if (length == s.length && _buffer[result .. result + length] == s[])
+                return result;
+            offset = cast(ushort)(result + length + (length & 1));
+        }
+
         assert(_offset + s.length + 2 + (s.length & 1) <= _buffer.length, "Not enough space in buffer");
         if (__ctfe)
         {
             version (LittleEndian)
             {
-                _buffer[_offset + 0] = cast(char)(s.length & 0xFF);
+                _buffer[_offset] = cast(char)(s.length & 0xFF);
                 _buffer[_offset + 1] = cast(char)(s.length >> 8);
             }
             else
             {
-                _buffer[_offset + 0] = cast(char)(s.length >> 8);
+                _buffer[_offset] = cast(char)(s.length >> 8);
                 _buffer[_offset + 1] = cast(char)(s.length & 0xFF);
             }
         }
@@ -86,6 +88,16 @@ nothrow @nogc:
 private:
     char[] _buffer;
     ushort _offset;
+}
+
+unittest
+{
+    align(2) char[32] buffer;
+    StringCacheBuilder cache = StringCacheBuilder(buffer[]);
+    ushort first = cache.add_string("unit");
+    assert(first == cache.add_string("unit"));
+    assert(as_dstring(buffer.ptr + first) == "unit");
+    assert(cache.add_string(null) == 0);
 }
 
 //enum String StringLit(string s) = s.makeString;
@@ -125,32 +137,6 @@ String makeString(const(char)[] s) nothrow
     return makeString(s, new char[2 + s.length]);
 }
 
-String makeString(const(char)[] s, StringAlloc allocator, void* userData = null) nothrow @nogc
-{
-    if (s.length == 0)
-        return String(null);
-
-    assert(s.length <= MaxStringLen, "String too long");
-    assert(allocator <= StringAlloc.max, "String allocator index must be < 3");
-
-    if (allocator < stringAllocators.length)
-    {
-        return String(writeString(stringAllocators[allocator].alloc(cast(ushort)s.length, null), s), true);
-    }
-    else if (allocator == StringAlloc.TempString)
-    {
-        return String(writeString(cast(char*)tempAllocator().alloc(2 + s.length, 2).ptr + 2, s), false);
-    }
-    else if (allocator == StringAlloc.StringCache)
-    {
-        import urt.mem.string : CacheString, addString;
-
-        CacheString cs = s.addString();
-        return String(cs.ptr, false);
-    }
-    assert(false, "Invalid string allocator");
-}
-
 String makeString(const(char)[] s, NoGCAllocator a) nothrow @nogc
 {
     if (s.length == 0)
@@ -158,7 +144,7 @@ String makeString(const(char)[] s, NoGCAllocator a) nothrow @nogc
 
     assert(s.length <= MaxStringLen, "String too long");
 
-    return String(writeString(stringAllocators[StringAlloc.Explicit].alloc(cast(ushort)s.length, cast(void*)a), s), true);
+    return String(writeString(alloc_string(cast(ushort)s.length, a), s), true);
 }
 
 String makeString(const(char)[] s, char[] buffer) nothrow @nogc
@@ -242,17 +228,6 @@ nothrow @nogc:
         if (!str.ptr)
             return;
 
-        static if (Embed > 0)
-        {
-            if (Embed > 0 && str.ptr == str.embed.ptr + 2)
-            {
-                // clone the string
-                this(writeString(get_string_allocator(0).alloc(cast(ushort)str.length, null), str[]), true);
-                return;
-            }
-        }
-
-        // take the buffer
         ptr = cast(inout(char*))str.ptr;
         *cast(ushort*)(ptr - 4) = 0; // rc = 0, allocator = 0 (default)
         str.ptr = null;
@@ -261,11 +236,6 @@ nothrow @nogc:
     this(TS)(inout TailString!TS ts) inout pure
     {
         ptr = ts.ptr;
-    }
-
-    this(inout CacheString cs) inout
-    {
-        ptr = cs.ptr;
     }
 
     ~this() pure
@@ -312,14 +282,6 @@ nothrow @nogc:
             decRef();
 
         ptr = ts.ptr;
-    }
-
-    void opAssign(const(CacheString) cs)
-    {
-        if (ptr)
-            decRef();
-
-        ptr = cs.ptr;
     }
 
     bool opEquals(const(char)[] rhs) const pure
@@ -406,7 +368,7 @@ private:
         if (ushort* rc = refCounter())
         {
             if ((*rc & 0x3FFF) == 0)
-                get_string_allocator(*rc >> 14).free(cast(char*)ptr);
+                free_string(cast(char*)ptr, *rc >> 14);
             else
                 --*rc;
         }
@@ -449,18 +411,15 @@ unittest
     assert(s1.length == 5);
     assert(s1 == "World");
 
-    // Test makeString (temp allocator)
-    // Note: Temp strings are volatile, use with care in real code
-    String s2 = makeString("Temporary", StringAlloc.TempString);
-    assert(s2.length == 9);
-    assert(s2 == "Temporary");
-
     // Test empty string creation
     String emptyStr = makeString("");
     assert(emptyStr.ptr is null);
     assert(emptyStr.length == 0);
     assert(emptyStr == "");
     assert(!emptyStr);
+
+    String owned = "Owned".makeString(defaultAllocator);
+    assert(owned == "Owned");
 
     String nullStr = String(null);
     assert(nullStr.ptr is null);
@@ -528,14 +487,6 @@ unittest
     assert(String(null).opCmp("") == 0);
     assert(String(null).opCmp("a") < 0);
     assert(StringLit!"a".opCmp("") > 0);
-
-
-    // Test assignment from CacheString/TailString (conceptual - requires setup)
-    // import urt.mem.string : addString;
-    // auto cs = "Cached".addString();
-    // String s8;
-    // s8 = cs;
-    // assert(s8 == "Cached");
 }
 
 
@@ -1372,46 +1323,34 @@ unittest
 
 private:
 
-__gshared StringAllocator[4] stringAllocators;
-static assert(stringAllocators.length <= 4, "Only 2 bits reserved to store allocator index");
+enum explicit_allocator = 3;
 
-ref StringAllocator get_string_allocator(uint i) pure nothrow @nogc
+pragma(inline, false)
+char* alloc_string(ushort bytes, NoGCAllocator allocator) pure nothrow @nogc
 {
-    alias PureHack = ref StringAllocator function(uint i) pure nothrow @nogc;
-    static ref StringAllocator get_allocator(uint i) nothrow @nogc { return stringAllocators[i]; };
-    return (cast(PureHack)&get_allocator)(i);
+    char* buffer = cast(char*)allocator.alloc(size_t.sizeof*2 + bytes, size_t.alignof).ptr;
+    *cast(NoGCAllocator*)buffer = allocator;
+    buffer += size_t.sizeof*2;
+    (cast(ushort*)buffer)[-2] = explicit_allocator << 14;
+    return buffer;
 }
 
-package(urt) void initStringAllocators() nothrow @nogc
+pragma(inline, false)
+void free_string(char* str, uint allocator_index) pure nothrow @nogc
 {
-    alias PureAlloc = void[] delegate(size_t, size_t) pure nothrow @nogc;
-    alias PureFree = void delegate(void[]) pure nothrow @nogc;
-
-    stringAllocators[StringAlloc.Default].alloc = (ushort bytes, void* userData) pure {
-        char* buffer = cast(char*)(cast(PureAlloc)&defaultAllocator().alloc)(bytes + 4, ushort.alignof).ptr;
-        *cast(ushort*)buffer = StringAlloc.Default << 14; // allocator = default, rc = 0
-        return buffer + 4;
-    };
-    stringAllocators[StringAlloc.Default].free = (char* str) pure {
-        ushort len = (cast(ushort*)str)[-1] & 0x7FFF;
-        str -= 4;
-        (cast(PureFree)&defaultAllocator().free)(str[0 .. 4 + len]);
-    };
-
-    stringAllocators[StringAlloc.Explicit].alloc = (ushort bytes, void* userData) pure {
-        NoGCAllocator a = cast(NoGCAllocator)userData;
-        char* buffer = cast(char*)(cast(PureAlloc)&a.alloc)(size_t.sizeof*2 + bytes, size_t.alignof).ptr;
-        *cast(NoGCAllocator*)buffer = a;
-        buffer += size_t.sizeof*2;
-        (cast(ushort*)buffer)[-2] = StringAlloc.Explicit << 14; // allocator = explicit, rc = 0
-        return buffer;
-    };
-    stringAllocators[StringAlloc.Explicit].free = (char* str) pure {
-        NoGCAllocator a = *cast(NoGCAllocator*)(str - size_t.sizeof*2);
-        ushort len = (cast(ushort*)str)[-1] & 0x7FFF;
+    ushort length = (cast(ushort*)str)[-1] & 0x7FFF;
+    if (allocator_index == explicit_allocator)
+    {
+        NoGCAllocator allocator = *cast(NoGCAllocator*)(str - size_t.sizeof*2);
         str -= size_t.sizeof*2;
-        (cast(PureFree)&a.free)(str[0 .. size_t.sizeof*2 + len]);
-    };
+        allocator.free(str[0 .. size_t.sizeof*2 + length]);
+    }
+    else
+    {
+        assert(allocator_index == 0, "Invalid string allocator index");
+        str -= 4;
+        defaultAllocator().free(str[0 .. 4 + length]);
+    }
 }
 
 version (Windows)

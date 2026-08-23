@@ -171,8 +171,8 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
             {
                 static if (is_trivial!T)
                     *cast(T*)dst = *cast(T*)src;
-                else static if (__traits(compiles, new(*cast(T*)dst) T(*cast(T*)src)))
-                    new(*cast(T*)dst) T(*cast(T*)src);
+                else static if (__traits(compiles, emplace(cast(T*)dst, *cast(T*)src)))
+                    emplace(cast(T*)dst, *cast(T*)src);
                 else
                     assert(false, "Can't copy " ~ T.stringof);
             }

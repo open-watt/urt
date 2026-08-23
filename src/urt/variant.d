@@ -54,7 +54,7 @@ nothrow @nogc:
         }
         else if (rh.isString)
         {
-            new(*cast(String*)&value.s) String(*cast(String*)&rh.value.s);
+            emplace(cast(String*)&value.s, *cast(String*)&rh.value.s);
             count = rh.count;
             flags = rh.flags;
         }
@@ -103,7 +103,7 @@ nothrow @nogc:
         }
         else if (rh.isString)
         {
-            new(*cast(String*)&value.s) String(*cast(String*)&rh.value.s);
+            emplace(cast(String*)&value.s, *cast(String*)&rh.value.s);
             count = rh.count;
             flags = rh.flags;
         }
@@ -442,7 +442,7 @@ nothrow @nogc:
         if (&this is &value)
             return; // TODO: should this be an assert instead of a graceful handler?
         destroy!false();
-        new(this) Variant(value);
+        emplace(&this, value);
     }
 
     void opAssign(ref const Variant value)
@@ -450,14 +450,14 @@ nothrow @nogc:
         if (&this is &value)
             return; // TODO: should this be an assert instead of a graceful handler?
         destroy!false();
-        new(this) Variant(value);
+        emplace(&this, value);
     }
 
     version (EnableMoveSemantics) {
     void opAssign(Variant value)
     {
         destroy!false();
-        new(this) Variant(__rvalue(value)); // TODO: value.move
+        emplace(&this, __rvalue(value)); // TODO: value.move
     }
     }
 

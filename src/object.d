@@ -304,8 +304,11 @@ class TypeInfo_Struct : TypeInfo
 
     override bool opEquals(Object o)
     {
-        if (this is o) return true;
-        auto s = cast(const TypeInfo_Struct) o;
+        if (this is o)
+            return true;
+        if (o is null || *cast(void**)this != *cast(void**)o)
+            return false;
+        auto s = cast(const(TypeInfo_Struct))cast(const(void)*)o;
         return s && this.mangledName == s.mangledName;
     }
 
@@ -554,8 +557,11 @@ class TypeInfo_AssociativeArray : TypeInfo
 
     override bool opEquals(Object o)
     {
-        if (this is o) return true;
-        auto c = cast(const TypeInfo_AssociativeArray) o;
+        if (this is o)
+            return true;
+        if (o is null || *cast(void**)this != *cast(void**)o)
+            return false;
+        auto c = cast(const(TypeInfo_AssociativeArray))cast(const(void)*)o;
         return c && this.key == c.key && this.value == c.value;
     }
 

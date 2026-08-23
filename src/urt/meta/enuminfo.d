@@ -649,8 +649,8 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         lookup[count*2 + i] = inv_k[i];
     }
 
-    // build and return the object
-    return new(*result) VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), value_ptr, key_ptr, disp_ptr, str_data, lookup, cast(GetFun)&get_value!T);
+    VoidEnumInfo value = VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), cast(void*)value_ptr, key_ptr, disp_ptr, str_data, lookup, cast(GetFun)&get_value!T);
+    return result.emplace(value);
 }
 
 size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc

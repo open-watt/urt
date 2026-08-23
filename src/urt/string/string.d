@@ -581,12 +581,12 @@ nothrow @nogc:
 
 template make_table(const(char[])[] strings, bool dedupe = true)
 {
-    private enum packed = pack_strings(strings, dedupe);
+    private enum packed = pack_strings!(strings.length)(strings, dedupe);
 
     enum make_table = fill_table!(StringTable!(packed.offsets.length, packed.cache.length, packed.max_offset))(packed);
 }
 
-private Table fill_table(Table)(PackedStrings packed)
+private Table fill_table(Table, size_t count)(PackedStrings!count packed)
 {
     Table table;
     foreach (i, o; packed.offsets)
@@ -598,19 +598,18 @@ private Table fill_table(Table)(PackedStrings packed)
     return table;
 }
 
-private struct PackedStrings
+private struct PackedStrings(size_t count)
 {
-    ushort[] offsets;
+    ushort[count] offsets;
     char[] cache;
     ushort max_offset;
 }
 
-private PackedStrings pack_strings(const(char[])[] strings, bool dedupe) nothrow
+private PackedStrings!count pack_strings(size_t count)(const(char[])[] strings, bool dedupe) nothrow
 {
     assert(__ctfe, "only for compile-time use");
 
-    PackedStrings r;
-    r.offsets = new ushort[strings.length];
+    PackedStrings!count r;
     foreach (i, s; strings)
     {
         assert(s.length <= MaxStringLen, "String too long");

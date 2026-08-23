@@ -1,15 +1,16 @@
 module urt.string.ascii;
 
+import urt.mem : alloc;
 
 
-char[] to_lower(const(char)[] str) pure nothrow
+char[] to_lower(const(char)[] str) pure nothrow @nogc
 {
-    return to_lower(str, new char[str.length]);
+    return to_lower(str, cast(char[])alloc(str.length));
 }
 
-char[] to_upper(const(char)[] str) pure nothrow
+char[] to_upper(const(char)[] str) pure nothrow @nogc
 {
-    return to_upper(str, new char[str.length]);
+    return to_upper(str, cast(char[])alloc(str.length));
 }
 
 

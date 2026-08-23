@@ -73,6 +73,49 @@ enum SiPrefixable;
 
 enum ScaledUnits : ScaledUnit
 {
+    @SiPrefixable @("m")
+    metre = ScaledUnit(Metre),
+    @("kg")
+    kilogram = ScaledUnit(Kilogram),
+    @SiPrefixable @("s")
+    second = ScaledUnit(Second),
+    @SiPrefixable @("A")
+    ampere = ScaledUnit(Ampere),
+    @SiPrefixable @("K")
+    kelvin = ScaledUnit(Kelvin),
+    @SiPrefixable @("cd")
+    candela = ScaledUnit(Candela),
+    @SiPrefixable @("rad")
+    radian = ScaledUnit(Radian),
+    @SiPrefixable @("N")
+    newton = ScaledUnit(Newton),
+    @SiPrefixable @("Pa")
+    pascal = ScaledUnit(Pascal),
+    @SiPrefixable @("J")
+    joule = ScaledUnit(Joule),
+    @SiPrefixable @("W", "VA", "var")
+    watt = ScaledUnit(Watt),
+    @SiPrefixable @("C")
+    coulomb = ScaledUnit(Coulomb),
+    @SiPrefixable @("V")
+    volt = ScaledUnit(Volt),
+    @SiPrefixable @("Ω")
+    ohm = ScaledUnit(Ohm),
+    @SiPrefixable @("F")
+    farad = ScaledUnit(Farad),
+    @SiPrefixable @("S")
+    siemens = ScaledUnit(Siemens),
+    @SiPrefixable @("Wb")
+    weber = ScaledUnit(Weber),
+    @SiPrefixable @("T")
+    tesla = ScaledUnit(Tesla),
+    @SiPrefixable @("H")
+    henry = ScaledUnit(Henry),
+    @SiPrefixable @("lm")
+    lumen = ScaledUnit(Lumen),
+    @SiPrefixable @("lx")
+    lux = ScaledUnit(Lux),
+
     @("min", "mins")
     minute = ScaledUnit(Second, PrefixFactor.Minute),
     @("hr", "h", "hrs")
@@ -365,12 +408,13 @@ nothrow:
             if (p == 0)
                 return -1; // invalid power
 
-            if (const Unit* u = find_named_unit(unit))
-                r *= (*u) ^^ (invert ? -p : p);
-            else
-            {
-                assert(false, "TODO?");
-            }
+            size_t spelling_index = find_scaled_unit_spelling(unit);
+            if (spelling_index == g_unit_spellings.length)
+                return -1;
+            ScaledUnit scaled = scaled_unit_from_spelling(spelling_index);
+            if (scaled != scaled.unit)
+                return -1;
+            r *= scaled.unit ^^ (invert ? -p : p);
             if (sep == '/')
                 invert = true;
         }
@@ -402,6 +446,12 @@ unittest
     assert(Metre^^2 * Metre == Metre^^3);
     assert((Metre^^-1)^^-1 == Metre);
     assert((Metre^^-1)^^2 == Metre^^-2);
+
+    Unit parsed;
+    assert(parsed.fromString("m/s") == 3 && parsed == Metre / Second);
+    assert(parsed.fromString("VA") == 2 && parsed == Watt);
+    assert(parsed.fromString("var") == 3 && parsed == Watt);
+    assert(parsed.fromString("km") == -1);
 
     Unit farad = Kilogram^^-1 * Metre^^-2 * Second^^4 * Ampere^^2;
     assert(farad.pack == ((UnitType.Mass << 3)     | (4 << 0)  |
@@ -938,22 +988,24 @@ nothrow:
                 if (!combine(ScaledUnit(Unit(), e), 1))
                     return -1;
             }
-            else if (const Unit* u = find_named_unit(term[offset .. $]))
+            else if ((spelling_index = find_scaled_unit_spelling(term[offset .. $])) < g_unit_spellings.length)
             {
-                // prefer folding the decimal exponent into the unit; records then
-                // stay integral instead of carrying a runtime scale
-                if (!valid_si_exp(e) || !combine(ScaledUnit(*u, e), invert ? -p : p))
+                ScaledUnit scaled = scaled_unit_from_spelling(spelling_index);
+                if (scaled == scaled.unit)
                 {
-                    if (!combine(ScaledUnit(*u), invert ? -p : p))
+                    if (!valid_si_exp(e) || !combine(ScaledUnit(scaled.unit, e), invert ? -p : p))
+                    {
+                        if (!combine(scaled, invert ? -p : p))
+                            return -1;
+                        pre_scale *= 10.0^^e;
+                    }
+                }
+                else
+                {
+                    if (!combine(scaled, invert ? -p : p))
                         return -1;
                     pre_scale *= 10.0^^e;
                 }
-            }
-            else if ((spelling_index = find_scaled_unit_spelling(term[offset .. $])) < g_unit_spellings.length)
-            {
-                if (!combine(scaled_unit_from_spelling(spelling_index), invert ? -p : p))
-                    return -1;
-                pre_scale *= 10.0^^e;
             }
             else
             {
@@ -1003,17 +1055,7 @@ nothrow:
                     return -1;
 
                 term = term[offset .. $];
-                if (const Unit* u = find_named_unit(term))
-                {
-                    if (term == "kg")
-                    {
-                        // we alrady parsed the 'k', so this string must have been "kkg", which is nonsense
-                        return -1;
-                    }
-                    if (!combine(ScaledUnit(*u, e), invert ? -p : p))
-                        return -1;
-                }
-                else if ((spelling_index = find_scaled_unit_spelling(term, true)) < g_unit_spellings.length)
+                if ((spelling_index = find_scaled_unit_spelling(term, true)) < g_unit_spellings.length)
                 {
                     ScaledUnit su = scaled_unit_from_spelling(spelling_index);
                     if (su.siScale())
@@ -1096,9 +1138,8 @@ nothrow:
         size_t len = 0;
         if (siScale)
         {
-            if (const string* name = find_unit_name(unit))
+            if (const(char)[] spelling = scaled_unit_spelling(ScaledUnit(unit)))
             {
-                const(char)[] spelling = *name;
                 int scale_exp = exp;
                 if (unit == Kilogram && exp != 0)
                 {
@@ -1117,9 +1158,8 @@ nothrow:
                 }
                 len += spelling.length;
             }
-            else if (const string* name = find_unit_name(unit ^^ -1))
+            else if (const(char)[] spelling = scaled_unit_spelling(ScaledUnit(unit ^^ -1)))
             {
-                const(char)[] spelling = *name;
                 int scale_exp = -exp;
                 if ((unit ^^ -1) == Kilogram && exp != 0)
                 {
@@ -1302,6 +1342,9 @@ unittest
     assert(su.parse_unit("ms", pre) == 2 && su == ScaledUnit(Second, -3) && pre == 1);
     assert(su.parse_unit("m*s", pre) == 3 && su == Metre * Second && pre == 1);
     assert(su.parse_unit("/ms", pre) == 3 && su == ScaledUnit(Second, -3)^^-1 && pre == 1);
+    assert(su.parse_unit("kVA", pre) == 3 && su == ScaledUnit(Watt, 3));
+    assert(su.parse_unit("kvar", pre) == 4 && su == ScaledUnit(Watt, 3));
+    assert(su.parse_unit("kkg", pre) == -1);
     assert(su.scale() == 1e3 && su != Kilohertz);
     assert(su.parse_unit("m^-1*s^-1", pre) == 9 && su == (Metre * Second)^^-1 && pre == 1);
     assert(ScaledUnits.kilometre_per_hour.scale() == 1000.0 / 3600);
@@ -1330,6 +1373,7 @@ unittest
     round_trip(ScaledUnit(Candela), "cd");
     round_trip(ScaledUnit(Tesla), "T");
     round_trip(ScaledUnit(Pascal, 3), "kPa");
+    round_trip(ScaledUnit(Watt, 6), "MW");
     round_trip(ScaledUnit(Candela, -2), "ccd");
     round_trip(ScaledUnit(Tesla, 12), "TT");
     round_trip(ScaledUnit(Radian, -27), "rrad");
@@ -1753,54 +1797,6 @@ ptrdiff_t synth_unit_name(Unit u, char[] buffer, int scale_exp = 0) pure nothrow
         }
     }
     return len;
-}
-
-private struct NamedUnit
-{
-    string name;
-    Unit unit;
-}
-
-private immutable NamedUnit[] named_units = [
-    NamedUnit("m", Metre),
-    NamedUnit("kg", Kilogram),
-    NamedUnit("s", Second),
-    NamedUnit("A", Ampere),
-    NamedUnit("K", Kelvin),
-    NamedUnit("cd", Candela),
-    NamedUnit("rad", Radian),
-    NamedUnit("N", Newton),
-    NamedUnit("Pa", Pascal),
-    NamedUnit("J", Joule),
-    NamedUnit("W", Watt),
-    NamedUnit("C", Coulomb),
-    NamedUnit("V", Volt),
-    NamedUnit("Ω", Ohm),
-    NamedUnit("F", Farad),
-    NamedUnit("S", Siemens),
-    NamedUnit("Wb", Weber),
-    NamedUnit("T", Tesla),
-    NamedUnit("H", Henry),
-    NamedUnit("lm", Lumen),
-    NamedUnit("lx", Lux),
-    NamedUnit("VA", Watt),
-    NamedUnit("var", Watt),
-];
-
-private const(Unit)* find_named_unit(const(char)[] name) pure
-{
-    foreach (ref named; named_units)
-        if (name == named.name)
-            return &named.unit;
-    return null;
-}
-
-private const(string)* find_unit_name(Unit unit) pure
-{
-    foreach (ref named; named_units)
-        if (unit == named.unit)
-            return &named.name;
-    return null;
 }
 
 int take_power(ref const(char)[] s) pure

@@ -624,7 +624,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         // write the string data and store the key offset
         const(char)[] key = ksort[i].v;
         key_ptr[i] = cast(ushort)(str_ptr - str_data);
-        writeString(str_ptr, key);
+        write_string(str_ptr, key);
         if (key.length & 1)
             (str_ptr++)[key.length] = 0; // align to 2 bytes
         str_ptr += 2 + key.length;
@@ -637,7 +637,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
             else
             {
                 disp_ptr[i] = cast(ushort)(str_ptr - str_data);
-                writeString(str_ptr, d);
+                write_string(str_ptr, d);
                 if (d.length & 1)
                     (str_ptr++)[d.length] = 0; // align to 2 bytes
                 str_ptr += 2 + d.length;

@@ -100,7 +100,7 @@ unittest
     assert(cache.add_string(null) == 0);
 }
 
-//enum String StringLit(string s) = s.makeString;
+//enum String StringLit(string s) = s.make_string;
 template StringLit(const(char)[] lit, bool zeroTerminate = true)
 {
     static assert(lit.length <= MaxStringLen, "String too long");
@@ -129,25 +129,21 @@ template StringLit(const(char)[] lit, bool zeroTerminate = true)
     enum StringLit = immutable(String)(literal.ptr + 2, false);
 }
 
-String makeString(const(char)[] s) nothrow
-{
-    if (s.length == 0)
-        return String(null);
-    assert(__ctfe, "only for compile-time use");
-    return makeString(s, new char[2 + s.length]);
-}
-
-String makeString(const(char)[] s, NoGCAllocator a) nothrow @nogc
+String make_string(const(char)[] s) nothrow @nogc
 {
     if (s.length == 0)
         return String(null);
 
     assert(s.length <= MaxStringLen, "String too long");
 
-    return String(writeString(alloc_string(cast(ushort)s.length, a), s), true);
+    return String(alloc_string(s), false);
 }
 
-String makeString(const(char)[] s, char[] buffer) nothrow @nogc
+// transitional; the allocator is ignored, callers are migrated separately
+String make_string(const(char)[] s, NoGCAllocator) nothrow @nogc
+    => make_string(s);
+
+String make_string(const(char)[] s, char[] buffer) nothrow @nogc
 {
     if (s.length == 0)
         return String(null);
@@ -155,10 +151,13 @@ String makeString(const(char)[] s, char[] buffer) nothrow @nogc
     debug assert((cast(size_t)buffer.ptr & 1) == 0, "Buffer must be 2-byte aligned");
     assert(buffer.length >= 2 + s.length, "Not enough memory for string");
 
-    return String(writeString(buffer.ptr + 2, s), false);
+    return String(write_string(buffer.ptr + 2, s), false);
 }
 
-char* writeString(char* buffer, const(char)[] str) pure nothrow @nogc
+// transitional; goes with the allocator overload once the callers are renamed
+alias makeString = make_string;
+
+char* write_string(char* buffer, const(char)[] str) pure nothrow @nogc
 {
     // TODO: assume the calling code has confirmed the length is within spec
     if (__ctfe)
@@ -218,7 +217,7 @@ nothrow @nogc:
             return;
         if (ushort* rc = ((cast(ushort*)ptr)[-1] >> 15) ? cast(ushort*)ptr - 2 : null)
         {
-            assert((*rc & 0x3FFF) < 0x3FFF, "Reference count overflow");
+            assert(*rc < 0xFFFF, "Reference count overflow");
             ++*rc;
         }
     }
@@ -241,7 +240,7 @@ nothrow @nogc:
     ~this() pure
     {
         if (ptr)
-            decRef();
+            dec_ref();
     }
 
     const(char)[] toString() const pure
@@ -271,7 +270,7 @@ nothrow @nogc:
     {
         if (ptr)
         {
-            decRef();
+            dec_ref();
             ptr = null;
         }
     }
@@ -279,7 +278,7 @@ nothrow @nogc:
     void opAssign(TS)(const(TailString!TS) ts) pure
     {
         if (ptr)
-            decRef();
+            dec_ref();
 
         ptr = ts.ptr;
     }
@@ -351,39 +350,39 @@ nothrow @nogc:
         => ptr && ((cast(ushort*)ptr)[-1] >> 15) != 0;
 
 private:
-    ushort* refCounter() const pure
+    ushort* ref_counter() const pure
         => ((cast(ushort*)ptr)[-1] >> 15) ? cast(ushort*)ptr - 2 : null;
 
-    void addRef() pure
+    void add_ref() pure
     {
-        if (ushort* rc = refCounter())
+        if (ushort* rc = ref_counter())
         {
-            assert((*rc & 0x3FFF) < 0x3FFF, "Reference count overflow");
+            assert(*rc < 0xFFFF, "Reference count overflow");
             ++*rc;
         }
     }
 
-    void decRef() pure
+    void dec_ref() pure
     {
-        if (ushort* rc = refCounter())
+        if (ushort* rc = ref_counter())
         {
-            if ((*rc & 0x3FFF) == 0)
-                free_string(cast(char*)ptr, *rc >> 14);
+            if (*rc == 0)
+                free_string(cast(char*)ptr);
             else
                 --*rc;
         }
     }
 
-    this(inout(char)* str, bool refCounted) inout pure
+    this(inout(char)* str, bool ref_counted) inout pure
     {
         ptr = str;
-        if (refCounted)
+        if (ref_counted)
             *cast(ushort*)(ptr - 2) |= 0x8000;
     }
 
     version (Windows)
     {
-        auto __debugOverview() const pure => ptr ? ptr[0 .. length].debugExcapeString() : null;
+        auto __debugOverview() const pure => ptr ? ptr[0 .. length].debug_escape_string() : null;
         auto __debugExpanded() const pure => ptr ? ptr[0 .. length] : null;
         auto __debugStringView() const pure => ptr ? ptr[0 .. length] : null;
     }
@@ -404,20 +403,21 @@ unittest
     assert(emptyLit == "");
     assert(!emptyLit); // opCast!bool
 
-    // Test makeString (default allocator)
+    // Test make_string (default allocator)
     // TODO: reinstate the GC for debug allocations...
-//    String s1 = makeString("World");
+//    String s1 = make_string("World");
     String s1 = StringLit!"World";
     assert(s1.length == 5);
     assert(s1 == "World");
 
     // Test empty string creation
-    String emptyStr = makeString("");
+    String emptyStr = make_string("");
     assert(emptyStr.ptr is null);
     assert(emptyStr.length == 0);
     assert(emptyStr == "");
     assert(!emptyStr);
 
+    // via the transitional alias and the ignored-allocator overload, as the callers still spell it
     String owned = "Owned".makeString(defaultAllocator);
     assert(owned == "Owned");
 
@@ -427,7 +427,7 @@ unittest
     assert(nullStr == "");
     assert(!nullStr);
 
-    // TODO: reinstate once GC makeString is available
+    // TODO: reinstate once GC make_string is available
     // Test assignment and reference counting (basic check)
     String s3 = s1; // s3 references the same data as s1
     assert(s3.ptr == s1.ptr);
@@ -798,7 +798,7 @@ nothrow @nogc:
 
     ~this() pure
     {
-        freeStringBuffer(ptr);
+        free_string_buffer(ptr);
     }
 
     inout(char)[] toString() inout pure
@@ -1011,7 +1011,7 @@ nothrow @nogc:
         debug assert(newLen <= MaxStringLen, "String too long");
 
         size_t oldAlloc = allocated();
-        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(grow_capacity(newLen, oldAlloc));
+        ptr = newLen <= oldAlloc ? oldPtr : alloc_string_buffer(grow_capacity(newLen, oldAlloc));
         memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
         _format(ptr[offset .. offset + insertLen], format, forward!args);
         writeLength(newLen);
@@ -1019,7 +1019,7 @@ nothrow @nogc:
         if (oldPtr && ptr != oldPtr)
         {
             ptr[0 .. offset] = oldPtr[0 .. offset];
-            freeStringBuffer(oldPtr);
+            free_string_buffer(oldPtr);
         }
         return this;
     }
@@ -1045,12 +1045,12 @@ nothrow @nogc:
     {
         if (bytes > allocated())
         {
-            char* newPtr = allocStringBuffer(bytes);
+            char* newPtr = alloc_string_buffer(bytes);
             if (ptr != newPtr)
             {
                 size_t len = length();
                 newPtr[0 .. len] = ptr[0 .. len];
-                freeStringBuffer(ptr);
+                free_string_buffer(ptr);
                 ptr = newPtr;
                 writeLength(len);
             }
@@ -1111,7 +1111,7 @@ private:
         (cast(ushort*)ptr)[-1] = cast(ushort)len;
     }
 
-    char* allocStringBuffer(size_t len)
+    char* alloc_string_buffer(size_t len)
     {
         static if (Embed > 0)
             if (len <= Embed - 2)
@@ -1121,7 +1121,7 @@ private:
         return buffer + 4;
     }
 
-    void freeStringBuffer(char* buffer) pure
+    void free_string_buffer(char* buffer) pure
     {
         if (!buffer)
             return;
@@ -1147,7 +1147,7 @@ private:
         debug assert(newLen <= MaxStringLen, "String too long");
 
         size_t oldAlloc = allocated();
-        ptr = newLen <= oldAlloc ? oldPtr : allocStringBuffer(grow_capacity(newLen, oldAlloc));
+        ptr = newLen <= oldAlloc ? oldPtr : alloc_string_buffer(grow_capacity(newLen, oldAlloc));
         memmove(ptr + offset + insertLen, oldPtr + offset, oldLen - offset);
         concat_impl(ptr + offset, insertLen, args, arg_mask);
         writeLength(newLen);
@@ -1155,14 +1155,14 @@ private:
         if (oldPtr && ptr != oldPtr)
         {
             ptr[0 .. offset] = oldPtr[0 .. offset];
-            freeStringBuffer(oldPtr);
+            free_string_buffer(oldPtr);
         }
         return this;
     }
 
     version (Windows)
     {
-        auto __debugOverview() const pure => ptr ? ptr[0 .. length].debugExcapeString() : null;
+        auto __debugOverview() const pure => ptr ? ptr[0 .. length].debug_escape_string() : null;
         auto __debugExpanded() const pure => ptr ? ptr[0 .. length] : null;
         auto __debugStringView() const pure => ptr ? ptr[0 .. length] : null;
     }
@@ -1323,39 +1323,30 @@ unittest
 
 private:
 
-enum explicit_allocator = 3;
-
 pragma(inline, false)
-char* alloc_string(ushort bytes, NoGCAllocator allocator) pure nothrow @nogc
+char* alloc_string(const(char)[] s) pure nothrow @nogc
 {
-    char* buffer = cast(char*)allocator.alloc(size_t.sizeof*2 + bytes, size_t.alignof).ptr;
-    *cast(NoGCAllocator*)buffer = allocator;
-    buffer += size_t.sizeof*2;
-    (cast(ushort*)buffer)[-2] = explicit_allocator << 14;
+    char* buffer = cast(char*)alloc(4 + s.length, ushort.alignof).ptr;
+    if (buffer is null)
+        return null;
+    buffer += 4;
+    (cast(ushort*)buffer)[-2] = 0;
+    (cast(ushort*)buffer)[-1] = cast(ushort)s.length | 0x8000;
+    buffer[0 .. s.length] = s[];
     return buffer;
 }
 
 pragma(inline, false)
-void free_string(char* str, uint allocator_index) pure nothrow @nogc
+void free_string(char* str) pure nothrow @nogc
 {
     ushort length = (cast(ushort*)str)[-1] & 0x7FFF;
-    if (allocator_index == explicit_allocator)
-    {
-        NoGCAllocator allocator = *cast(NoGCAllocator*)(str - size_t.sizeof*2);
-        str -= size_t.sizeof*2;
-        allocator.free(str[0 .. size_t.sizeof*2 + length]);
-    }
-    else
-    {
-        assert(allocator_index == 0, "Invalid string allocator index");
-        str -= 4;
-        free(str[0 .. 4 + length]);
-    }
+    str -= 4;
+    free(str[0 .. 4 + length]);
 }
 
 version (Windows)
 {
-    char[] debugExcapeString(const char[] s) pure nothrow @nogc
+    char[] debug_escape_string(const char[] s) pure nothrow @nogc
     {
         char[] t = debug_alloc!char(s.length*2);
         int d;
@@ -1375,5 +1366,36 @@ version (Windows)
             }
         }
         return t[0..d];
+    }
+}
+
+unittest
+{
+    String a = make_string("Refcounted");
+    assert(a.length == 10 && a == "Refcounted");
+
+    {
+        String b = a;
+        assert(b.ptr is a.ptr);
+        {
+            String c = b;
+            assert(c == "Refcounted");
+        }
+        assert(b == "Refcounted");
+    }
+    assert(a == "Refcounted");
+
+    String d = a;
+    a = null;
+    assert(d == "Refcounted");
+    d = null;
+
+    assert(make_string("").ptr is null);
+
+    // a leak or a double free in free_string shows up here, not in the single-shot cases above
+    foreach (i; 0 .. 10_000)
+    {
+        String t = make_string("churn");
+        assert(t == "churn");
     }
 }

@@ -3,7 +3,6 @@ module urt.array;
 import urt.lifetime : move, emplace, moveEmplace;
 import urt.mem : memcpy, memmove, memset;
 import urt.mem.alloc;
-import urt.mem.allocator : NoGCAllocator;
 import urt.traits : is_some_char, is_primitive, is_trivial, Unqual;
 
 nothrow @nogc:
@@ -352,13 +351,9 @@ void init_all(T)(T[] arr)
         emplace!T(&arr[i]);
 }
 
-T[] duplicate(T)(const T[] src, NoGCAllocator allocator = null) nothrow @nogc
+T[] duplicate(T)(const T[] src) nothrow @nogc
 {
-    T[] r;
-    if (allocator)
-        r = cast(T[])allocator.alloc(src.length * T.sizeof);
-    else
-        r = cast(T[])alloc(src.length * T.sizeof);
+    T[] r = cast(T[])alloc(src.length * T.sizeof);
     emplace_all(src, r);
     return r;
 }

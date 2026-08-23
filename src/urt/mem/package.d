@@ -3,7 +3,6 @@ module urt.mem;
 // TODO: remove these public imports, because this is pulled by object.d!
 public import urt.lifetime : emplace, moveEmplace, forward, move;
 public import urt.mem.alloc;
-public import urt.mem.allocator;
 
 nothrow @nogc:
 

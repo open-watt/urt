@@ -139,10 +139,6 @@ String make_string(const(char)[] s) nothrow @nogc
     return String(alloc_string(s), false);
 }
 
-// transitional; the allocator is ignored, callers are migrated separately
-String make_string(const(char)[] s, NoGCAllocator) nothrow @nogc
-    => make_string(s);
-
 String make_string(const(char)[] s, char[] buffer) nothrow @nogc
 {
     if (s.length == 0)
@@ -153,9 +149,6 @@ String make_string(const(char)[] s, char[] buffer) nothrow @nogc
 
     return String(write_string(buffer.ptr + 2, s), false);
 }
-
-// transitional; goes with the allocator overload once the callers are renamed
-alias makeString = make_string;
 
 char* write_string(char* buffer, const(char)[] str) pure nothrow @nogc
 {
@@ -417,8 +410,7 @@ unittest
     assert(emptyStr == "");
     assert(!emptyStr);
 
-    // via the transitional alias and the ignored-allocator overload, as the callers still spell it
-    String owned = "Owned".makeString(defaultAllocator);
+    String owned = "Owned".make_string();
     assert(owned == "Owned");
 
     String nullStr = String(null);

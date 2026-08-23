@@ -267,8 +267,9 @@ immutable(ModuleInfo*)[] get_module_infos() nothrow @nogc @trusted
         for (auto p = _Dmodule_ref; p !is null; p = p.next)
             ++count;
 
-        import urt.mem.allocator : Mallocator;
-        auto arr = Mallocator.instance.allocArray!(void*)(count);
+        import urt.mem : alloc_array;
+
+        auto arr = alloc_array!(void*)(count);
         auto p = _Dmodule_ref;
         foreach (i; 0 .. count) { arr[i] = cast(void*)p.mod; p = p.next; }
         return cast(immutable(ModuleInfo*)[])arr;

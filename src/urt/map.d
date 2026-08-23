@@ -3,7 +3,7 @@ module urt.map;
 import urt.array;
 import urt.lifetime;
 import urt.kvp;
-import urt.mem.allocator;
+import urt.mem;
 import urt.util;
 
 nothrow @nogc:
@@ -22,7 +22,7 @@ template DefCmp(T)
 
 alias Map(K, V) = AVLTree!(K, V);
 
-struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
+struct AVLTree(K, V, alias Pred = DefCmp!K)
 {
 @nogc:
     alias KeyType = K;
@@ -166,7 +166,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K, Allocator = Mallocator)
 
     ref V replace(_K, _V)(auto ref _K key, auto ref _V val)
     {
-        Node* node = cast(Node*)Allocator.instance.alloc(Node.sizeof);
+        Node* node = cast(Node*)alloc(Node.sizeof).ptr;
         emplace(&node.kvp, forward!key, forward!val);
         node._base.left = node._base.right = null;
         node._base.height = 1;
@@ -375,7 +375,7 @@ nothrow:
 
     static void free_node(void* p)
     {
-        Allocator.instance.freeT(cast(Node*)p);
+        free(cast(Node*)p);
     }
 
     void destroy(Node* n)
@@ -790,13 +790,12 @@ unittest
     // Heterogeneous remove: search key type differs from the key type, so the search compare
     // must not reinterpret the search key as a K (String vs slice have different layouts)
     {
-        import urt.mem.allocator : defaultAllocator;
-        import urt.string.string : String, make_string;
+        import urt.string.string : String, StringLit;
 
         Map!(String, int) map;
-        map.insert("alpha".make_string(defaultAllocator), 1);
-        map.insert("beta".make_string(defaultAllocator), 2);
-        map.insert("gamma".make_string(defaultAllocator), 3);
+        map.insert(StringLit!"alpha", 1);
+        map.insert(StringLit!"beta", 2);
+        map.insert(StringLit!"gamma", 3);
 
         const(char)[] k = "beta";
         assert(k in map);

@@ -1,6 +1,7 @@
 module urt.string.regex;
 
-import urt.mem.allocator;
+import urt.mem;
+import urt.mem.temp;
 
 nothrow @nogc:
 
@@ -14,7 +15,7 @@ struct RegexMatch
 
 bool regex_match(const(char)[] text, const(char)[] pattern, ref RegexMatch result)
 {
-    Regex re = regex_compile(pattern, tempAllocator());
+    Regex re = regex_compile(pattern, true);
     if (!re.valid)
         return false;
     return re.exec(text, result);
@@ -45,6 +46,13 @@ nothrow @nogc:
 
     bool valid() const
         => data.ptr !is null;
+
+    void release()
+    {
+        if (!temp)
+            free(data);
+        data = null;
+    }
 
     // Execute against text. Unanchored unless pattern used ^.
     bool exec(const(char)[] text, ref RegexMatch result) const
@@ -224,6 +232,7 @@ nothrow @nogc:
 
 private:
     const(ubyte)[] data; // Header ~ Inst[] ~ ClassRange[] ~ ClassDef[]
+    bool temp;
 
     struct Header
     {
@@ -282,7 +291,8 @@ private:
 }
 
 
-Regex regex_compile(const(char)[] pattern, NoGCAllocator allocator = defaultAllocator())
+// temp programs are only valid until something else reaches for the arena; heap ones need release()
+Regex regex_compile(const(char)[] pattern, bool temp = false)
 {
     import urt.mem : memcpy;
 
@@ -561,7 +571,7 @@ Regex regex_compile(const(char)[] pattern, NoGCAllocator allocator = defaultAllo
 
     // Pack into single allocation: Header ~ Inst[pc] ~ ClassRange[total_ranges] ~ ClassDef[num_classes]
     size_t size = Regex.Header.sizeof + pc * Inst.sizeof + total_ranges * ClassRange.sizeof + num_classes * ClassDef.sizeof;
-    ubyte[] buf = cast(ubyte[])allocator.alloc(size);
+    ubyte[] buf = cast(ubyte[])(temp ? talloc(size) : alloc(size));
     if (!buf)
         return fail;
 
@@ -581,6 +591,7 @@ Regex regex_compile(const(char)[] pattern, NoGCAllocator allocator = defaultAllo
 
     Regex result;
     result.data = cast(const(ubyte)[])buf;
+    result.temp = temp;
     return result;
 }
 
@@ -949,4 +960,22 @@ unittest
 
     assert(regex_match("", ".*", m));
     assert(m.full == "");
+}
+
+unittest
+{
+    RegexMatch m;
+    assert(regex_match("aaab", "^a+b$", m));
+
+    // a retained program outlives the arena; a temp one is clobbered by the next talloc
+    Regex kept = regex_compile("^a+b$");
+    assert(kept.valid && !kept.temp);
+    const ubyte first = kept.data[0];
+    foreach (i; 0 .. 64)
+        (cast(ubyte[])talloc(256))[] = 0xCD;
+    assert(kept.data[0] == first);
+    assert(kept.exec("aaab", m));
+
+    kept.release();
+    assert(!kept.valid);
 }

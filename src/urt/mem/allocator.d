@@ -124,31 +124,6 @@ nothrow:
     }
 }
 
-class GCAllocator : Allocator
-{
-nothrow:
-    static GCAllocator instance() pure @nogc
-    {
-        alias PureHack = GCAllocator function() pure nothrow @nogc;
-        static GCAllocator hack() nothrow @nogc => _instance;
-        return (cast(PureHack)&hack)();
-    }
-
-    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure
-    {
-        // TODO: can/should we enforce alignment?
-        return new void[bytes];
-    }
-
-    override void free(void[] mem) pure
-    {
-        // GC will take care of it...
-    }
-
-private:
-    __gshared GCAllocator _instance = new GCAllocator;
-}
-
 class NoGCAllocator : Allocator
 {
 nothrow @nogc:
@@ -307,34 +282,6 @@ nothrow @nogc:
 
 private:
     __gshared Mallocator _instance = new Mallocator;
-}
-
-class RegionAllocator : NoGCAllocator
-{
-    import urt.mem.region;
-nothrow @nogc:
-
-    static RegionAllocator get_region_allocator(void[] region) pure
-    {
-        Region* r = makeRegion(region);
-        return r.alloc!RegionAllocator(r);
-    }
-
-    this(Region* region) pure
-    {
-        this.region = region;
-    }
-
-    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure
-    {
-        return region.alloc(bytes, alignment);
-    }
-
-    override void free(void[] mem) pure
-    {
-    }
-
-    Region* region;
 }
 
 

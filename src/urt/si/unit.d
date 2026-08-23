@@ -365,7 +365,7 @@ nothrow:
             if (p == 0)
                 return -1; // invalid power
 
-            if (const Unit* u = unit in unitMap)
+            if (const Unit* u = find_named_unit(unit))
                 r *= (*u) ^^ (invert ? -p : p);
             else
             {
@@ -938,7 +938,7 @@ nothrow:
                 if (!combine(ScaledUnit(Unit(), e), 1))
                     return -1;
             }
-            else if (const Unit* u = term[offset .. $] in unitMap)
+            else if (const Unit* u = find_named_unit(term[offset .. $]))
             {
                 // prefer folding the decimal exponent into the unit; records then
                 // stay integral instead of carrying a runtime scale
@@ -1003,7 +1003,7 @@ nothrow:
                     return -1;
 
                 term = term[offset .. $];
-                if (const Unit* u = term in unitMap)
+                if (const Unit* u = find_named_unit(term))
                 {
                     if (term == "kg")
                     {
@@ -1096,7 +1096,7 @@ nothrow:
         size_t len = 0;
         if (siScale)
         {
-            if (const string* name = unit in unitNames)
+            if (const string* name = find_unit_name(unit))
             {
                 const(char)[] spelling = *name;
                 int scale_exp = exp;
@@ -1117,7 +1117,7 @@ nothrow:
                 }
                 len += spelling.length;
             }
-            else if (const string* name = (unit ^^ -1) in unitNames)
+            else if (const string* name = find_unit_name(unit ^^ -1))
             {
                 const(char)[] spelling = *name;
                 int scale_exp = -exp;
@@ -1755,62 +1755,53 @@ ptrdiff_t synth_unit_name(Unit u, char[] buffer, int scale_exp = 0) pure nothrow
     return len;
 }
 
-immutable string[Unit] unitNames = [
-    Metre       : "m",
-    Kilogram    : "kg",
-    Second      : "s",
-    Ampere      : "A",
-    Kelvin      : "K",
-    Candela     : "cd",
-    Radian      : "rad",
+private struct NamedUnit
+{
+    string name;
+    Unit unit;
+}
 
-    // derived units
-    Newton      : "N",
-    Pascal      : "Pa",
-    Joule       : "J",
-    Watt        : "W",
-    Coulomb     : "C",
-    Volt        : "V",
-    Ohm         : "Ω",
-    Farad       : "F",
-    Siemens     : "S",
-    Weber       : "Wb",
-    Tesla       : "T",
-    Henry       : "H",
-    Lumen       : "lm",
-    Lux         : "lx",
+private immutable NamedUnit[] named_units = [
+    NamedUnit("m", Metre),
+    NamedUnit("kg", Kilogram),
+    NamedUnit("s", Second),
+    NamedUnit("A", Ampere),
+    NamedUnit("K", Kelvin),
+    NamedUnit("cd", Candela),
+    NamedUnit("rad", Radian),
+    NamedUnit("N", Newton),
+    NamedUnit("Pa", Pascal),
+    NamedUnit("J", Joule),
+    NamedUnit("W", Watt),
+    NamedUnit("C", Coulomb),
+    NamedUnit("V", Volt),
+    NamedUnit("Ω", Ohm),
+    NamedUnit("F", Farad),
+    NamedUnit("S", Siemens),
+    NamedUnit("Wb", Weber),
+    NamedUnit("T", Tesla),
+    NamedUnit("H", Henry),
+    NamedUnit("lm", Lumen),
+    NamedUnit("lx", Lux),
+    NamedUnit("VA", Watt),
+    NamedUnit("var", Watt),
 ];
 
-immutable Unit[string] unitMap = [
-    // base units
-    "m"     : Metre,
-    "kg"    : Kilogram,
-    "s"     : Second,
-    "A"     : Ampere,
-    "K"     : Kelvin,
-    "cd"    : Candela,
-    "rad"   : Radian,
+private const(Unit)* find_named_unit(const(char)[] name) pure
+{
+    foreach (ref named; named_units)
+        if (name == named.name)
+            return &named.unit;
+    return null;
+}
 
-    // derived units
-    "N"     : Newton,
-    "Pa"    : Pascal,
-    "J"     : Joule,
-    "W"     : Watt,
-    "C"     : Coulomb,
-    "V"     : Volt,
-    "Ω"     : Ohm,
-    "F"     : Farad,
-    "S"     : Siemens,
-    "Wb"    : Weber,
-    "T"     : Tesla,
-    "H"     : Henry,
-    "lm"    : Lumen,
-    "lx"    : Lux,
-
-    // questionable... :/
-    "VA"    : Watt,
-    "var"   : Watt,
-];
+private const(string)* find_unit_name(Unit unit) pure
+{
+    foreach (ref named; named_units)
+        if (unit == named.unit)
+            return &named.name;
+    return null;
+}
 
 int take_power(ref const(char)[] s) pure
 {

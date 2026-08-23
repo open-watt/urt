@@ -276,7 +276,7 @@ nothrow @nogc:
 
     this(size_t stack_size)
     {
-        new(fibre) Fibre(&this.entry, &do_yield, cast(void*)&this, stack_size);
+        emplace(&fibre, &this.entry, &do_yield, cast(void*)&this, stack_size);
     }
 
     static void entry(void* p)

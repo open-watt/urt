@@ -4,7 +4,6 @@ import urt.array;
 import urt.conv;
 import urt.lifetime;
 import urt.kvp;
-import urt.mem.allocator;
 import urt.si.unit;
 import urt.string;
 import urt.string.format;

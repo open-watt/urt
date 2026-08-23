@@ -534,7 +534,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
 {
     import urt.algorithm;
     import urt.hash : fnv1a;
-    import urt.mem.allocator;
+    import urt.mem.temp;
     import urt.string;
     import urt.string.uni;
     import urt.util;
@@ -563,8 +563,8 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
 
     // first we'll sort the keys and values for binary searching
     // we need to associate their original indices for the lookup tables
-    auto ksort = tempAllocator().allocArray!(VI!(const(char)[]))(count);
-    auto vsort = tempAllocator().allocArray!(VI!T)(count);
+    auto ksort = talloc_array!(VI!(const(char)[]))(count);
+    auto vsort = talloc_array!(VI!T)(count);
     foreach (i; 0 .. count)
     {
         ksort[i] = VI!(const(char)[])(keys[i], cast(ubyte)i);
@@ -574,8 +574,8 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     vsort.qsort!((ref a, ref b) => compare(a.v, b.v));
 
     // build the reverse lookup tables
-    ubyte[] inv_k = tempAllocator().allocArray!ubyte(count);
-    ubyte[] inv_v = tempAllocator().allocArray!ubyte(count);
+    ubyte[] inv_k = talloc_array!ubyte(count);
+    ubyte[] inv_v = talloc_array!ubyte(count);
     foreach (i, ref ki; ksort)
         inv_k[ki.i] = cast(ubyte)i;
     foreach (i, ref vi; vsort)

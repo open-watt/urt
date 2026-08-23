@@ -751,9 +751,7 @@ template to(T)
     }
     else static if (is(T : const(char)[]))
     {
-        import urt.mem.allocator;
-
-        const(char)[] to(ref T, NoGCAllocator allocator = tempAllocator())
+        const(char)[] to(ref T)
         {
             static assert(false, "TODO");
         }

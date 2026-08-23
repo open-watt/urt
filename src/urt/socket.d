@@ -1315,7 +1315,7 @@ Result get_address_info(const(char)[] nodeName, const(char)[] service, AddressIn
 
     version (SocketCallbacks)
     {
-        // Backend fills the resolver with a defaultAllocator-allocated
+        // Backend fills the resolver with a heap-allocated
         // array of AddressInfo entries (sentinel-terminated).
         return Result(_socket_backend.get_address_info(nodeName, service, hints, &result));
     }

@@ -1,6 +1,6 @@
 module urt.file;
 
-import urt.mem.allocator;
+import urt.mem;
 import urt.platform;
 import urt.result;
 import urt.string.uni;
@@ -488,7 +488,7 @@ Result get_attributes(ref const File file, out FileAttributes outAttributes)
     return InternalResult.unsupported;
 }
 
-void[] load_file(const(char)[] path, NoGCAllocator allocator = defaultAllocator())
+void[] load_file(const(char)[] path)
 {
     File f;
     Result r = f.open(path, FileOpenMode.ReadExisting);
@@ -500,7 +500,7 @@ void[] load_file(const(char)[] path, NoGCAllocator allocator = defaultAllocator(
     }
     ulong size = f.get_size();
     assert(size <= size_t.max, "File is too large");
-    void[] buffer = allocator.alloc(cast(size_t)size);
+    void[] buffer = alloc(cast(size_t)size);
     size_t bytesRead;
     r = f.read(buffer[], bytesRead);
     assert(r, "TODO: handle error");

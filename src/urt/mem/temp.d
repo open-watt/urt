@@ -212,46 +212,6 @@ char[] tformat(Args...)(const(char)[] fmt, ref Args args)
 }
 
 
-class TempAllocator : NoGCAllocator
-{
-    static import urt.mem.alloc;
-nothrow @nogc:
-
-    static TempAllocator instance() pure
-    {
-        alias PureHack = TempAllocator function() pure nothrow @nogc;
-        static TempAllocator hack() nothrow @nogc => _instance;
-        return (cast(PureHack)&hack)();
-    }
-
-    override void[] alloc(size_t bytes, size_t alignment = DefaultAlign) pure
-    {
-        return talloc_aligned(bytes, alignment);
-    }
-
-    override void[] realloc(void[] mem, size_t newSize, size_t alignment = DefaultAlign) pure
-    {
-        return trealloc(mem, newSize);
-        // TODO...
-//        return realloc(mem.ptr, newSize)[0..newSize];
-        return null;
-    }
-
-    override void[] expand(void[] mem, size_t newSize) pure
-    {
-        return texpand(mem, newSize);
-    }
-
-    override void free(void[] mem) pure
-    {
-        tfree(mem);
-    }
-
-private:
-    __gshared TempAllocator _instance = new TempAllocator;
-}
-
-
 private:
 
 // TODO: we shpuld really have some indicator if the machine is multi-core or not...

@@ -25,20 +25,19 @@ nothrow @nogc:
         }
         else version (linux)
         {
-            import urt.mem.allocator;
-            auto p = cast(LinuxEvent*)defaultAllocator().alloc(LinuxEvent.sizeof, LinuxEvent.alignof);
+            import urt.mem;
+            LinuxEvent* p = alloc!LinuxEvent(MemFlags.fast);
             if (!p)
                 return false;
-            *p = LinuxEvent.init;
             if (pthread_mutex_init(&p.m, null) != 0)
             {
-                defaultAllocator().free(p[0..1]);
+                free(p);
                 return false;
             }
             if (pthread_cond_init(&p.c, null) != 0)
             {
                 pthread_mutex_destroy(&p.m);
-                defaultAllocator().free(p[0..1]);
+                free(p);
                 return false;
             }
             _internal = p;
@@ -72,13 +71,13 @@ nothrow @nogc:
         }
         else version (linux)
         {
-            import urt.mem.allocator;
+            import urt.mem;
             if (_internal)
             {
                 auto p = cast(LinuxEvent*)_internal;
                 pthread_cond_destroy(&p.c);
                 pthread_mutex_destroy(&p.m);
-                defaultAllocator().free(p[0..1]);
+                free(p);
                 _internal = null;
             }
         }

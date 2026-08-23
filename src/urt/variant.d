@@ -7,7 +7,7 @@ import urt.conv;
 import urt.kvp;
 import urt.lifetime;
 import urt.map;
-import urt.mem.allocator;
+import urt.mem;
 import urt.meta.enuminfo : enum_info, VoidEnumInfo;
 import urt.si.quantity;
 import urt.si.unit : ScaledUnit, Second, Nanosecond;
@@ -60,7 +60,7 @@ nothrow @nogc:
         }
         else if (rh.isBuffer)
         {
-            ptr = defaultAllocator.alloc(rh.count).ptr;
+            ptr = .alloc(rh.count).ptr;
             ptr[0 .. rh.count] = rh.ptr[0 .. rh.count];
             count = rh.count;
             flags = rh.flags;
@@ -73,7 +73,7 @@ nothrow @nogc:
                 td.copy_emplace(rh.embed.ptr, embed.ptr, false);
             else
             {
-                void* mem = defaultAllocator.alloc(td.size, td.alignment).ptr;
+                void* mem = .alloc(td.size, td.alignment).ptr;
                 td.copy_emplace(rh.ptr, mem, false);
                 ptr = mem;
             }
@@ -109,7 +109,7 @@ nothrow @nogc:
         }
         else if (rh.isBuffer)
         {
-            void* mem = defaultAllocator.alloc(rh.count).ptr;
+            void* mem = .alloc(rh.count).ptr;
             mem[0 .. rh.count] = rh.ptr[0 .. rh.count];
             ptr = cast(inout(void)*)mem;
             count = rh.count;
@@ -123,7 +123,7 @@ nothrow @nogc:
                 td.copy_emplace(cast(void*)rh.embed.ptr, cast(void*)embed.ptr, false);
             else
             {
-                void* mem = defaultAllocator.alloc(td.size, td.alignment).ptr;
+                void* mem = .alloc(td.size, td.alignment).ptr;
                 td.copy_emplace(cast(void*)rh.ptr, mem, false);
                 ptr = cast(inout(void)*)mem;
             }
@@ -317,7 +317,7 @@ nothrow @nogc:
         }
         flags = Flags.String;
         flags |= Flags.NeedDestruction;
-        String t = s.makeString(defaultAllocator);
+        String t = s.make_string(defaultAllocator);
         value.s = t.ptr.swap(null);
         count = cast(uint)s.length;
     }
@@ -339,7 +339,7 @@ nothrow @nogc:
         }
         flags = Flags.Buffer;
         flags |= Flags.NeedDestruction;
-        void[] mem = defaultAllocator.alloc(buffer.length);
+        void[] mem = .alloc(buffer.length);
         mem[] = buffer[];
         ptr = mem.ptr;
         count = cast(uint)buffer.length;
@@ -426,7 +426,7 @@ nothrow @nogc:
                 if (TypeDetailsFor!T.destroy) // TODO: we should check the same condition that determined if there is a destruct function...
                     flags |= Flags.NeedDestruction;
 
-                ptr = defaultAllocator().alloc(T.sizeof, T.alignof).ptr;
+                ptr = .alloc(T.sizeof, T.alignof).ptr;
                 emplace(cast(T*)ptr, forward!thing);
             }
         }
@@ -1063,7 +1063,7 @@ nothrow @nogc:
                     return String();
                 assert(isString);
                 if (flags & Flags.Embedded)
-                    return embed[0 .. embed[$-1]].makeString(defaultAllocator);
+                    return embed[0 .. embed[$-1]].make_string(defaultAllocator);
                 return *cast(String*)&value.s;
             }
         }
@@ -1090,7 +1090,7 @@ nothrow @nogc:
             return String();
         assert(isString);
         if (flags & Flags.Embedded)
-            return embed[0 .. embed[$-1]].makeString(defaultAllocator);
+            return embed[0 .. embed[$-1]].make_string(defaultAllocator);
         String s;
         s.ptr = value.s;
         value.s = null;
@@ -1355,7 +1355,7 @@ nothrow @nogc:
                 }
                 else
                 {
-                    void* object = defaultAllocator().alloc(td.size, td.alignment).ptr;
+                    void* object = .alloc(td.size, td.alignment).ptr;
                     td.copy_emplace(buffer.ptr, object, true);
                     if (td.destroy)
                         td.destroy(buffer.ptr);
@@ -1451,7 +1451,7 @@ package:
             if (isString)
                 *cast(String*)&value.s = null;
             else
-                defaultAllocator().free(ptr[0..count]);
+                free(ptr[0..count]);
         }
         else if ((t == Type.Map || t == Type.Array) && value.n)
             nodeArray.destroy!false();
@@ -1461,7 +1461,7 @@ package:
             if (td.destroy)
                 td.destroy(user_ptr);
             if (!(flags & Flags.Embedded))
-                defaultAllocator().free(ptr[0..td.size]);
+                free(ptr[0..td.size]);
         }
     }
 

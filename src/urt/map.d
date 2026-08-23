@@ -791,12 +791,12 @@ unittest
     // must not reinterpret the search key as a K (String vs slice have different layouts)
     {
         import urt.mem.allocator : defaultAllocator;
-        import urt.string.string : String, makeString;
+        import urt.string.string : String, make_string;
 
         Map!(String, int) map;
-        map.insert("alpha".makeString(defaultAllocator), 1);
-        map.insert("beta".makeString(defaultAllocator), 2);
-        map.insert("gamma".makeString(defaultAllocator), 3);
+        map.insert("alpha".make_string(defaultAllocator), 1);
+        map.insert("beta".make_string(defaultAllocator), 2);
+        map.insert("gamma".make_string(defaultAllocator), 3);
 
         const(char)[] k = "beta";
         assert(k in map);

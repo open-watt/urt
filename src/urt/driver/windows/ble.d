@@ -20,7 +20,7 @@ version (Windows):
 
 import urt.atomic : MemoryOrder, atomicFetchAdd, atomicFetchSub, atomicLoad, atomicStore;
 import urt.log;
-import urt.mem.allocator : defaultAllocator;
+import urt.mem;
 import urt.sync.mpmc : ThreadSafeQueue;
 import urt.uuid : GUID;
 
@@ -49,7 +49,7 @@ bool ble_hw_open(uint port, ref const BLEConfig cfg)
     }
 
     if (_completed_handler is null)
-        _completed_handler = defaultAllocator().allocT!AsyncCompletedHandler;
+        _completed_handler = alloc!AsyncCompletedHandler();
 
     _opened = true;
     return true;
@@ -101,7 +101,7 @@ bool ble_hw_scan_start(uint port, ref const BLEScanConfig cfg)
 
     _watcher.put_ScanningMode(cfg.active ? BluetoothLEScanningMode.active : BluetoothLEScanningMode.passive);
 
-    _adv_handler = defaultAllocator().allocT!AdvertisementReceivedHandler;
+    _adv_handler = alloc!AdvertisementReceivedHandler();
     _adv_handler.callback = &on_advertisement_received;
 
     EventRegistrationToken token;
@@ -114,7 +114,7 @@ bool ble_hw_scan_start(uint port, ref const BLEScanConfig cfg)
 
     // register Stopped handler to detect unexpected watcher shutdown
     atomicStore(_watcher_stopped, 0u);
-    _stopped_handler = defaultAllocator().allocT!WatcherStoppedHandler;
+    _stopped_handler = alloc!WatcherStoppedHandler();
     _stopped_handler.flag = &_watcher_stopped;
     EventRegistrationToken stopped_token;
     _watcher.add_Stopped(cast(IUnknown)_stopped_handler, &stopped_token);
@@ -141,12 +141,12 @@ void ble_hw_scan_stop(uint port)
     }
     if (_adv_handler !is null)
     {
-        defaultAllocator().freeT(_adv_handler);
+        free(_adv_handler);
         _adv_handler = null;
     }
     if (_stopped_handler !is null)
     {
-        defaultAllocator().freeT(_stopped_handler);
+        free(_stopped_handler);
         _stopped_handler = null;
     }
     atomicStore(_watcher_stopped, 0u);
@@ -421,7 +421,7 @@ bool ble_hw_gatt_subscribe(uint port, BLEConn conn, ushort handle, bool enable)
         if (gc.notify_handler !is null)
             return true; // already subscribed
 
-        auto handler = defaultAllocator().allocT!GattValueChangedHandler;
+        auto handler = alloc!GattValueChangedHandler();
         handler.conn_id = conn.id;
         handler.attr_handle = handle;
         handler.callback = &on_gatt_notification;
@@ -429,7 +429,7 @@ bool ble_hw_gatt_subscribe(uint port, BLEConn conn, ushort handle, bool enable)
         EventRegistrationToken token;
         if (gc.characteristic.add_ValueChanged(cast(IUnknown)handler, &token) < 0)
         {
-            defaultAllocator().freeT(handler);
+            free(handler);
             return false;
         }
         gc.notify_handler = handler;
@@ -454,7 +454,7 @@ bool ble_hw_gatt_subscribe(uint port, BLEConn conn, ushort handle, bool enable)
             return true; // not subscribed
 
         gc.characteristic.remove_ValueChanged(gc.notify_token);
-        defaultAllocator().freeT(gc.notify_handler);
+        free(gc.notify_handler);
         gc.notify_handler = null;
 
         // write CCCD to disable
@@ -774,7 +774,7 @@ void release_session_gatt(WinSession* s)
         if (gc.notify_handler !is null)
         {
             gc.characteristic.remove_ValueChanged(gc.notify_token);
-            defaultAllocator().freeT(gc.notify_handler);
+            free(gc.notify_handler);
             gc.notify_handler = null;
         }
         if (gc.characteristic !is null)
@@ -796,7 +796,7 @@ void release_session(WinSession* s)
     if (s.device !is null && s.conn_handler !is null)
     {
         s.device.remove_ConnectionStatusChanged(s.conn_status_token);
-        defaultAllocator().freeT(s.conn_handler);
+        free(s.conn_handler);
         s.conn_handler = null;
     }
 
@@ -902,7 +902,7 @@ void poll_connect(BLE ble)
     s.device3 = qi!IBluetoothLEDevice3(device, &IID_IBluetoothLEDevice3);
 
     // register connection status handler
-    auto handler = defaultAllocator().allocT!ConnectionStatusHandler;
+    auto handler = alloc!ConnectionStatusHandler();
     handler.conn_id = s.id;
     handler.callback = &on_connection_status_changed;
     s.device.add_ConnectionStatusChanged(cast(IUnknown)handler, &s.conn_status_token);
@@ -1901,7 +1901,7 @@ nothrow @nogc:
         auto prev = atomicFetchSub(_ref_count, 1);
         if (prev == 1)
         {
-            defaultAllocator().freeT(this);
+            free(this);
             return 0;
         }
         return prev - 1;

@@ -3,8 +3,7 @@ module urt.zip;
 import urt.crc;
 import urt.endian;
 import urt.hash;
-import urt.mem.alloc : MemFlags;
-import urt.mem.allocator;
+import urt.mem;
 import urt.result;
 
 alias zlib_crc = calculate_crc!(Algorithm.crc32_iso_hdlc);
@@ -456,10 +455,10 @@ ubyte[] gzip_compress(const void[] message, int quality)
 
     size_t raw_len = total - 6;
     size_t out_len = 10 + raw_len + 8;
-    ubyte[] result = cast(ubyte[])defaultAllocator().alloc(out_len);
+    ubyte[] result = cast(ubyte[])alloc(out_len);
     if (result.ptr is null)
     {
-        defaultAllocator().free(zlib_out);
+        free(zlib_out);
         return null;
     }
 
@@ -469,7 +468,7 @@ ubyte[] gzip_compress(const void[] message, int quality)
     storeLittleEndian!uint(cast(uint*)(result.ptr + 10 + raw_len), zlib_crc(message));
     storeLittleEndian!uint(cast(uint*)(result.ptr + 10 + raw_len + 4), cast(uint)message.length);
 
-    defaultAllocator().free(zlib_out);
+    free(zlib_out);
     return result;
 }
 
@@ -486,7 +485,7 @@ unittest
     assert(len == src.length);
     assert(decompressBuffer[0 .. len] == src);
 
-    defaultAllocator().free(result);
+    free(result);
 }
 
 

@@ -47,6 +47,17 @@ void[] talloc_aligned(size_t size, size_t alignment) pure
     return ptr[0 .. size];
 }
 
+T[] talloc_array(T)(size_t count)
+{
+    import urt.array : init_all;
+
+    if (count == 0)
+        return null;
+    T[] items = cast(T[])talloc_aligned(T.sizeof * count, T.alignof);
+    init_all(items);
+    return items;
+}
+
 void[] trealloc(void[] mem, size_t newSize) pure
 {
     if (newSize <= mem.length)
@@ -286,4 +297,17 @@ void tmem_advance(size_t n) pure
     }
     alias PureHack = void function(ushort) pure nothrow @nogc;
     return (cast(PureHack)&impl)(cast(ushort)n);
+}
+
+unittest
+{
+    int[] a = talloc_array!int(8);
+    assert(a.length == 8);
+    assert(a[0] == 0 && a[7] == 0);
+    assert((cast(size_t)a.ptr & (int.alignof - 1)) == 0);
+
+    const(char)[][] b = talloc_array!(const(char)[])(3);
+    assert(b.length == 3 && b[1] is null);
+
+    assert(talloc_array!int(0) is null);
 }

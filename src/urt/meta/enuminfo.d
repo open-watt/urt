@@ -2,6 +2,7 @@ module urt.meta.enuminfo;
 
 import urt.algorithm : binary_search, qsort;
 import urt.traits :EnumType, is_enum, Unqual;
+import urt.mem;
 import urt.meta : Iota, STATIC_MAP;
 import urt.variant;
 
@@ -601,7 +602,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     total_size += (total_size & 1) + total_string;
 
     // allocate a buffer and assign all the sub-buffers
-    void[] info = defaultAllocator().alloc(total_size);
+    void[] info = alloc(total_size);
     VoidEnumInfo* result = cast(VoidEnumInfo*)info.ptr;
     T* value_ptr = cast(T*)&result[1];
     char* str_data = cast(char*)&value_ptr[count];
@@ -623,7 +624,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         // write the string data and store the key offset
         const(char)[] key = ksort[i].v;
         key_ptr[i] = cast(ushort)(str_ptr - str_data);
-        writeString(str_ptr, key);
+        write_string(str_ptr, key);
         if (key.length & 1)
             (str_ptr++)[key.length] = 0; // align to 2 bytes
         str_ptr += 2 + key.length;
@@ -636,7 +637,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
             else
             {
                 disp_ptr[i] = cast(ushort)(str_ptr - str_data);
-                writeString(str_ptr, d);
+                write_string(str_ptr, d);
                 if (d.length & 1)
                     (str_ptr++)[d.length] = 0; // align to 2 bytes
                 str_ptr += 2 + d.length;
@@ -775,7 +776,6 @@ unittest
     assert(*enum_info!TestOrder.value_for_display("Ay Label") == TestOrder.ay);
     assert(*enum_info!TestOrder.value_for_display("Zed Label") == TestOrder.zed);
 
-    import urt.mem.allocator : defaultAllocator;
     const(char)[][3] keys = [ "alpha", "beta", "gamma" ];
     int[3] vals = [ 1, 2, 3 ];
     const(char)[][3] disp = [ "Alpha!", null, "Gamma!" ];
@@ -794,6 +794,6 @@ unittest
     assert(plain.value_for_display("Alpha!").isNull);        // no display names at all
     assert(enum_info_equal(*named, *named) && !enum_info_equal(*plain, *named));
     assert(enum_info_size(*named) > enum_info_size(*plain));
-    defaultAllocator().free((cast(void*)plain)[0 .. enum_info_size(*plain)]);
-    defaultAllocator().free((cast(void*)named)[0 .. enum_info_size(*named)]);
+    free((cast(void*)plain)[0 .. enum_info_size(*plain)]);
+    free((cast(void*)named)[0 .. enum_info_size(*named)]);
 }

@@ -103,7 +103,9 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
     }
 }
 
-void free(void[] mem) pure
+// a template so typed arrays don't silently bind here through T[] -> void[] and skip destruction
+void free(T)(T[] mem) pure
+    if (is(immutable T == immutable void))
 {
     if (mem.ptr is null)
         return;
@@ -119,7 +121,105 @@ void free(void[] mem) pure
         alias ProfileFn = void function(void*, size_t) pure nothrow @nogc;
         (cast(ProfileFn) &profile_free)(mem.ptr, mem.length);
     }
-    _free(mem.ptr);
+    _free(cast(void*)mem.ptr);
+}
+
+T* alloc(T, Args...)(MemFlags flags, auto ref Args args)
+    if (!is(T == class))
+{
+    T* item = cast(T*)alloc(T.sizeof, T.alignof, flags).ptr;
+    if (item)
+        item.emplace(forward!args);
+    return item;
+}
+
+T* alloc(T, Args...)(auto ref Args args)
+    if (!is(T == class) && (Args.length == 0 || !is(Args[0] == MemFlags)))
+    => alloc!T(MemFlags.none, forward!args);
+
+T alloc(T, Args...)(MemFlags flags, auto ref Args args)
+    if (is(T == class))
+{
+    T item = cast(T)alloc(__traits(classInstanceSize, T), __traits(classInstanceAlignment, T), flags).ptr;
+    if (item)
+        item.emplace(forward!args);
+    return item;
+}
+
+T alloc(T, Args...)(auto ref Args args)
+    if (is(T == class) && (Args.length == 0 || !is(Args[0] == MemFlags)))
+    => alloc!T(MemFlags.none, forward!args);
+
+T[] alloc_array(T, Args...)(MemFlags flags, size_t count, auto ref Args args)
+    if (!is(T == class))
+{
+    if (count == 0)
+        return null;
+    T[] items = cast(T[])alloc(T.sizeof * count, T.alignof, flags);
+    if (items.ptr is null)
+        return null;
+    static if (Args.length == 0)
+    {
+        import urt.array : init_all;
+        init_all(items);
+    }
+    else
+    {
+        for (size_t i = 0; i < count - 1; ++i)
+            emplace(&items[i], args);
+        emplace(&items[count - 1], forward!args);
+    }
+    return items;
+}
+
+T[] alloc_array(T)(MemFlags flags, size_t count)
+    if (is(T == class))
+{
+    if (count == 0)
+        return null;
+    T[] items = cast(T[])alloc(T.sizeof * count, T.alignof, flags);
+    if (items.ptr is null)
+        return null;
+    items[] = null;
+    return items;
+}
+
+T[] alloc_array(T, N, Args...)(N count, auto ref Args args)
+    if (is(N : size_t) && !is(N == MemFlags))
+    => alloc_array!T(MemFlags.none, count, forward!args);
+
+void free(T)(T* item)
+    if (!is(T == class) && !is(immutable T == immutable void))
+{
+    if (item is null)
+        return;
+    destroy!false(*item);
+    free((cast(void*)item)[0 .. T.sizeof]);
+}
+
+void free(T)(T item)
+    if (is(T == class))
+{
+    if (item is null)
+        return;
+    // HACK: druntime can't destroy a @nogc class
+    void function(T) nothrow destroy_fun = &destroy!(false, T);
+    (cast(void function(T) nothrow @nogc)destroy_fun)(item);
+    free((cast(void*)item)[0 .. __traits(classInstanceSize, T)]);
+}
+
+void free(T)(T[] items)
+    if (!is(immutable T == immutable void))
+{
+    import urt.internal.traits : hasElaborateDestructor;
+    import urt.traits : Unqual;
+
+    static if (hasElaborateDestructor!T && is(T == Unqual!T))
+    {
+        foreach (ref i; items)
+            destroy!false(i);
+    }
+    free(cast(void[])items);
 }
 
 void[] expand(void[] mem, size_t new_size) pure
@@ -267,4 +367,58 @@ unittest
     void* tagged = tag(p, test_flags);
     assert(get_flags(tagged) == test_flags);
     assert(untag(tagged) is p);
+}
+
+unittest
+{
+    static int dtors;
+
+    struct S
+    {
+    nothrow @nogc:
+        int x;
+        this(int arg) { x = arg; }
+        ~this() { ++dtors; }
+    }
+    static class C
+    {
+    nothrow @nogc:
+        int x;
+        this(int arg) { x = arg; }
+        ~this() { ++dtors; }
+    }
+
+    S* s = alloc!S(10);
+    assert(s && s.x == 10);
+    free(s);
+    assert(dtors == 1);
+
+    s = alloc!S(MemFlags.fastest, 20);
+    assert(s && s.x == 20);
+    free(s);
+    assert(dtors == 2);
+
+    C c = alloc!C(30);
+    assert(c && c.x == 30);
+    free(c);
+    assert(dtors == 3);
+
+    dtors = 0;
+    S[] arr = alloc_array!S(4, 7);
+    assert(arr.length == 4 && arr[0].x == 7 && arr[3].x == 7);
+    free(arr);
+    assert(dtors == 4);
+
+    arr = alloc_array!S(MemFlags.slow, 2, 5);
+    assert(arr.length == 2 && arr[1].x == 5);
+    free(arr);
+    assert(dtors == 6);
+
+    ubyte[] buf = alloc_array!ubyte(MemFlags.fast, 64);
+    assert(buf.length == 64);
+    free(buf);
+
+    C[] classes = alloc_array!C(MemFlags.none, 3);
+    assert(classes.length == 3 && classes[0] is null);
+    free(classes);
 }

@@ -34,13 +34,14 @@ void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
                 }
             }
         }
-        if (p is null)
-        {
-            alias LogFn = void function(size_t, size_t, MemFlags) pure nothrow @nogc;
-            (cast(LogFn) &log_alloc_oom)(size, alignment, flags);
-        }
     }
     return p ? p[0 .. size] : null;
+}
+
+void _alloc_failure(size_t size, size_t alignment, MemFlags flags) pure
+{
+    alias LogFn = void function(size_t, size_t, MemFlags) pure nothrow @nogc;
+    (cast(LogFn) &log_alloc_oom)(size, alignment, flags);
 }
 
 void _free(void* ptr) pure

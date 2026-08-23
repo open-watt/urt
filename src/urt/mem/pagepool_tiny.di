@@ -1,0 +1,454 @@
+module urt.mem.pagepool_tiny;
+
+version (Tiny)
+{
+import urt.mem.alloc;
+import urt.mem.reclaim;
+import urt.sync.critical;
+
+nothrow @nogc:
+
+
+enum ubyte page_category_heap = 0xFF;
+enum page_header_size = 8;
+enum size_t page_tag_heap = 0x01;
+enum size_t page_tag_mask = 0x07;
+
+version (PagePoolDiagnostics)
+{
+    struct PagePoolStats
+    {
+        uint pages_in_use;
+        uint pages_free;
+        uint high_water;
+        uint alloc_count;
+        uint fail_count;
+    }
+}
+
+// The two capacities, caps and resident floors are compile-time values. init()
+// only registers the reclaimer and performs the requested preallocation.
+template PagePool(
+    size_t small_capacity, ushort small_max_pages, ushort small_prealloc_pages,
+    size_t large_capacity, ushort large_max_pages, ushort large_prealloc_pages)
+{
+    static assert(small_capacity > 0 && small_capacity < large_capacity);
+    static assert(small_max_pages > 0 && small_prealloc_pages <= small_max_pages);
+    static assert(large_max_pages > 0 && large_prealloc_pages <= large_max_pages);
+
+    bool page_pool_init()
+    {
+        {
+            auto guard = _lock.acquire();
+            if (_initialised)
+                return false;
+            _initialised = true;
+        }
+
+        if (!register_reclaimer(&page_pool_trim, 200, true))
+        {
+            auto guard = _lock.acquire();
+            _initialised = false;
+            return false;
+        }
+
+        preallocate(0, small_prealloc_pages);
+        preallocate(1, large_prealloc_pages);
+        return true;
+    }
+
+    void[] page_alloc_for(size_t bytes)
+    {
+        assert(_initialised, "Page pool not initialised!");
+        if (bytes <= small_capacity)
+            return alloc_pooled(0, bytes);
+        if (bytes <= large_capacity)
+            return alloc_pooled(1, bytes);
+
+        if (bytes > size_t.max - page_header_size - 7)
+        {
+            record_jumbo_failure();
+            return null;
+        }
+        size_t block_size = (page_header_size + bytes + 7) & ~cast(size_t)7;
+        void[] mem = alloc(block_size, 8);
+        if (!mem.ptr)
+        {
+            record_jumbo_failure();
+            return null;
+        }
+
+        PageHeader* header = cast(PageHeader*)mem.ptr;
+        header.tag = block_size | page_tag_heap;
+        record_jumbo_alloc();
+        return (mem.ptr + page_header_size)[0 .. bytes];
+    }
+
+    void page_free(void* payload)
+    {
+        assert(payload);
+        PageHeader* header = header_of(payload);
+        size_t tag = header.tag;
+        if (tag & page_tag_heap)
+        {
+            record_jumbo_free();
+            size_t block_size = tag & ~page_tag_mask;
+            urt.mem.alloc.free((cast(void*)header)[0 .. block_size]);
+            return;
+        }
+
+        ubyte category = cast(ubyte)(tag >> 1);
+        assert(category < 2);
+        cache_page(category, header);
+    }
+
+    ubyte page_category(const(void)* payload)
+    {
+        size_t tag = header_of(payload).tag;
+        if (tag & page_tag_heap)
+            return page_category_heap;
+        return cast(ubyte)(tag >> 1);
+    }
+
+    size_t page_payload_size(ubyte category)
+    {
+        assert(category < 2);
+        return category == 0 ? small_capacity : large_capacity;
+    }
+
+    size_t page_pool_trim(size_t bytes_needed = size_t.max)
+    {
+        size_t freed;
+        foreach (category; 0 .. 2)
+        {
+            PageHeader* release_chain;
+            size_t size = page_size(cast(ubyte)category);
+            ushort floor = prealloc_pages(cast(ubyte)category);
+            {
+                auto guard = _lock.acquire();
+                while (_free_pages[category] > floor && freed < bytes_needed)
+                {
+                    PageHeader* page = _free_lists[category];
+                    _free_lists[category] = cast(PageHeader*)page.tag;
+                    page.tag = cast(size_t)release_chain;
+                    release_chain = page;
+                    --_free_pages[category];
+                    --_allocated_pages[category];
+                    freed += size;
+                }
+            }
+
+            while (release_chain)
+            {
+                PageHeader* page = release_chain;
+                release_chain = cast(PageHeader*)page.tag;
+                urt.mem.alloc.free((cast(void*)page)[0 .. size]);
+            }
+
+            if (freed >= bytes_needed)
+                break;
+        }
+        return freed;
+    }
+
+    void page_pool_deinit()
+    {
+        if (!_initialised)
+            return;
+        unregister_reclaimer(&page_pool_trim);
+
+        foreach (category; 0 .. 2)
+        {
+            assert(_allocated_pages[category] == _free_pages[category],
+                "Page pool deinit with pages in use!");
+            size_t size = page_size(cast(ubyte)category);
+            PageHeader* page = _free_lists[category];
+            while (page)
+            {
+                PageHeader* next = cast(PageHeader*)page.tag;
+                urt.mem.alloc.free((cast(void*)page)[0 .. size]);
+                page = next;
+            }
+            _free_lists[category] = null;
+            _allocated_pages[category] = 0;
+            _free_pages[category] = 0;
+        }
+
+        version (PagePoolDiagnostics)
+        {
+            _category_diagnostics = CategoryDiagnostics.init;
+            _jumbo_diagnostics = JumboDiagnostics.init;
+        }
+        _initialised = false;
+    }
+
+    version (PagePoolDiagnostics)
+    {
+        PagePoolStats page_pool_stats(ubyte category)
+        {
+            auto guard = _lock.acquire();
+            PagePoolStats result;
+            if (category == page_category_heap)
+            {
+                result.pages_in_use = _jumbo_diagnostics.pages_in_use;
+                result.high_water = _jumbo_diagnostics.high_water;
+                result.alloc_count = _jumbo_diagnostics.alloc_count;
+                result.fail_count = _jumbo_diagnostics.fail_count;
+                return result;
+            }
+
+            assert(category < 2);
+            result.pages_in_use = _allocated_pages[category] - _free_pages[category];
+            result.pages_free = _free_pages[category];
+            result.high_water = _category_diagnostics[category].high_water;
+            result.alloc_count = _category_diagnostics[category].alloc_count;
+            result.fail_count = _category_diagnostics[category].fail_count;
+            return result;
+        }
+    }
+
+
+    private:
+
+    struct PageHeader
+    {
+        // Free pooled page: next pointer. Allocated pooled page: category << 1.
+        // Heap page: aligned allocation size | 1.
+        size_t tag;
+    }
+    static assert(PageHeader.sizeof <= page_header_size);
+
+    version (PagePoolDiagnostics)
+    {
+        struct CategoryDiagnostics
+        {
+            ushort high_water;
+            uint alloc_count;
+            uint fail_count;
+        }
+
+        struct JumboDiagnostics
+        {
+            ushort pages_in_use;
+            ushort high_water;
+            uint alloc_count;
+            uint fail_count;
+        }
+
+        __gshared CategoryDiagnostics[2] _category_diagnostics;
+        __gshared JumboDiagnostics _jumbo_diagnostics;
+    }
+
+    __gshared Critical _lock;
+    __gshared PageHeader*[2] _free_lists;
+    __gshared ushort[2] _allocated_pages;
+    __gshared ushort[2] _free_pages;
+    __gshared bool _initialised;
+
+    size_t page_size(ubyte category)
+        => page_header_size + ((page_payload_size(category) + 7) & ~cast(size_t)7);
+
+    ushort max_pages(ubyte category)
+        => category == 0 ? small_max_pages : large_max_pages;
+
+    ushort prealloc_pages(ubyte category)
+        => category == 0 ? small_prealloc_pages : large_prealloc_pages;
+
+    PageHeader* header_of(const(void)* payload)
+        => cast(PageHeader*)(payload - page_header_size);
+
+    void preallocate(ubyte category, ushort count)
+    {
+        foreach (_; 0 .. count)
+        {
+            PageHeader* page = allocate_page(category);
+            if (!page)
+                break;
+            cache_page(category, page);
+        }
+    }
+
+    PageHeader* allocate_page(ubyte category)
+    {
+        {
+            auto guard = _lock.acquire();
+            if (_allocated_pages[category] >= max_pages(category))
+                return null;
+            ++_allocated_pages[category];
+        }
+
+        void[] mem = alloc(page_size(category), 8);
+        if (mem.ptr)
+            return cast(PageHeader*)mem.ptr;
+
+        auto guard = _lock.acquire();
+        --_allocated_pages[category];
+        return null;
+    }
+
+    PageHeader* take_cached_page(ubyte category)
+    {
+        auto guard = _lock.acquire();
+        PageHeader* page = _free_lists[category];
+        if (page)
+        {
+            _free_lists[category] = cast(PageHeader*)page.tag;
+            --_free_pages[category];
+        }
+        return page;
+    }
+
+    void cache_page(ubyte category, PageHeader* page)
+    {
+        auto guard = _lock.acquire();
+        page.tag = cast(size_t)_free_lists[category];
+        _free_lists[category] = page;
+        ++_free_pages[category];
+    }
+
+    void[] alloc_pooled(ubyte category, size_t bytes)
+    {
+        PageHeader* page = take_cached_page(category);
+        if (!page)
+            page = allocate_page(category);
+        if (!page)
+            page = take_cached_page(category);
+        if (!page)
+        {
+            record_failure(category);
+            return null;
+        }
+
+        page.tag = cast(size_t)category << 1;
+        record_alloc(category);
+        return (cast(void*)page + page_header_size)[0 .. bytes];
+    }
+
+    void record_alloc(ubyte category)
+    {
+        version (PagePoolDiagnostics)
+        {
+            auto guard = _lock.acquire();
+            CategoryDiagnostics* diagnostics = &_category_diagnostics[category];
+            ++diagnostics.alloc_count;
+            ushort in_use = cast(ushort)(_allocated_pages[category]
+                - _free_pages[category]);
+            if (in_use > diagnostics.high_water)
+                diagnostics.high_water = in_use;
+        }
+    }
+
+    void record_failure(ubyte category)
+    {
+        version (PagePoolDiagnostics)
+        {
+            auto guard = _lock.acquire();
+            ++_category_diagnostics[category].fail_count;
+        }
+    }
+
+    void record_jumbo_alloc()
+    {
+        version (PagePoolDiagnostics)
+        {
+            auto guard = _lock.acquire();
+            ++_jumbo_diagnostics.alloc_count;
+            if (++_jumbo_diagnostics.pages_in_use > _jumbo_diagnostics.high_water)
+                _jumbo_diagnostics.high_water = _jumbo_diagnostics.pages_in_use;
+        }
+    }
+
+    void record_jumbo_failure()
+    {
+        version (PagePoolDiagnostics)
+        {
+            auto guard = _lock.acquire();
+            ++_jumbo_diagnostics.fail_count;
+        }
+    }
+
+    void record_jumbo_free()
+    {
+        version (PagePoolDiagnostics)
+        {
+            auto guard = _lock.acquire();
+            --_jumbo_diagnostics.pages_in_use;
+        }
+    }
+}
+
+
+void page_pool_tiny_test()()
+{
+    alias TestPool = PagePool!(56, 8, 4, 248, 4, 0);
+
+    TestPool.page_pool_deinit();
+    assert(TestPool.page_pool_init());
+    assert(!TestPool.page_pool_init());
+    assert(TestPool.page_payload_size(0) == 56);
+    assert(TestPool.page_payload_size(1) == 248);
+
+    void[] page = TestPool.page_alloc_for(32);
+    assert(page.length == 32 && (cast(size_t)page.ptr & 7) == 0);
+    assert(TestPool.page_category(page.ptr) == 0);
+    TestPool.page_free(page.ptr);
+    assert(TestPool._free_pages[0] == 4);
+
+    void[][8] pages;
+    foreach (ref allocated; pages)
+    {
+        allocated = TestPool.page_alloc_for(32);
+        assert(allocated !is null);
+    }
+    assert(TestPool.page_alloc_for(32) is null);
+    foreach (ref allocated; pages)
+        TestPool.page_free(allocated.ptr);
+
+    void[] keep = TestPool.page_alloc_for(32);
+    size_t freed = TestPool.page_pool_trim();
+    assert(freed == 64 * 3);
+    assert(TestPool._allocated_pages[0] == 5);
+    assert(TestPool._free_pages[0] == 4);
+    TestPool.page_free(keep.ptr);
+
+    void[] medium = TestPool.page_alloc_for(100);
+    assert(medium.length == 100 && TestPool.page_category(medium.ptr) == 1);
+    void[] jumbo = TestPool.page_alloc_for(1000);
+    assert(jumbo.length == 1000);
+    assert((cast(size_t)jumbo.ptr & 7) == 0);
+    assert(TestPool.page_category(jumbo.ptr) == page_category_heap);
+    TestPool.page_free(jumbo.ptr);
+    TestPool.page_free(medium.ptr);
+
+    version (PagePoolDiagnostics)
+    {
+        PagePoolStats stats = TestPool.page_pool_stats(0);
+        assert(stats.high_water == 8 && stats.fail_count == 1);
+        assert(TestPool.page_pool_stats(page_category_heap).alloc_count == 1);
+    }
+
+    import urt.mem.reclaim : reclaim_memory;
+    reclaim_memory(1);
+
+    TestPool.page_pool_deinit();
+    assert(TestPool.page_pool_init());
+    TestPool.page_pool_deinit();
+
+    static size_t fill_reclaimer(size_t id)(size_t)
+        => id;
+
+    ReclaimFunction[8] fillers = [
+        &fill_reclaimer!0, &fill_reclaimer!1,
+        &fill_reclaimer!2, &fill_reclaimer!3,
+        &fill_reclaimer!4, &fill_reclaimer!5,
+        &fill_reclaimer!6, &fill_reclaimer!7,
+    ];
+    foreach (handler; fillers)
+        assert(register_reclaimer(handler, 1, true));
+    assert(!TestPool.page_pool_init());
+    foreach (handler; fillers)
+        assert(unregister_reclaimer(handler));
+    assert(TestPool.page_pool_init());
+    TestPool.page_pool_deinit();
+}
+}

@@ -40,6 +40,9 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
 {
     import urt.mem;
 
+    import urt.thread : set_main_thread;
+    set_main_thread();
+
     import urt.time : init_clock;
     init_clock();
 

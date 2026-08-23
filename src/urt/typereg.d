@@ -91,9 +91,11 @@ ref immutable(TypeDetails) get_type_details(uint index) pure
     return (*tds)[index];
 }
 
+// Module constructors force ModuleInfo; CRT constructors register without it.
 template register_type(T, string type_name = type_name_of!T)
 {
-    shared static this()
+    pragma(crt_constructor)
+    void register()
     {
         register_type_record(TypeRecordFor!(T, fnv1a(cast(const(ubyte)[])type_name), 0, false, type_name));
     }
@@ -137,7 +139,8 @@ template MakeTypeDetails(T)
     static assert(is(Unqual!T == T), "Only instantiate for mutable types");
 
     // TODO: we can probably NOT do this for class types, and just use RTTI instead...
-    shared static this()
+    pragma(crt_constructor)
+    void register()
     {
         register_type_record(TypeDetailsFor!T);
     }

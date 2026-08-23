@@ -12,6 +12,18 @@ public import urt.fibre : yield, sleep, aborting, YieldResult;
 nothrow @nogc:
 
 
+void deinit_async()
+{
+    assert(!waiting, "There are non-terminated fibres... unclean shutdown.");
+
+    while (free_list)
+    {
+        AsyncCall* t = free_list;
+        free_list = free_list.next;
+        free(t);
+    }
+}
+
 Promise!(ReturnType!Fun)* async(alias Fun, size_t stack_size = default_stack_size, Args...)(auto ref Args args)
     if (is(typeof(&Fun) == R function(auto ref Args) nothrow @nogc, R))
 {
@@ -309,18 +321,6 @@ nothrow @nogc:
 __gshared FreeList!AsyncWait waiting_pool;
 __gshared AsyncWait* waiting;   // list of active yielded/waiting fibres
 __gshared AsyncCall* free_list;  // free-list of AsyncCall objects
-
-shared static ~this()
-{
-    assert(!waiting, "There are non-terminated fibres... unclean shutdown.");
-
-    while (free_list)
-    {
-        AsyncCall* t = free_list;
-        free_list = free_list.next;
-        free(t);
-    }
-}
 
 ResumeHandler do_yield(ref Fibre yielding, AwakenEvent awaken_event)
 {

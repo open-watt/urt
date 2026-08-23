@@ -47,15 +47,12 @@ void[] talloc_aligned(size_t size, size_t alignment) pure
     return ptr[0 .. size];
 }
 
+// uninitialised, like talloc; arena memory is never destructed, and every caller fills
 T[] talloc_array(T)(size_t count)
 {
-    import urt.array : init_all;
-
     if (count == 0)
         return null;
-    T[] items = cast(T[])talloc_aligned(T.sizeof * count, T.alignof);
-    init_all(items);
-    return items;
+    return cast(T[])talloc_aligned(T.sizeof * count, T.alignof);
 }
 
 void[] trealloc(void[] mem, size_t newSize) pure
@@ -303,11 +300,13 @@ unittest
 {
     int[] a = talloc_array!int(8);
     assert(a.length == 8);
-    assert(a[0] == 0 && a[7] == 0);
     assert((cast(size_t)a.ptr & (int.alignof - 1)) == 0);
+    a[] = 7;
+    assert(a[0] == 7 && a[7] == 7);
 
     const(char)[][] b = talloc_array!(const(char)[])(3);
-    assert(b.length == 3 && b[1] is null);
+    assert(b.length == 3);
+    assert((cast(size_t)b.ptr & ((const(char)[]).alignof - 1)) == 0);
 
     assert(talloc_array!int(0) is null);
 }

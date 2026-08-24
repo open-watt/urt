@@ -1361,6 +1361,18 @@ int32_t ow_uart_rx_pending(unsigned port)
     return uart_get_buffered_data_len((uart_port_t)port, &available) == ESP_OK ? (int32_t)available : 0;
 }
 
+// IDF only exposes the ring; the byte in flight and the hardware FIFO tail are
+// not counted, ow_uart_tx_idle covers those.
+int32_t ow_uart_tx_pending(unsigned port)
+{
+    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
+        return 0;
+    size_t available = 0;
+    if (uart_get_tx_buffer_free_size((uart_port_t)port, &available) != ESP_OK)
+        return 0;
+    return (int32_t)(UART_TX_BUFFER_SIZE - available);
+}
+
 int ow_uart_tx_idle(unsigned port)
 {
     if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))

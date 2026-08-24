@@ -87,6 +87,11 @@ ptrdiff_t uart_hw_rx_pending(uint id)
     return ow_uart_rx_pending(id);
 }
 
+ptrdiff_t uart_hw_tx_pending(uint id)
+{
+    return ow_uart_tx_pending(id);
+}
+
 ptrdiff_t uart_hw_flush(uint id)
 {
     return ow_uart_flush(id);
@@ -130,6 +135,7 @@ extern(C) nothrow @nogc
     int ow_uart_read(uint port, ubyte* buf, int len);
     int ow_uart_write(uint port, const(ubyte)* buf, int len);
     int ow_uart_rx_pending(uint port);
+    int ow_uart_tx_pending(uint port);
     int ow_uart_tx_idle(uint port);
     int ow_uart_flush(uint port);
     int ow_uart_check_errors(uint port);

@@ -38,6 +38,12 @@ void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
     return p ? p[0 .. size] : null;
 }
 
+extern(C) void ow_alloc_failed_reclaim(size_t size)
+{
+    import urt.mem.reclaim : reclaim_memory;
+    reclaim_memory(size);
+}
+
 void _alloc_failure(size_t size, size_t alignment, MemFlags flags) pure
 {
     alias LogFn = void function(size_t, size_t, MemFlags) pure nothrow @nogc;

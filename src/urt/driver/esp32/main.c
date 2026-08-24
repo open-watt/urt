@@ -8,6 +8,7 @@
 #include "esp_core_dump.h"
 #include "esp_partition.h"
 #endif
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -45,8 +46,22 @@ bool ow_crash_dump_clear(void)
 }
 #endif
 
+extern void ow_alloc_failed_reclaim(size_t size);
+
+// Blob allocations (esp_wifi, NimBLE) go straight to heap_caps and bypass the D
+// allocator's reclaim-on-failure walk. This hook is notification-only: the failed
+// call still returns NULL; reclaiming here serves the caller's retry (radio init
+// re-runs on the state machine's backoff, drivers re-allocate on the next packet).
+static void ow_heap_alloc_failed(size_t size, uint32_t caps, const char *function_name)
+{
+    (void)caps; (void)function_name;
+    ow_alloc_failed_reclaim(size);
+}
+
 void app_main(void)
 {
+    heap_caps_register_failed_alloc_callback(&ow_heap_alloc_failed);
+
     // Initialize NVS -- required by WiFi for calibration data storage.
     esp_err_t ret = nvs_flash_init();
 #ifndef OW_PRESERVE_NVS

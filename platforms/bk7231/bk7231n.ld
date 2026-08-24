@@ -1,42 +1,80 @@
-/* BK7231N (ARM968E-S, ARMv5TE) linker script
+/*
+ * BK7231N (ARM968E-S, ARMv5TE), OTA layout
  *
- * Beken BK7231N -- ARM968E-S @ 120MHz, no FPU, no MMU.
- * Wi-Fi 802.11b/g/n + BLE 5.0.
+ * Physical flash partitions:
+ *   Bootloader    0x000000, 68 KiB
+ *   Application   0x011000, 1156 KiB
+ *   OTA           0x12A000, 664 KiB
+ *   RF firmware   0x1D0000, 4 KiB
+ *   NET params    0x1D1000, 4 KiB
  *
- * Flash partition table (from BkDriverFlash.c):
- *   Bootloader:  0x000000, 68KB  (0x11000)
- *   Application: 0x011000, 1156KB (0x121000)
- *   OTA:         0x12A000, 664KB  (0xA6000)
- *   RF Firmware: 0x1D0000, 4KB
- *   NET Param:   0x1D1000, 4KB
+ * Logical runtime memory:
+ *   DTCM   0x003F0000..0x003FEE00   data, TLSF controls, fast heap, UND/ABT/main stacks
+ *   ITCM   0x003FEE00..0x00400000   interrupt and flash-control code
+ *   SRAM   0x00400000..0x00400100   vectors and exception register capture
+ *   SRAM   0x00400100..0x00426000   data, BSS, and the DMA-capable TLSF heap
+ *   SRAM   0x00426000..0x00430000   vendor heap_4
  *
- * SRAM layout (OTA build, from SDK bk7231_ota.ld):
- *   TCM:   0x003F0000, 60KB - 512   (BLE/WiFi critical paths)
- *   ITCM:  0x003FEE00, 4608 bytes   (interrupt entry)
- *   RAM:   0x00400100, 192KB - 256   (application)
- *
- * The BLE 5.x stack claims 64KB from general SRAM as TCM regions.
- * Application gets 192KB minus the 256-byte reserved header.
- *
- * Non-OTA: set FLASH LENGTH to 1788K (up to RF firmware at 0x1D0000).
+ * Flash addresses below are logical addresses after controller CRC removal.
  */
 
 ENTRY(Reset_Handler)
 
-EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
+EXTERN(_write _read _close _lseek _fstat _isatty _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x00011000, LENGTH = 4M  /* TODO: restore to 1156K */
+    FLASH (rx)  : ORIGIN = 0x00010000, LENGTH = 0x1206A0
+    DTCM  (rw)  : ORIGIN = 0x003F0000, LENGTH = 60K - 512
+    ITCM  (rwx) : ORIGIN = 0x003FEE00, LENGTH = 4608
     SRAM  (rwx) : ORIGIN = 0x00400100, LENGTH = 192K - 0x100
 }
 
+_image_start = ORIGIN(FLASH);
+_image_limit = ORIGIN(FLASH) + 0x1086A0;
+
 SECTIONS
 {
+    /* The bootloader requires the image header at flash origin. */
+    .vectors : ALIGN(4)
+    {
+        KEEP(*(.text.vectors))
+        KEEP(*(.text.entry))
+    } > FLASH
+
+    /* Flash-control and clock-changing vendor routines must execute from RAM. */
+    .itcm.code ALIGN(8) :
+    {
+        _itcmcode_ram_begin = .;
+        *(.itcm .itcm.*)
+        *(.text.intc_hdl_entry)
+        *(.text.intc_irq)
+        *(.text.intc_fiq)
+        *(.text.bk_timer_isr)
+        *(.text.power_save_wakeup_isr)
+        *(.text.fclk_get_tick)
+        *(.text.flash_read_sr)
+        *(.text.flash_write_sr)
+        *(.text.flash_clr_qwfr)
+        *(.text.set_flash_protect)
+        *(.text.flash_read)
+        *(.text.flash_read_data)
+        *(.text.flash_set_qe)
+        *(.text.flash_set_qwfr)
+        *(.text.flash_set_line_mode*)
+        *(.text.flash_get_line_mode)
+        *(.text.flash_write)
+        *(.text.flash_ctrl)
+        *(.text.power_save_dtim_wake)
+        *(.text.sctrl_fix_dpll_div)
+        . = ALIGN(4);
+        _itcmcode_ram_end = .;
+    } > ITCM AT> FLASH
+    _itcmcode_flash_begin = LOADADDR(.itcm.code);
+
     .text : ALIGN(4)
     {
-        KEEP(*(.vector_table))
         *(.text .text.*)
     } > FLASH
 
@@ -85,17 +123,15 @@ SECTIONS
         _got_end = .;
     } > SRAM AT > FLASH
 
-    .data : ALIGN(4)
+    /* DTCM is outside the BK7231 DMA allocation contract. */
+    .dtcm_data (NOLOAD) : ALIGN(8)
     {
-        _data_start = .;
-        *(.data .data.*)
-        _data_end = .;
-    } > SRAM AT > FLASH
-
-    _data_load = LOADADDR(.data);
-    __ram_load_addr = _data_load;
-    __ram_data_start__ = _data_start;
-    __ram_data_end__ = _data_end;
+        _dtcm_data_start = .;
+        *(.dtcm_data .dtcm_data.*)
+        . = ALIGN(4);
+        _dtcm_data_end = .;
+    } > DTCM
+    _fast_heap_start = ALIGN(_dtcm_data_end, 8);
 
     .tdata : ALIGN(4)
     {
@@ -105,6 +141,25 @@ SECTIONS
     } > SRAM AT > FLASH
 
     _tdata_load = LOADADDR(.tdata);
+
+    .data : ALIGN(4)
+    {
+        _data_start = .;
+        *(.data .data.*)
+        _data_end = .;
+    } > SRAM AT > FLASH
+
+    _data_load = LOADADDR(.data);
+
+    _ram_image_load = _tdata_load;
+    _ram_image_start = _tdata_start;
+    _ram_image_end = _data_end;
+
+    /* Inflate input cannot extend beyond the original final load region. */
+    _flash_end = LOADADDR(.data) + SIZEOF(.data);
+    __ram_load_addr = _data_load;
+    __ram_data_start__ = _data_start;
+    __ram_data_end__ = _data_end;
 
     .tbss (NOLOAD) : ALIGN(4)
     {
@@ -123,11 +178,26 @@ SECTIONS
         __bss_end__ = .;
     } > SRAM
 
-    __heap_start = _bss_end;
-    __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - 4K;
+    /* Vendor heap_4 occupies _empty_ram through the fixed SRAM top sentinel. */
+    _vendor_heap_size = 40K;
+    _stack_size       = 8K;
+    _abt_stack_size   = 1K;
+    _und_stack_size   = 1K;
 
-    _stack_top = ORIGIN(SRAM) + LENGTH(SRAM);
-    _stack_low = ORIGIN(SRAM);
+    _empty_ram = ORIGIN(SRAM) + LENGTH(SRAM) - _vendor_heap_size;
+
+    _stack_top    = ORIGIN(DTCM) + LENGTH(DTCM);
+    _stack_bottom = _stack_top - _stack_size;
+    _abt_stack_start = _stack_bottom - _abt_stack_size;
+    _und_stack_start = _abt_stack_start - _und_stack_size;
+
+    _fast_heap_end = _und_stack_start;
+    ASSERT(_fast_heap_end >= _fast_heap_start, "DTCM data and stacks overlap")
+
+    __heap_start = ALIGN(_bss_end, 8);
+    __heap_end   = _empty_ram;
+    ASSERT(__heap_end - __heap_start >= 32K, "static data has squeezed the heap below 32K")
+    _stack_low = _stack_bottom;
     __StackTop = _stack_top;
 
     /DISCARD/ :

@@ -83,6 +83,7 @@ else                    enum persist;
 // Only meaningful on platforms with distinct fast/slow data regions.
 version (STM32F7)       enum fast_data = section(".dtcm_data");
 else version (Bouffalo) enum fast_data = section(".sram_data");
+else version (Beken)    enum fast_data = section(".dtcm_data");
 else                    enum fast_data;
 
 // @bulk_data - large data in slow, abundant memory (PSRAM / ext RAM).

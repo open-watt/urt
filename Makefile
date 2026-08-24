@@ -94,7 +94,7 @@ ifeq ($(BUILD_MODE),embedded-exe)
     OBJCOPY_FLAGS     :=
   endif
 
-  BAREMETAL_OBJS   := $(patsubst %.S,$(OBJDIR)/%.o,$(patsubst %.c,$(OBJDIR)/%.o,$(BAREMETAL_SRCS)))
+  BAREMETAL_OBJS   := $(patsubst %.s,$(OBJDIR)/%.o,$(patsubst %.S,$(OBJDIR)/%.o,$(patsubst %.c,$(OBJDIR)/%.o,$(BAREMETAL_SRCS))))
   BAREMETAL_CFLAGS := $(BAREMETAL_CFLAGS) -ffreestanding -O2
 
 $(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.S
@@ -102,6 +102,10 @@ $(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.S
 	$(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) -c -o $@ $<
 
 $(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.c
+	@mkdir -p $(OBJDIR)
+	$(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) -c -o $@ $<
+
+$(OBJDIR)/%.o: $(BAREMETAL_DIR)/%.s
 	@mkdir -p $(OBJDIR)
 	$(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) -c -o $@ $<
 endif
@@ -114,7 +118,7 @@ endif
 
 FLAGSTAMP = $(OBJDIR)/build.flags
 
-$(TARGET): $(BAREMETAL_OBJS) $(VENDOR_OBJS)
+$(TARGET): $(BAREMETAL_OBJS) $(VENDOR_OBJS) $(URT_SOURCES) $(if $(RAM_IMAGE),$(RAM_IMAGE_PACKER))
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
 	"$(DC)" $(DFLAGS) $(BUILD_CMD_FLAGS) -of$(TARGET) -od$(OBJDIR) -deps=$(DEPFILE) $(BAREMETAL_OBJS) $(VENDOR_OBJS) $(URT_SOURCES)
@@ -128,6 +132,9 @@ endif
 endif
 ifeq ($(BUILD_MODE),embedded-exe)
 	$(BAREMETAL_OBJCOPY) -O binary $(OBJCOPY_FLAGS) $(TARGET) $(TARGETDIR)/$(TARGETNAME).bin
+ifdef RAM_IMAGE
+	python3 $(RAM_IMAGE_PACKER) --nm $(BAREMETAL_NM) --format $(RAM_IMAGE) $(TARGET) $(TARGETDIR)/$(TARGETNAME).bin
+endif
 endif
 	@printf '%s' '$(BUILD_FLAGS)' > $(FLAGSTAMP)
 
@@ -168,7 +175,7 @@ clean:
 clean-all:
 	rm -rf obj bin
 
-BUILD_FLAGS := $(DFLAGS) $(BUILD_CMD_FLAGS) $(URT_SOURCES)
+BUILD_FLAGS := $(DFLAGS) $(BUILD_CMD_FLAGS) $(RAM_IMAGE) $(RAM_IMAGE_PACKER) $(URT_SOURCES)
 FLAGS_CHANGED := $(shell printf '%s' '$(BUILD_FLAGS)' | cmp -s - $(FLAGSTAMP) || echo 1)
 
 ifneq ($(FLAGS_CHANGED),)

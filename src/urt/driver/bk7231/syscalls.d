@@ -1,29 +1,19 @@
-// BK7231 newlib/picolibc syscall stubs
-//
-// Minimal stubs to satisfy picolibc's syscall requirements.
-// Same pattern as RP2350 -- most are no-ops for baremetal.
 module urt.driver.bk7231.syscalls;
 
 @nogc nothrow:
 
-private extern(C) extern const void* __heap_start;
-private extern(C) extern const void* __heap_end;
-
-private __gshared void* _heap_ptr;
-
-extern(C) void* _sbrk(ptrdiff_t incr)
+version (BK7231T) extern(C) void* _sbrk(ptrdiff_t increment)
 {
-    if (_heap_ptr is null)
+    if (!_heap_ptr)
         _heap_ptr = cast(void*)&__heap_start;
 
-    void* prev = _heap_ptr;
-    void* next = _heap_ptr + incr;
-
-    if (next > cast(void*)&__heap_end)
+    void* previous = _heap_ptr;
+    void* next = _heap_ptr + increment;
+    if (next < cast(void*)&__heap_start || next > cast(void*)&__heap_end)
         return cast(void*)-1;
 
     _heap_ptr = next;
-    return prev;
+    return previous;
 }
 
 extern(C) int _write(int fd, const void* buf, size_t count)
@@ -44,12 +34,17 @@ extern(C) int _kill(int, int) { return -1; }
 extern(C) int _getpid() { return 1; }
 extern(C) int usleep(uint) { return 0; }
 
-// DWARF unwinder stubs -- ARM uses EHABI, not DWARF.
-// These satisfy link-time references from the exception personality code.
 extern(C) void __register_frame_info(const void*, void*) {}
 extern(C) size_t _Unwind_GetIPInfo(void*, int*) { return 0; }
 extern(C) void _Unwind_SetGR(void*, int, size_t) {}
 extern(C) void _Unwind_SetIP(void*, size_t) {}
 
-// ARM EHABI resume unwind -- called by LDC's exception propagation
 extern(C) void _d_eh_resume_unwind(void*) {}
+
+private:
+
+version (BK7231T)
+{
+    extern(C) extern const ubyte __heap_start, __heap_end;
+    __gshared void* _heap_ptr;
+}

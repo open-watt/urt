@@ -1,5 +1,4 @@
-// The standalone test image links without the vendor SDK; these stand in for the
-// symbols the driver reaches so the link closes. Never part of a product build.
+// The standalone test image has no vendor SDK to provide these symbols.
 module urt.driver.bk7231.sdk_stubs;
 
 version (Beken):
@@ -12,3 +11,19 @@ void bk_misc_init_start_type() {}
 void bk_misc_check_start_type() {}
 uint driver_init() { return 0; }
 uint func_init_basic() { return 0; }
+void set_printf_port(ubyte) {}
+void intc_irq() {}
+void intc_fiq() {}
+void bk_trap_udef() {}
+void bk_trap_pabt() {}
+void bk_trap_dabt() {}
+void bk_trap_resv() {}
+void vTaskSwitchContext() {}
+size_t xPortGetFreeHeapSize() { return cast(size_t)&_vendor_heap_size; }
+size_t xPortGetMinimumEverFreeHeapSize() { return cast(size_t)&_vendor_heap_size; }
+__gshared void* pxCurrentTCB;
+__gshared uint ulCriticalNesting;
+
+private:
+
+extern(C) extern const ubyte _vendor_heap_size;

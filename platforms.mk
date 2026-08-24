@@ -23,7 +23,9 @@
 #   BAREMETAL_DIR        - dir containing start.S etc. (empty on host targets)
 #   BAREMETAL_SRCS       - basenames of asm/c sources for cross-gcc
 #   BAREMETAL_GCC        - cross-gcc path
+#   BAREMETAL_NM         - cross-nm path
 #   BAREMETAL_CFLAGS     - cross-gcc cflags (mcpu/march/mabi/mfpu)
+#   RAM_IMAGE_PACKER     - generic raw/deflate RAM-image post-link tool
 #   BAREMETAL_LIBC/M/GCC - resolved newlib/picolibc/libgcc archive paths
 #   ESPRESSIF_PATH, ESPRESSIF_XTENSA_BIN, ESPRESSIF_RISCV32_BIN
 #   XTENSA_TWO_STAGE, ESPRESSIF_LLC, XTENSA_MATTR
@@ -42,6 +44,7 @@ URT_SRCDIR ?= src
 # URT checkout root (./ in-tree, <consumer>/third_party/urt/ downstream).
 # Used to locate vendor.mk and the vendored blob trees.
 URT_ROOT := $(dir $(URT_SRCDIR))
+RAM_IMAGE_PACKER := $(URT_ROOT)tools/pack_ram_image.py
 CONFIG     ?= debug
 COMPILER   ?= dmd
 
@@ -143,6 +146,7 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     STRICT_ALIGN := 1
     MATTR = +strict-align
     OS = baremetal
+    RAM_IMAGE ?= raw
 else ifeq ($(PLATFORM),rp2350)
     # Raspberry Pi RP2350 -- dual Cortex-M33, 150MHz, 520KB SRAM, XIP QSPI flash
     BUILDNAME := rp2350
@@ -707,7 +711,7 @@ ifeq ($(COMPILER),ldc)
         BAREMETAL_SRCS := start.S
       else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
         BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bk7231
-        BAREMETAL_SRCS := start.S
+        BAREMETAL_SRCS := start.S boot_handlers.S portasm.s
       else ifeq ($(PLATFORM),rp2350)
         BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/rp2350
         BAREMETAL_SRCS := start.S boot2.S
@@ -719,13 +723,16 @@ ifeq ($(COMPILER),ldc)
       ifdef BAREMETAL_DIR
         ifeq ($(ARCH),arm)
           BAREMETAL_GCC    := arm-none-eabi-gcc
+          BAREMETAL_NM     := arm-none-eabi-nm
           BAREMETAL_CFLAGS := -mcpu=$(MARCH) -marm -mfloat-abi=$(MABI)
         else ifeq ($(ARCH),thumb)
           BAREMETAL_GCC    := arm-none-eabi-gcc
+          BAREMETAL_NM     := arm-none-eabi-nm
           MFPU ?= fpv5-sp-d16
           BAREMETAL_CFLAGS := -mcpu=$(MARCH) -mthumb -mfloat-abi=hard -mfpu=$(MFPU)
         else
           BAREMETAL_GCC    := riscv64-unknown-elf-gcc
+          BAREMETAL_NM     := riscv64-unknown-elf-nm
           BAREMETAL_CFLAGS := -march=$(MARCH) -mabi=$(MABI)
         endif
         BAREMETAL_LIBGCC := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-libgcc-file-name)

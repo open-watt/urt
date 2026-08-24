@@ -36,10 +36,10 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     void[] mem = _alloc(size, alignment, flags);
     if (mem.ptr is null && size > 0)
     {
-        import urt.mem.reclaim : reclaim_memory;
-        alias ReclaimFn = size_t function(size_t) pure nothrow @nogc;
-        if ((cast(ReclaimFn) &reclaim_memory)(size) > 0)
-            mem = _alloc(size, alignment, flags);
+        import urt.mem.reclaim : ReclaimRetry, reclaim_memory;
+        ReallocRetry retry = ReallocRetry(&mem, null, size, alignment, flags);
+        alias ReclaimFn = void function(size_t, ReclaimRetry, void*) pure nothrow @nogc;
+        (cast(ReclaimFn) &reclaim_memory)(reclaim_size(size, alignment), &retry_realloc, &retry);
     }
     if (mem.ptr is null)
     {
@@ -97,10 +97,10 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
         void[] new_mem = _realloc(mem, new_size, alignment, flags);
         if (new_mem.ptr is null)
         {
-            import urt.mem.reclaim : reclaim_memory;
-            alias ReclaimFn = size_t function(size_t) pure nothrow @nogc;
-            if ((cast(ReclaimFn) &reclaim_memory)(new_size) > 0)
-                new_mem = _realloc(mem, new_size, alignment, flags);
+            import urt.mem.reclaim : ReclaimRetry, reclaim_memory;
+            ReallocRetry retry = ReallocRetry(&new_mem, mem, new_size, alignment, flags);
+            alias ReclaimFn = void function(size_t, ReclaimRetry, void*) pure nothrow @nogc;
+            (cast(ReclaimFn) &reclaim_memory)(reclaim_size(new_size, alignment), &retry_realloc, &retry);
         }
         if (new_mem.ptr is null)
         {
@@ -152,6 +152,40 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
         free(mem);
         return new_mem;
     }
+}
+
+private size_t reclaim_size(size_t size, size_t alignment) pure
+{
+    enum natural_alignment = size_t.sizeof;
+    if (alignment <= natural_alignment)
+        return size;
+    size_t padding = alignment - natural_alignment;
+    return size <= size_t.max - padding ? size + padding : size_t.max;
+}
+
+unittest
+{
+    assert(reclaim_size(100, size_t.sizeof) == 100);
+    assert(reclaim_size(100, size_t.sizeof * 4) == 100 + size_t.sizeof * 3);
+}
+
+private struct ReallocRetry
+{
+    void[]* result;
+    void[] mem;
+    size_t new_size;
+    size_t alignment;
+    MemFlags flags;
+}
+
+private bool retry_realloc(void* context) pure
+{
+    ReallocRetry* retry = cast(ReallocRetry*)context;
+    static if (has_realloc)
+        *retry.result = _realloc(retry.mem, retry.new_size, retry.alignment, retry.flags);
+    else
+        *retry.result = _alloc(retry.new_size, retry.alignment, retry.flags);
+    return (*retry.result).ptr !is null;
 }
 
 // a template so typed arrays don't silently bind here through T[] -> void[] and skip destruction

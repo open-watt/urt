@@ -96,6 +96,7 @@ struct UartConfig
     ubyte rx_gpio = ubyte.max;  // GPIO pin for RX (max = platform default)
     ubyte rts_gpio = ubyte.max; // GPIO pin for RTS (max = platform default)
     ubyte cts_gpio = ubyte.max; // GPIO pin for CTS (max = platform default)
+    ubyte rx_threshold = 0;     // bytes buffered before RX interrupts; 0 = driver default (from baud), clamped to FIFO depth
     Rs485Config rs485;
 }
 
@@ -357,7 +358,15 @@ size_t uart_tx_available(ref const Uart uart)
 
 size_t uart_tx_queued(ref const Uart uart)
 {
-    assert(false, "TODO: uart_tx_queued");
+    static if (num_uarts == 0)
+        assert(false, "no UART on this platform");
+    else static if (__traits(compiles, uart_hw_tx_pending(0)))
+    {
+        auto n = uart_hw_tx_pending(uart.port);
+        return n > 0 ? cast(size_t)n : 0;
+    }
+    else
+        return 0;   // remaining drivers write synchronously, so nothing is ever queued
 }
 
 // Buffer control

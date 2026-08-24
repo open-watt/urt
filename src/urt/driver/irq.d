@@ -156,7 +156,9 @@ static if (has_plic)
 
 // CLIC (and NVIC) maintains per-IRQ vectors. Each line gets its own handler;
 // the dispatcher reads mcause / IPSR to pick which one to call.
-static if (has_clic || has_nvic)
+// Beken's ICU has no vector table, but its vendor dispatcher registers per-line
+// handlers, so gate on the backend actually providing the two-argument form.
+static if (has_clic || has_nvic || __traits(compiles, irq_set_handler(uint.init, IrqHandler.init)))
 {
     IrqHandler irq_handler_set(uint irq, IrqHandler handler)
     {

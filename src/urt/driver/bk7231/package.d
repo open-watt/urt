@@ -9,6 +9,7 @@ public import urt.driver.bk7231.irq;
 public import urt.driver.bk7231.timer;
 
 import urt.driver.uart : UartConfig;
+import urt.driver.bk7231.irq : irq_enable;
 
 @nogc nothrow:
 
@@ -20,13 +21,29 @@ extern(C) void sys_init()
 {
     __register_frame_info(&__eh_frame_start, &__eh_frame_object);
 
-    // Init UART1 (console) at default baud for early output
+    // Polling-mode UART first so the vendor bring-up below is visible if it faults.
     uart_hw_init(0, UartConfig.init);
 
-    uart0_hw_puts("BK7231: sys_init\r\n");
+    // Vendor driver layer, in entry_main() order. Pre-scheduler: driver_init is
+    // drv_model_init + g_dd_init, func_init_basic is intc_init + hal_flash_init,
+    // and neither touches rtos_*.
+    bk_misc_init_start_type();
+    driver_init();
+    bk_misc_check_start_type();
+    func_init_basic();
 
-    // Init freerunning timer for monotonic clock
+    // After intc_init, which owns the interrupt controller this timer registers with.
     timer_hw_init();
 
-    uart0_hw_puts("BK7231: ready\r\n");
+    // Reset left I+F masked; the irq_disable/irq_enable pairs only ever restore, so this is the
+    // one unconditional enable. The WLAN MAC lives on FIQ.
+    irq_enable();
+}
+
+extern(C) nothrow @nogc
+{
+    void bk_misc_init_start_type();
+    void bk_misc_check_start_type();
+    uint driver_init();
+    uint func_init_basic();
 }

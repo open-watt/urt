@@ -13,14 +13,17 @@ module urt.driver.bk7231.uart;
 
 import core.volatile;
 
-import urt.driver.uart : FlowControl, Parity, StopBits, UartConfig;
+import urt.driver.uart : FlowControl, Parity, StopBits, Uart, UartCallbackContext,
+    UartConfig, UartRxCallback;
 import urt.driver.gpio : Pull, gpio_set_function;
+import urt.driver.irq : irq_disable, irq_enable, irq_set_enable, irq_set_handler;
+import urt.mem.ring : RingBuffer;
 
 nothrow @nogc:
 
 enum num_uarts = 2;
 enum uint uart_clock_hz = 26_000_000;
-enum bool has_irq_driven_uart = false;
+enum bool has_irq_driven_uart = true;
 enum bool has_dma_driven_uart = false;
 
 
@@ -67,7 +70,7 @@ private enum : uint
     FIFO_RX_THRESHOLD_POS  = 8,       // 8 bits
     FIFO_RX_THRESHOLD_MASK = 0xFF << 8,
     FIFO_RX_STOP_TIME_POS  = 16,      // 3 bits: 0=32, 1=64, 2=128, 3=256 clks
-    FIFO_RX_STOP_TIME_MASK = 0x7 << 16,
+    FIFO_RX_STOP_TIME_MASK = 0x3 << 16,
 }
 
 
@@ -82,6 +85,7 @@ private enum : uint
     STAT_TX_FIFO_EMPTY       = 1 << 17,
     STAT_RX_FIFO_FULL        = 1 << 18,
     STAT_RX_FIFO_EMPTY       = 1 << 19,
+    STAT_RX_FIFO_DOUT_POS    = 8,           // RX byte reads out of FIFO_PORT[15:8]
     STAT_FIFO_WR_READY       = 1 << 20,
     STAT_FIFO_RD_READY       = 1 << 21,
 }
@@ -125,7 +129,6 @@ private enum uint FIFO_DEPTH = 128;
 
 // SDK defaults (uart.h): TX_FIFO_THRD=0x40, RX_FIFO_THRD=0x30
 private enum uint SDK_TX_FIFO_THRESHOLD = 0x40;
-private enum uint SDK_RX_FIFO_THRESHOLD = 0x30;
 private enum uint SDK_RX_STOP_DETECT    = 0;  // 32 clock cycles
 
 
@@ -213,9 +216,17 @@ bool uart_hw_init(uint id, UartConfig cfg)
 
     // Step 4: Configure FIFO thresholds and RX stop detect time
     // SDK defaults: TX_FIFO_THRD=0x40, RX_FIFO_THRD=0x30, RX_STOP_DETECT=0 (32 clks)
+    // ~100us of bytes per interrupt: per-byte up to 115200, batched above, with the
+    // idle-stop interrupt delivering any sub-threshold tail after ~3 byte-times.
+    uint rx_thresh = cfg.rx_threshold ? cfg.rx_threshold : cfg.baud_rate / 100_000;
+    if (rx_thresh == 0)
+        rx_thresh = 1;
+    if (rx_thresh > FIFO_DEPTH / 2)
+        rx_thresh = FIFO_DEPTH / 2;
+
     reg_write(base + REG_FIFO_CONFIG,
         (SDK_TX_FIFO_THRESHOLD << FIFO_TX_THRESHOLD_POS)
-      | (SDK_RX_FIFO_THRESHOLD << FIFO_RX_THRESHOLD_POS)
+      | (rx_thresh             << FIFO_RX_THRESHOLD_POS)
       | (SDK_RX_STOP_DETECT    << FIFO_RX_STOP_TIME_POS));
 
     // Step 5: Disable flow control (enable only if requested)
@@ -270,6 +281,21 @@ bool uart_hw_open(uint id, UartConfig cfg)
     return uart_hw_init(id, cfg);
 }
 
+// RX is interrupt-driven: the ISR only signals, and uart_read() drains the FIFO.
+bool uart_hw_open(uint id, UartConfig cfg, UartRxCallback rx_cb)
+{
+    if (!uart_hw_init(id, cfg))
+        return false;
+
+    _rx_cb[id] = rx_cb;
+
+    irq_set_handler(uart_irq[id], &uart_isr);
+    irq_set_enable(uart_irq[id]);
+    reg_write(uart_bases[id] + REG_INT_ENABLE,
+              rx_cb ? (INT_RX_FIFO_NEED_READ | INT_RX_STOP_END | INT_ALL_ERRORS) : 0);
+    return true;
+}
+
 void uart_hw_close(uint id)
 {
     if (id >= num_uarts)
@@ -294,9 +320,9 @@ ptrdiff_t uart_hw_read(uint id, void[] buffer)
 
     while (n < buf.length)
     {
-        if (reg_read(base + REG_FIFO_STATUS) & STAT_RX_FIFO_EMPTY)
+        if (!(reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_RD_READY))
             break;
-        buf[n] = cast(ubyte)(reg_read(base + REG_FIFO_PORT) & 0xFF);
+        buf[n] = cast(ubyte)((reg_read(base + REG_FIFO_PORT) >> STAT_RX_FIFO_DOUT_POS) & 0xFF);
         ++n;
     }
     return n;
@@ -304,18 +330,69 @@ ptrdiff_t uart_hw_read(uint id, void[] buffer)
 
 ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 {
-    immutable uint base = uart_bases[id];
-    auto buf = cast(const(ubyte)[])data;
-    ptrdiff_t n = 0;
+    if (id >= num_uarts)
+        return -1;
 
-    while (n < buf.length)
+    immutable uint base = uart_bases[id];
+
+    bool prev = irq_disable();
+    immutable size_t n = tx_ring[id].write(data);
+
+    // TODO: TX_FIFO_NEED_WRITE never fires on this part, so the ring is drained here rather
+    // than from the ISR. The vendor busy-waits in uart_write_byte too. Revisit if the TX
+    // interrupt is ever made to work; the ISR path below is left armed for that day.
+    // Interrupts are masked only while the ring is touched, never while waiting on the wire.
+    for (;;)
     {
-        if (reg_read(base + REG_FIFO_STATUS) & STAT_TX_FIFO_FULL)
+        fill_tx_fifo(id);
+        immutable bool drained = tx_ring[id].empty;
+        if (prev)
+            irq_enable();
+        if (drained)
             break;
-        reg_write(base + REG_FIFO_PORT, buf[n]);
-        ++n;
+        while (!(reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
+        {}
+        prev = irq_disable();
     }
-    return n;
+    return cast(ptrdiff_t)n;
+}
+
+ptrdiff_t uart_hw_tx_pending(uint id)
+{
+    if (id >= num_uarts)
+        return -1;
+
+    immutable bool prev = irq_disable();
+    size_t n = tx_ring[id].pending;
+    if (prev)
+        irq_enable();
+    n += reg_read(uart_bases[id] + REG_FIFO_STATUS) & STAT_TX_FIFO_COUNT_MASK;
+    return cast(ptrdiff_t)n;
+}
+
+private void fill_tx_fifo(uint id)
+{
+    immutable uint base = uart_bases[id];
+    ubyte[1] b = void;
+
+    while (!tx_ring[id].empty)
+    {
+        if (!(reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
+            break;
+        tx_ring[id].read(b[]);
+        reg_write(base + REG_FIFO_PORT, cast(uint)b[0]);
+    }
+}
+
+private void arm_tx_irq(uint id)
+{
+    immutable uint base = uart_bases[id];
+    uint en = reg_read(base + REG_INT_ENABLE);
+    if (tx_ring[id].empty)
+        en &= ~INT_TX_FIFO_NEED_WRITE;
+    else
+        en |= INT_TX_FIFO_NEED_WRITE;
+    reg_write(base + REG_INT_ENABLE, en);
 }
 
 void uart_hw_poll(uint id)
@@ -331,16 +408,17 @@ void uart_hw_poll(uint id)
 bool uart_hw_check_errors(uint id)
 {
     immutable uint base = uart_bases[id];
-    uint status = reg_read(base + REG_INT_STATUS);
-    uint errors = status & INT_ALL_ERRORS;
 
-    if (errors)
-    {
-        // Clear the error flags by writing 1
-        reg_write(base + REG_INT_STATUS, errors);
-        return true;
-    }
-    return false;
+    immutable bool prev = irq_disable();
+    uint errors = _latched_errors[id];
+    _latched_errors[id] = 0;
+    if (prev)
+        irq_enable();
+
+    uint live = reg_read(base + REG_INT_STATUS) & INT_ALL_ERRORS;
+    if (live)
+        reg_write(base + REG_INT_STATUS, live);
+    return (errors | live) != 0;
 }
 
 ptrdiff_t uart_hw_rx_pending(uint id)
@@ -362,10 +440,43 @@ ptrdiff_t uart_hw_flush(uint id)
 void uart0_hw_puts(const(char)[] s)
 {
     enum uint base = 0x0080_2100;
+    while (!tx_ring[0].empty)
+        fill_tx_fifo(0);
     foreach (c; s)
     {
-        while (reg_read(base + REG_FIFO_STATUS) & STAT_TX_FIFO_FULL)
+        while (!(reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
         {}
         reg_write(base + REG_FIFO_PORT, cast(uint)c);
     }
+}
+
+// driver/include/intc_pub.h: IRQ_UART1 = 0, IRQ_UART2 = 1
+private immutable uint[2] uart_irq = [0, 1];
+
+private alias TxRing = RingBuffer!1024;
+private __gshared TxRing[num_uarts] tx_ring;
+private __gshared uint[num_uarts] _latched_errors;
+private __gshared UartRxCallback[2] _rx_cb;
+
+private void uart_isr(uint irq) nothrow @nogc
+{
+    uint id = irq == uart_irq[1] ? 1 : 0;
+    immutable uint base = uart_bases[id];
+
+    uint status = reg_read(base + REG_INT_STATUS);
+    reg_write(base + REG_INT_STATUS, status);
+    _latched_errors[id] |= status & INT_ALL_ERRORS;
+
+    if (status & INT_TX_FIFO_NEED_WRITE)
+    {
+        fill_tx_fifo(id);
+        arm_tx_irq(id);
+    }
+
+    UartRxCallback cb = _rx_cb[id];
+    if (!cb)
+        return;
+
+    if (status & (INT_RX_FIFO_NEED_READ | INT_RX_STOP_END | INT_ALL_ERRORS))
+        cb(Uart(cast(ubyte)id), uart_hw_rx_pending(id), UartCallbackContext.interrupt);
 }

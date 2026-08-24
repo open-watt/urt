@@ -40,6 +40,11 @@ Result crypto_random_bytes(ubyte[] dst)
         NTSTATUS status = BCryptGenRandom(null, dst.ptr, cast(uint)dst.length, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
         return status == 0 ? Result.success : Result(cast(uint)status);
     }
+    else version (Beken)
+    {
+        import urt.driver.bk7231.trng : trng_read;
+        return trng_read(dst) ? Result.success : InternalResult.failed;
+    }
     else
         return InternalResult.unsupported;
 }

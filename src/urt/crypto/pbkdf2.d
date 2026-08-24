@@ -15,47 +15,101 @@ Result pbkdf2_hmac_sha1(const(ubyte)[] passphrase,
                         uint iterations,
                         ubyte[] output)
 {
-    if (passphrase.length == 0 || salt.length == 0 || iterations == 0 || output.length == 0)
-        return InternalResult.invalid_parameter;
+    Pbkdf2Sha1 kdf;
+    Result r = kdf.begin(passphrase, salt, iterations, output);
+    if (r.failed)
+        return r;
+    kdf.step(uint.max);
+    return Result.success;
+}
 
-    ubyte[SHA1Context.DigestLen] u = void;
-    ubyte[SHA1Context.DigestLen] block = void;
-    ubyte[4] counter_be = void;
-
-    size_t pos;
-    uint counter = 1;
-    while (pos < output.length)
+// Resumable PBKDF2-HMAC-SHA1: the 4096 WPA2 iterations are ~1.7s on a 120MHz ARM9, so
+// callers that cannot stall slice it with step(). passphrase, salt and output must stay
+// valid until done.
+struct Pbkdf2Sha1
+{
+nothrow @nogc:
+    Result begin(const(ubyte)[] passphrase, const(ubyte)[] salt, uint iterations, ubyte[] output)
     {
-        counter_be[0] = cast(ubyte)(counter >> 24);
-        counter_be[1] = cast(ubyte)(counter >> 16);
-        counter_be[2] = cast(ubyte)(counter >> 8);
-        counter_be[3] = cast(ubyte)counter;
-
-        HMACContext!SHA1Context h;
-        hmac_init(h, passphrase);
-        hmac_update(h, salt);
-        hmac_update(h, counter_be[]);
-        u = hmac_finalise(h);
-        block[] = u[];
-
-        foreach (_; 1 .. iterations)
-        {
-            hmac_init(h, passphrase);
-            hmac_update(h, u[]);
-            u = hmac_finalise(h);
-            foreach (i; 0 .. block.length)
-                block[i] ^= u[i];
-        }
-
-        size_t n = output.length - pos;
-        if (n > block.length)
-            n = block.length;
-        output[pos .. pos + n] = block[0 .. n];
-        pos += n;
-        counter++;
+        if (passphrase.length == 0 || salt.length == 0 || iterations == 0 || output.length == 0)
+            return InternalResult.invalid_parameter;
+        _passphrase = passphrase;
+        _salt = salt;
+        _iterations = iterations;
+        _output = output;
+        _pos = 0;
+        _counter = 0;
+        _iter = 0;
+        _done = false;
+        return Result.success;
     }
 
-    return Result.success;
+    bool done() const pure
+        => _done;
+
+    // Runs at most max_iterations HMAC rounds; returns true once the whole output is derived.
+    bool step(uint max_iterations)
+    {
+        while (!_done)
+        {
+            if (_iter != 0 && _iter >= _iterations)
+            {
+                size_t n = _output.length - _pos;
+                if (n > _block.length)
+                    n = _block.length;
+                _output[_pos .. _pos + n] = _block[0 .. n];
+                _pos += n;
+                _iter = 0;
+                if (_pos >= _output.length)
+                    _done = true;
+                continue;
+            }
+            if (!max_iterations)
+                break;
+
+            if (_iter == 0)
+            {
+                ++_counter;
+                ubyte[4] counter_be = void;
+                counter_be[0] = cast(ubyte)(_counter >> 24);
+                counter_be[1] = cast(ubyte)(_counter >> 16);
+                counter_be[2] = cast(ubyte)(_counter >> 8);
+                counter_be[3] = cast(ubyte)_counter;
+
+                HMACContext!SHA1Context h;
+                hmac_init(h, _passphrase);
+                hmac_update(h, _salt);
+                hmac_update(h, counter_be[]);
+                _u = hmac_finalise(h);
+                _block[] = _u[];
+                _iter = 1;
+                --max_iterations;
+                continue;
+            }
+
+            HMACContext!SHA1Context h;
+            hmac_init(h, _passphrase);
+            hmac_update(h, _u[]);
+            _u = hmac_finalise(h);
+            foreach (i; 0 .. _block.length)
+                _block[i] ^= _u[i];
+            ++_iter;
+            --max_iterations;
+        }
+        return _done;
+    }
+
+private:
+    const(ubyte)[] _passphrase;
+    const(ubyte)[] _salt;
+    ubyte[] _output;
+    uint _iterations;
+    uint _counter;
+    uint _iter;
+    size_t _pos;
+    bool _done;
+    ubyte[SHA1Context.DigestLen] _u = void;
+    ubyte[SHA1Context.DigestLen] _block = void;
 }
 
 Result wpa2_psk_to_pmk(const(char)[] passphrase,
@@ -75,6 +129,23 @@ Result wpa2_psk_to_pmk(const(char)[] passphrase,
 
 unittest
 {
+    // sliced derivation must equal the one-shot result, whatever the slice size
+    ubyte[32] whole, sliced;
+    assert(pbkdf2_hmac_sha1(cast(const(ubyte)[])"passphrase", cast(const(ubyte)[])"ssid", 100, whole[]));
+    Pbkdf2Sha1 kdf;
+    assert(kdf.begin(cast(const(ubyte)[])"passphrase", cast(const(ubyte)[])"ssid", 100, sliced[]));
+    uint calls;
+    while (!kdf.step(7))
+        ++calls;
+    assert(calls > 10);
+    assert(sliced == whole);
+
+    // an exact budget finishes without a further call: 2 blocks x 100 rounds
+    ubyte[32] exact;
+    assert(kdf.begin(cast(const(ubyte)[])"passphrase", cast(const(ubyte)[])"ssid", 100, exact[]));
+    assert(kdf.step(200));
+    assert(exact == whole);
+
     ubyte[20] out1;
     assert(pbkdf2_hmac_sha1(cast(const(ubyte)[])"password",
                             cast(const(ubyte)[])"salt",

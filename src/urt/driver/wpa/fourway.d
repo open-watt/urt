@@ -52,6 +52,7 @@ enum WpaHandshakeReason : ushort
     group_install_failed,
     pmf_required_unsupported,
     timeout,
+    pmk_not_ready,
 }
 
 struct FourwayHooks

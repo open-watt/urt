@@ -8,7 +8,7 @@
 // dependency when the second AKM lands.
 module urt.driver.wpa.supplicant;
 
-import urt.crypto.pbkdf2 : wpa2_psk_to_pmk;
+import urt.crypto.pbkdf2 : wpa2_psk_to_pmk, Pbkdf2Sha1;
 import urt.driver.wpa.crypto : wpa_nonce_len, wpa_pmk_len;
 import urt.driver.wifi : WifiAuth, WifiStaConfig;
 import urt.result : Result, InternalResult;
@@ -21,6 +21,7 @@ nothrow @nogc:
 enum WpaSupplicantState : ubyte
 {
     idle,
+    deriving,      // PMK derivation in flight; pmk_step() drives it to configured
     configured,
     associating,
     associated,    // assoc done, waiting for first EAPOL key frame
@@ -73,6 +74,67 @@ struct WpaStaSupplicant
 
 nothrow @nogc:
 
+    // configure() derives the PMK synchronously (~1.7s of PBKDF2 on a 120MHz ARM9). Drivers
+    // that cannot stall use this instead and call pmk_step() in slices until it returns true.
+    // cfg.ssid / cfg.password must stay valid until then.
+    Result configure_deferred(ref const WifiStaConfig cfg)
+    {
+        profile.ssid = cfg.ssid;
+        profile.passphrase = cfg.password;
+        profile.bssid = cfg.bssid;
+        profile.pmf_required = cfg.pmf_required;
+        profile.key_mgmt = infer_key_mgmt(cfg);
+        _pmk_pending = false;
+        _pmk_valid = false;
+
+        if (profile.pmf_required)
+        {
+            state = WpaSupplicantState.failed;
+            last_reason = cast(ushort)WpaHandshakeReason.pmf_required_unsupported;
+            return InternalResult.unsupported;
+        }
+
+        if (profile.key_mgmt == WpaKeyMgmt.wpa2_psk)
+        {
+            if (profile.passphrase.length < 8 || profile.passphrase.length > 63 ||
+                profile.ssid.length == 0 || profile.ssid.length > 32)
+            {
+                state = WpaSupplicantState.failed;
+                return InternalResult.invalid_parameter;
+            }
+            Result r = start_derivation();
+            if (r.failed)
+            {
+                state = WpaSupplicantState.failed;
+                return r;
+            }
+            state = WpaSupplicantState.deriving;
+            return Result.success;
+        }
+
+        state = WpaSupplicantState.configured;
+        return Result.success;
+    }
+
+    // A usable PMK is in place (or the profile needs none).
+    bool pmk_ready() const pure
+        => !_pmk_pending && (_pmk_valid || profile.key_mgmt != WpaKeyMgmt.wpa2_psk);
+
+    // Only a derivation that configure_deferred() started advances; a cancelled one stays cancelled
+    // until the profile is configured again.
+    bool pmk_step(uint iterations)
+    {
+        if (state != WpaSupplicantState.deriving || !_pmk_pending)
+            return pmk_ready;
+        if (_kdf.step(iterations))
+        {
+            _pmk_pending = false;
+            _pmk_valid = true;
+            state = WpaSupplicantState.configured;
+        }
+        return !_pmk_pending;
+    }
+
     Result configure(ref const WifiStaConfig cfg)
     {
         profile.ssid = cfg.ssid;
@@ -80,6 +142,8 @@ nothrow @nogc:
         profile.bssid = cfg.bssid;
         profile.pmf_required = cfg.pmf_required;
         profile.key_mgmt = infer_key_mgmt(cfg);
+        _pmk_pending = false;
+        _pmk_valid = false;
 
         if (profile.pmf_required)
         {
@@ -96,6 +160,7 @@ nothrow @nogc:
                 state = WpaSupplicantState.failed;
                 return r;
             }
+            _pmk_valid = true;
         }
 
         state = WpaSupplicantState.configured;
@@ -115,6 +180,8 @@ nothrow @nogc:
         profile.bssid = cfg.bssid;
         profile.pmf_required = cfg.pmf_required;
         profile.key_mgmt = infer_key_mgmt(cfg);
+        _pmk_pending = false;
+        _pmk_valid = false;
 
         if (profile.pmf_required)
         {
@@ -124,7 +191,10 @@ nothrow @nogc:
         }
 
         if (profile.key_mgmt == WpaKeyMgmt.wpa2_psk)
+        {
             pmk[] = pmk_[0 .. wpa_pmk_len];
+            _pmk_valid = true;
+        }
 
         state = WpaSupplicantState.configured;
         return Result.success;
@@ -133,10 +203,17 @@ nothrow @nogc:
     void begin_association(const(ubyte)[6] local_mac, const(ubyte)[] sta_rsn_ie)
     {
         own_mac = local_mac;
-        state = WpaSupplicantState.associating;
         last_reason = 0;
         rx_eapol_count = 0;
         tx_eapol_count = 0;
+
+        if (state != WpaSupplicantState.configured || !pmk_ready)
+        {
+            state = WpaSupplicantState.failed;
+            last_reason = cast(ushort)WpaHandshakeReason.pmk_not_ready;
+            return;
+        }
+        state = WpaSupplicantState.associating;
 
         if (profile.key_mgmt == WpaKeyMgmt.wpa2_psk)
         {
@@ -182,6 +259,7 @@ nothrow @nogc:
 
     void disconnected(ushort reason_code)
     {
+        _pmk_pending = false;
         last_reason = reason_code;
         fourway.hooks.handshake_complete = null;
         state = WpaSupplicantState.failed;
@@ -189,6 +267,17 @@ nothrow @nogc:
     }
 
 private:
+    Pbkdf2Sha1 _kdf;
+    bool _pmk_pending;
+    bool _pmk_valid;
+
+    Result start_derivation()
+    {
+        _pmk_valid = false;
+        Result r = _kdf.begin(cast(const(ubyte)[])profile.passphrase, cast(const(ubyte)[])profile.ssid, 4096, pmk[]);
+        _pmk_pending = !r.failed;
+        return r;
+    }
 
     bool fourway_send_eapol(const(ubyte)[] eapol)
     {
@@ -227,4 +316,54 @@ WpaKeyMgmt infer_key_mgmt(ref const WifiStaConfig cfg)
 
     // WPA2-PSK is the only AKM implemented, so a passphrase means WPA2-PSK.
     return WpaKeyMgmt.wpa2_psk;
+}
+
+unittest
+{
+    ubyte[6] mac = [2, 0, 0, 0, 0, 1];
+    WifiStaConfig cfg;
+    cfg.ssid = "ssid";
+    cfg.password = "passphrase";
+
+    // deferred derivation lands on the same PMK as the synchronous path
+    WpaStaSupplicant sync_, deferred;
+    assert(sync_.configure(cfg));
+    assert(deferred.configure_deferred(cfg));
+    assert(deferred.state == WpaSupplicantState.deriving);
+    assert(!deferred.pmk_ready);
+    while (!deferred.pmk_step(512)) {}
+    assert(deferred.state == WpaSupplicantState.configured);
+    assert(deferred.pmk_ready && deferred.pmk == sync_.pmk);
+
+    // a rejected profile never derives, and cannot associate
+    WifiStaConfig bad = cfg;
+    bad.password = "12345";
+    WpaStaSupplicant rejected;
+    assert(rejected.configure_deferred(bad).failed);
+    assert(rejected.state == WpaSupplicantState.failed);
+    assert(!rejected.pmk_step(8192));
+    assert(!rejected.pmk_ready);
+    rejected.begin_association(mac, null);
+    assert(rejected.state == WpaSupplicantState.failed);
+    assert(rejected.last_reason == WpaHandshakeReason.pmk_not_ready);
+
+    // a cancelled derivation stays cancelled until reconfigured
+    WpaStaSupplicant cancelled;
+    assert(cancelled.configure_deferred(cfg));
+    assert(!cancelled.pmk_step(8));
+    cancelled.disconnected(3);
+    assert(cancelled.state == WpaSupplicantState.failed);
+    assert(!cancelled.pmk_step(8192));
+    assert(!cancelled.pmk_ready);
+    assert(cancelled.configure_deferred(cfg));
+    while (!cancelled.pmk_step(512)) {}
+    assert(cancelled.pmk == sync_.pmk);
+
+    // a synchronous configure supersedes a derivation in flight
+    WpaStaSupplicant superseded;
+    assert(superseded.configure_deferred(cfg));
+    assert(superseded.configure(cfg));
+    assert(superseded.pmk_ready && superseded.pmk == sync_.pmk);
+    assert(superseded.pmk_step(8192));
+    assert(superseded.state == WpaSupplicantState.configured);
 }

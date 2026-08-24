@@ -19,6 +19,8 @@ module urt.driver.bk7231.timer;
 
 import core.volatile;
 
+import urt.driver.irq : irq_set_enable, irq_set_handler;
+
 @nogc nothrow:
 
 
@@ -138,6 +140,49 @@ private __gshared TimerCallback tick_callback;
 void timer_set_periodic(uint period_us, TimerCallback cb)
 {
     tick_callback = cb;
-    // TODO: configure Timer1 for periodic interrupt at period_us
-    // Requires IRQ vector dispatch in start.S (not yet implemented)
+
+    uint ctl = reg_read(TIMER0_2_CTL);
+
+    if (!cb || period_us == 0)
+    {
+        reg_write(TIMER0_2_CTL, ctl & ~(INT_FLAG_MASK | TIMER1_EN));
+        return;
+    }
+
+    ulong ticks = cast(ulong)period_us * (timer_freq_hz / 1_000_000);
+    assert(ticks > 0 && ticks <= uint.max, "bk7231 timer: period out of range");
+    reg_write(TIMER1_PERIOD, cast(uint)ticks);
+
+    irq_set_handler(IRQ_TIMER, &timer_isr);
+    irq_set_enable(IRQ_TIMER);
+
+    reg_write(TIMER0_2_CTL, (ctl & ~INT_FLAG_MASK) | TIMER1_EN);
+}
+
+private void timer_isr(uint irq) nothrow @nogc
+{
+    uint pending = reg_read(TIMER0_2_CTL) & INT_FLAG_MASK;
+    if (!pending)
+        return;
+
+    // The flag does not reliably clear on the first write; the vendor ISR spins too.
+    do
+        reg_write(TIMER0_2_CTL, (reg_read(TIMER0_2_CTL) & ~INT_FLAG_MASK) | pending);
+    while (reg_read(TIMER0_2_CTL) & pending & INT_FLAG_MASK);
+
+    if ((pending & TIMER1_INT) && tick_callback)
+        tick_callback();
+}
+
+// driver/include/intc_pub.h
+private enum uint IRQ_TIMER = 8;
+
+private uint reg_read(uint addr)
+{
+    return volatileLoad(cast(uint*)(cast(size_t)addr));
+}
+
+private void reg_write(uint addr, uint val)
+{
+    volatileStore(cast(uint*)(cast(size_t)addr), val);
 }

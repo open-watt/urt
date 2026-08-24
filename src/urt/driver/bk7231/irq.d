@@ -6,6 +6,8 @@ module urt.driver.bk7231.irq;
 
 import core.volatile;
 
+import urt.driver.irq : IrqHandler;
+
 @nogc nothrow:
 
 enum bool has_plic = false;
@@ -19,8 +21,8 @@ enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 enum uint irq_max = 32;
 
-// ARMv5 CPSR: I=bit7 masks IRQ, F=bit6 masks FIQ. We report prior IRQ-enable
-// state only; FIQ is treated as a hard-disable that callers don't toggle.
+// ARMv5 CPSR: I=bit7 masks IRQ, F=bit6 masks FIQ. The WLAN MAC interrupts are FIQs, so
+// the global enable covers both; the reported state is the I bit.
 bool irq_disable()
 {
     uint cpsr;
@@ -35,7 +37,7 @@ bool irq_enable()
     uint cpsr;
     asm @nogc nothrow { "mrs %0, cpsr" : "=r" (cpsr); }
     bool was_enabled = (cpsr & 0x80) == 0;
-    asm @nogc nothrow { "msr cpsr_c, %0" :: "r" (cpsr & ~0x80); }
+    asm @nogc nothrow { "msr cpsr_c, %0" :: "r" (cpsr & ~0xC0); }
     return was_enabled;
 }
 
@@ -58,7 +60,55 @@ bool irq_clear_enable(uint irq_num)
 }
 
 
+
+// The Beken ICU has no vector table; the vendor intc_irq() decodes the status
+// register and calls handlers registered through intc_service_register, whose
+// ISR type takes no argument. Each line gets a generated trampoline that
+// recovers its own number and dispatches to the installed IrqHandler.
+IrqHandler irq_set_handler(uint irq, IrqHandler handler)
+{
+    if (irq >= irq_max)
+        return null;
+
+    IrqHandler prev = _handlers[irq];
+    _handlers[irq] = handler;
+
+    if (handler && !_registered[irq])
+    {
+        intc_service_register(cast(ubyte)irq, irq_priority[irq], cast(VendorIsr)_trampolines[irq]);
+        _registered[irq] = true;
+    }
+    return prev;
+}
+
+
 private:
+
+// driver/include/intc_pub.h PRI_IRQ_*; the vendor's intended service order.
+immutable ubyte[irq_max] irq_priority = [
+    26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11,
+     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+];
+
+alias VendorIsr = extern(C) void function() nothrow @nogc;
+extern(C) void intc_service_register(ubyte int_num, ubyte int_pri, VendorIsr isr);
+
+__gshared IrqHandler[irq_max] _handlers;
+__gshared bool[irq_max] _registered;
+
+void irq_trampoline(uint irq)() nothrow @nogc
+{
+    IrqHandler h = _handlers[irq];
+    if (h)
+        h(irq);
+}
+
+__gshared immutable typeof(&irq_trampoline!0)[irq_max] _trampolines = () {
+    typeof(&irq_trampoline!0)[irq_max] t;
+    static foreach (i; 0 .. irq_max)
+        t[i] = &irq_trampoline!i;
+    return t;
+}();
 
 enum uint icu_base = 0x0080_2000;
 

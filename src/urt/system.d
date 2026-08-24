@@ -31,6 +31,16 @@ version (Espressif)
     }
 }
 
+version (Beken)
+{
+    extern(C) nothrow @nogc
+    {
+        size_t xPortGetFreeHeapSize();
+        size_t xPortGetMinimumEverFreeHeapSize();
+        extern const ubyte _vendor_heap_size;
+    }
+}
+
 nothrow @nogc:
 
 
@@ -180,6 +190,36 @@ SystemInfo get_sysinfo()
             r.pools[1].peak_used = r.pools[1].total - heap_caps_get_minimum_free_size(slow_memory_caps);
             r.pools[1].largest_free = heap_caps_get_largest_free_block(slow_memory_caps);
         }
+
+        r.uptime = get_app_time();
+    }
+    else version (Beken)
+    {
+        import urt.driver.bk7231.alloc : fast_heap_stats, sram_heap_stats;
+
+        size_t total, used, largest;
+        sram_heap_stats(total, used, largest);
+        r.pools[0].name = "SRAM";
+        r.pools[0].total = total;
+        r.pools[0].used = used;
+        r.pools[0].largest_free = largest;
+
+        version (BK7231N)
+        {
+            fast_heap_stats(total, used, largest);
+            r.pools[1].name = "DTCM";
+            r.pools[1].total = total;
+            r.pools[1].used = used;
+            r.pools[1].largest_free = largest;
+        }
+
+        version (BK7231N) enum sdk_pool = 2;
+        else enum sdk_pool = 1;
+        size_t vendor_total = cast(size_t)&_vendor_heap_size;
+        r.pools[sdk_pool].name = "SDK";
+        r.pools[sdk_pool].total = vendor_total;
+        r.pools[sdk_pool].used = vendor_total - xPortGetFreeHeapSize();
+        r.pools[sdk_pool].peak_used = vendor_total - xPortGetMinimumEverFreeHeapSize();
 
         r.uptime = get_app_time();
     }

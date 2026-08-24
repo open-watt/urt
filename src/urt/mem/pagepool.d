@@ -351,7 +351,7 @@ void[] alloc_payload(size_t bytes)
     }
 
     size_t block_size = allocation_header_size + bytes;
-    void[] mem = alloc(block_size, 16);
+    void[] mem = alloc(block_size, 16, MemFlags.dma);
     if (!mem.ptr)
     {
         auto guard = _lock.acquire();
@@ -465,7 +465,7 @@ size_t histogram_bucket(size_t bytes)
 bool add_slab(Category* c)
 {
     size_t bytes = slab_bytes(c.cfg);
-    void[] mem = alloc(bytes, 16);
+    void[] mem = alloc(bytes, 16, MemFlags.dma);
     if (!mem.ptr)
         return false;
 

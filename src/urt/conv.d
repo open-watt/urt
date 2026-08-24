@@ -599,8 +599,7 @@ unittest
 
 ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null) pure
 {
-    // TODO: this function should be oblitereated and implemented natively...
-    //       CRT call can't CTFE, which is a shame
+    // TODO: implement natively so this can run at CTFE.
 
     import urt.string.format : concat;
 

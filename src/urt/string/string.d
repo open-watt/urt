@@ -802,6 +802,9 @@ nothrow @nogc:
     bool empty() const pure
         => length() == 0;
 
+    size_t capacity() const pure
+        => allocated();
+
     bool opCast(T : bool)() const pure
         => ptr != null && ((cast(ushort*)ptr)[-1] & 0x7FFF) != 0;
 

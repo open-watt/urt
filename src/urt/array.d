@@ -567,6 +567,8 @@ nothrow @nogc:
         => _length == 0;
     size_t length() const
         => _length;
+    size_t capacity() const
+        => alloc_count();
 
     ref inout(T) front() inout
     {

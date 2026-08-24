@@ -245,15 +245,14 @@ size_t page_payload_size(ubyte category)
     return _categories[category].cfg.page_size - page_header_size;
 }
 
-// Release fully-idle slabs (above each category's prealloc floor) back to the heap.
-// Returns bytes freed; stops once bytes_needed is covered.
-size_t page_pool_trim(size_t bytes_needed = size_t.max)
+// Release one fully-idle slab above its category's prealloc floor back to the heap.
+ReclaimResult page_pool_trim(size_t bytes_needed = size_t.max)
 {
-    size_t freed = 0;
     foreach (i; 0 .. _num_categories)
     {
         Category* c = &_categories[i];
-        SlabHeader* release_chain = null;
+        SlabHeader* release;
+        bool more;
 
         {
             auto guard = _lock.acquire();
@@ -261,32 +260,26 @@ size_t page_pool_trim(size_t bytes_needed = size_t.max)
             while (*link)
             {
                 SlabHeader* s = *link;
-                if (s.free_count == s.page_count && c.stats.slab_count > c.cfg.prealloc_slabs
-                    && freed < bytes_needed)
+                if (s.free_count == s.page_count && c.stats.slab_count > c.cfg.prealloc_slabs)
                 {
                     *link = s.next;
                     --c.stats.slab_count;
                     c.stats.pages_free -= s.page_count;
-                    s.next = release_chain;
-                    release_chain = s;
-                    freed += slab_bytes(c.cfg);
+                    release = s;
+                    more = has_reclaimable_slab_locked();
+                    break;
                 }
-                else
-                    link = &s.next;
+                link = &s.next;
             }
         }
 
-        while (release_chain)
+        if (release)
         {
-            SlabHeader* s = release_chain;
-            release_chain = s.next;
-            free((cast(void*)s)[0 .. slab_bytes(c.cfg)]);
+            free((cast(void*)release)[0 .. slab_bytes(c.cfg)]);
+            return more ? ReclaimResult.more : ReclaimResult.exhausted;
         }
-
-        if (freed >= bytes_needed)
-            break;
     }
-    return freed;
+    return ReclaimResult.exhausted;
 }
 
 PagePoolStats page_pool_stats(ubyte category)
@@ -348,6 +341,24 @@ __gshared Critical _lock;
 __gshared Category[max_page_categories] _categories;
 __gshared uint _num_categories;
 __gshared PagePoolStats _jumbo_stats;
+
+bool has_reclaimable_slab_locked()
+{
+    foreach (ref c; _categories[0 .. _num_categories])
+    {
+        if (c.stats.slab_count > c.cfg.prealloc_slabs)
+        {
+            SlabHeader* s = c.slabs;
+            while (s)
+            {
+                if (s.free_count == s.page_count)
+                    return true;
+                s = s.next;
+            }
+        }
+    }
+    return false;
+}
 
 size_t slab_bytes(ref const PageCategoryConfig cfg)
     => slab_header_size + cfg.page_size * cfg.pages_per_slab;
@@ -414,7 +425,7 @@ bool add_slab(Category* c)
     return true;    // the cap was reached by someone else; a page is available
 }
 
-size_t trim_handler(size_t bytes_needed)
+ReclaimResult trim_handler(size_t bytes_needed)
     => page_pool_trim(bytes_needed);
 
 
@@ -484,8 +495,7 @@ unittest
 
     // trim: the now fully-idle slab (above the prealloc floor of 1) gets released;
     // the slab holding `keep` survives
-    size_t freed = page_pool_trim();
-    assert(freed == slab_header_size + 64 * 4);
+    assert(page_pool_trim(slab_header_size + 64 * 4) == ReclaimResult.exhausted);
     s = page_pool_stats(0);
     assert(s.slab_count == 1 && s.pages_in_use == 1);
     page_free(keep.ptr);
@@ -515,8 +525,8 @@ unittest
     assert(page_pool_init(test_cfg));
     page_pool_deinit();
 
-    static size_t fill_reclaimer(size_t id)(size_t)
-        => id;
+    static ReclaimResult fill_reclaimer(size_t id)(size_t)
+        => ReclaimResult.exhausted;
 
     ReclaimFunction[8] fillers = [
         &fill_reclaimer!0, &fill_reclaimer!1,

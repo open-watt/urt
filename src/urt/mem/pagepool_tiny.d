@@ -116,39 +116,34 @@ template PagePool(
         return category == 0 ? small_capacity : large_capacity;
     }
 
-    size_t page_pool_trim(size_t bytes_needed = size_t.max)
+    ReclaimResult page_pool_trim(size_t bytes_needed = size_t.max)
     {
-        size_t freed;
         foreach (category; 0 .. 2)
         {
-            PageHeader* release_chain;
+            PageHeader* page;
             size_t size = page_size(cast(ubyte)category);
             ushort floor = prealloc_pages(cast(ubyte)category);
+            bool more;
             {
                 auto guard = _lock.acquire();
-                while (_free_pages[category] > floor && freed < bytes_needed)
+                if (_free_pages[category] > floor)
                 {
-                    PageHeader* page = _free_lists[category];
+                    page = _free_lists[category];
                     _free_lists[category] = cast(PageHeader*)page.tag;
-                    page.tag = cast(size_t)release_chain;
-                    release_chain = page;
                     --_free_pages[category];
                     --_allocated_pages[category];
-                    freed += size;
+                    more = _free_pages[0] > prealloc_pages(0)
+                        || _free_pages[1] > prealloc_pages(1);
                 }
             }
 
-            while (release_chain)
+            if (page)
             {
-                PageHeader* page = release_chain;
-                release_chain = cast(PageHeader*)page.tag;
                 urt.mem.alloc.free((cast(void*)page)[0 .. size]);
+                return more ? ReclaimResult.more : ReclaimResult.exhausted;
             }
-
-            if (freed >= bytes_needed)
-                break;
         }
-        return freed;
+        return ReclaimResult.exhausted;
     }
 
     void page_pool_deinit()
@@ -405,8 +400,7 @@ void page_pool_tiny_test()()
         TestPool.page_free(allocated.ptr);
 
     void[] keep = TestPool.page_alloc_for(32);
-    size_t freed = TestPool.page_pool_trim();
-    assert(freed == 64 * 3);
+    while (TestPool.page_pool_trim() == ReclaimResult.more) {}
     assert(TestPool._allocated_pages[0] == 5);
     assert(TestPool._free_pages[0] == 4);
     TestPool.page_free(keep.ptr);
@@ -434,8 +428,8 @@ void page_pool_tiny_test()()
     assert(TestPool.page_pool_init());
     TestPool.page_pool_deinit();
 
-    static size_t fill_reclaimer(size_t id)(size_t)
-        => id;
+    static ReclaimResult fill_reclaimer(size_t id)(size_t)
+        => ReclaimResult.exhausted;
 
     ReclaimFunction[8] fillers = [
         &fill_reclaimer!0, &fill_reclaimer!1,

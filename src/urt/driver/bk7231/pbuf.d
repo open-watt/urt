@@ -1,5 +1,6 @@
 module urt.driver.bk7231.pbuf;
 
+import urt.inet : IPAddr;
 import urt.mem : memcpy;
 import urt.mem.pagepool : Page, page_alloc, page_free;
 import urt.sync.critical : Critical;
@@ -125,6 +126,24 @@ extern(C) Pbuf* pbuf_coalesce(Pbuf* p, int layer)
 
 extern(C) uint lwip_htonl(uint value)
     => byte_reverse(value);
+
+extern(C) int ip4addr_aton(const(char)* string, uint* address)
+{
+    if (!string)
+        return 0;
+
+    size_t length;
+    while (string[length])
+        ++length;
+
+    IPAddr result;
+    ptrdiff_t parsed = result.fromString(string[0 .. length]);
+    if (parsed < 0 || cast(size_t)parsed != length)
+        return 0;
+    if (address)
+        *address = result.address;
+    return 1;
+}
 
 extern(C) void ethernetif_input(int vif, Pbuf* p)
 {

@@ -66,10 +66,21 @@ int __wrap__fcntl_r(struct _reent *r, int fd, int cmd, int arg)
     return -1;
 }
 
+// vPortEnterCritical/vPortExitCritical are static inline in the port header,
+// so D binds these out-of-line wrappers instead.
+
+void ow_port_enter_critical(portMUX_TYPE *mux)
+{
+    portENTER_CRITICAL(mux);
+}
+
+void ow_port_exit_critical(portMUX_TYPE *mux)
+{
+    portEXIT_CRITICAL(mux);
+}
+
 // -- WFI shim --
-// Single-instruction inline asm; bound from D as ow_irq_wait. The
-// surrounding portENTER_CRITICAL pair is handled D-side via direct
-// vPortEnterCritical/vPortExitCritical bindings -- no C wrapper needed.
+// Single-instruction inline asm; bound from D as ow_irq_wait.
 
 void ow_irq_wait(void)
 {

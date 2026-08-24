@@ -76,10 +76,11 @@ extern(C)
     BaseType_t xTaskGenericNotify(TaskHandle_t xTaskToNotify, UBaseType_t uxIndexToNotify, uint ulValue, eNotifyAction eAction, uint* pulPreviousNotificationValue);
     uint       ulTaskGenericNotifyTake(UBaseType_t uxIndexToWaitOn, BaseType_t xClearCountOnExit, TickType_t xTicksToWait);
 
-    // critical sections (portmacro). portENTER_CRITICAL(mux) on ESP-IDF
-    // expands ultimately to vPortEnterCritical(mux); same for exit.
-    void vPortEnterCritical(portMUX_TYPE* mux);
-    void vPortExitCritical(portMUX_TYPE* mux);
+    // critical sections. The port's vPortEnterCritical/vPortExitCritical are
+    // static inline in IDF's portmacro.h, so there is no symbol to bind; the
+    // shim exports out-of-line wrappers.
+    pragma(mangle, "ow_port_enter_critical") void vPortEnterCritical(portMUX_TYPE* mux);
+    pragma(mangle, "ow_port_exit_critical")  void vPortExitCritical(portMUX_TYPE* mux);
 
     // event groups (event_groups.c). Requires configUSE_EVENT_GROUPS=1.
     EventGroupHandle_t xEventGroupCreate();

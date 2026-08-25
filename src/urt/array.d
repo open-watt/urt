@@ -622,13 +622,22 @@ nothrow @nogc:
         if (is(U : T))
     {
         assert(pos <= _length, "Insert position out of range");
-        reserve(_length + 1);
-        uint old_length = _length++;
-        move_emplace_overlapping(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
-        static if (is(T == class) || is(T == interface))
-            return (ptr[pos] = item);
+        static if (is_trivial!T)
+        {
+            enum alignment = T.alignof < 4 ? 4 : T.alignof;
+            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+            T value = item;
+            ptr = cast(T*)array_insert_trivial(ptr, _length, alloc_count(), cast(uint)pos, &value, T.sizeof, alignment, prefix, has_allocation());
+            ++_length;
+            return ptr[pos];
+        }
         else
+        {
+            reserve(_length + 1);
+            uint old_length = _length++;
+            move_emplace_overlapping(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
             return *emplace!T(&ptr[pos], forward!item);
+        }
     }
 
     ref T insertEmplace(Args...)(size_t pos, auto ref Args args)
@@ -678,9 +687,14 @@ nothrow @nogc:
     void remove(size_t i, size_t count = 1)
     {
         debug assert(i + count <= _length, "Range error");
-        if (i < _length - count)
-            move_to!true(ptr[i + count .. _length], ptr[i .. _length - count]);
-        destroy_all!false(ptr[_length - count .. length]);
+        static if (is_trivial!T)
+            array_remove_trivial(ptr, _length, cast(uint)i, cast(uint)count, T.sizeof);
+        else
+        {
+            if (i < _length - count)
+                move_to!true(ptr[i + count .. _length], ptr[i .. _length - count]);
+            destroy_all!false(ptr[_length - count .. length]);
+        }
         _length -= cast(uint)count;
     }
     void remove(const(T)* pItem)                    { remove(ptr[0 .. _length].indexOfElement(pItem)); }
@@ -815,6 +829,22 @@ nothrow @nogc:
     ptrdiff_t fromString()(const(char)[] s)
     {
         assert(false, "TODO");
+    }
+
+package(urt):
+    void assume_ownership(T* data, uint length)
+    {
+        assert(ptr is null && _length == 0);
+        ptr = data;
+        _length = length;
+    }
+
+    T* release_ownership()
+    {
+        T* data = ptr;
+        ptr = null;
+        _length = 0;
+        return data;
     }
 
 private:
@@ -1050,7 +1080,8 @@ void move_emplace_overlapping(T)(T[] arr, T[] dest)
     }
 }
 
-pragma(inline, false)
+package(urt):
+
 void* array_allocate(uint count, size_t element_size, size_t alignment, size_t prefix) pure
 {
     void[] mem = .alloc(prefix + element_size * count, alignment);
@@ -1059,14 +1090,12 @@ void* array_allocate(uint count, size_t element_size, size_t alignment, size_t p
     return array;
 }
 
-pragma(inline, false)
 void array_free(void* ptr, size_t element_size, size_t prefix) pure
 {
     uint count = (cast(uint*)ptr)[-1];
     .free((ptr - prefix)[0 .. prefix + element_size * count]);
 }
 
-pragma(inline, false)
 void* array_reserve_trivial(void* ptr, uint length, uint count, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
 {
     void* result = array_allocate(count, element_size, alignment, prefix);
@@ -1077,7 +1106,6 @@ void* array_reserve_trivial(void* ptr, uint length, uint count, size_t element_s
     return result;
 }
 
-pragma(inline, false)
 size_t array_growth(size_t capacity, size_t target) pure
 {
     if (target <= capacity)
@@ -1091,7 +1119,6 @@ size_t array_growth(size_t capacity, size_t target) pure
     return result;
 }
 
-pragma(inline, false)
 void* array_grow_trivial(void* ptr, uint length, size_t capacity, size_t target, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
 {
     size_t count = array_growth(capacity, target);
@@ -1099,6 +1126,24 @@ void* array_grow_trivial(void* ptr, uint length, size_t capacity, size_t target,
         return ptr;
     return array_reserve_trivial(ptr, length, cast(uint)count, element_size, alignment, prefix, allocated);
 }
+
+void* array_insert_trivial(void* ptr, uint length, size_t capacity, uint pos, const void* value, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
+{
+    ptr = array_grow_trivial(ptr, length, capacity, length + 1, element_size, alignment, prefix, allocated);
+    ubyte* bytes = cast(ubyte*)ptr;
+    if (pos < length)
+        memmove(bytes + (pos + 1) * element_size, bytes + pos * element_size, (length - pos) * element_size);
+    memcpy(bytes + pos * element_size, value, element_size);
+    return ptr;
+}
+
+void array_remove_trivial(void* ptr, uint length, uint pos, uint count, size_t element_size) pure
+{
+    if (pos + count < length)
+        memmove(cast(ubyte*)ptr + pos * element_size, cast(ubyte*)ptr + (pos + count) * element_size, (length - pos - count) * element_size);
+}
+
+private:
 
 pragma(inline, true)
 bool el_cmp(T)(const T a, const T b)

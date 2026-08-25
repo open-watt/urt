@@ -1,9 +1,11 @@
 module urt.meta.enuminfo;
 
-import urt.algorithm : binary_search, qsort;
-import urt.traits :EnumType, is_enum, Unqual;
+import urt.algorithm : binary_search;
+import urt.bimap : BiMap, StaticBiMap, static_bimap_write_string, synthesise_bimap_storage;
+import urt.kvp : KVP;
+import urt.traits : EnumType, is_enum, Unqual;
 import urt.mem;
-import urt.meta : Iota, STATIC_MAP;
+import urt.util : align_up;
 import urt.variant;
 
 nothrow @nogc:
@@ -67,31 +69,46 @@ struct VoidEnumInfo
 nothrow @nogc:
 
     // keys and values are sorted for binary search
-    ushort count;
-    ushort stride;
-    uint type_hash;
-    bool bitfield;
+    ushort stride() const pure
+        => _map.stride_flags >> 2;
+
+    uint type_hash() const pure
+        => _prefix.type_hash;
+
+    bool bitfield() const pure
+        => (_map.stride_flags & 1) != 0;
+
+    void bitfield(bool value)
+    {
+        _map.stride_flags = cast(ushort)((_map.stride_flags & ~1) | value);
+    }
+
+    ushort count() const pure
+        => _map.nk;
+
+    ushort value_count() const pure
+        => _map.nv;
 
     const(char)[] key_for(const void* value, int function(const void* a, const void* b) pure nothrow @nogc pred) const pure
     {
-        size_t i = binary_search(_values[0 .. count*stride], stride, value, pred);
-        if (i < count)
-            return get_key(_lookup_tables[count + i]);
+        size_t i = binary_search(_map.v[0 .. value_count*stride], stride, value, pred);
+        if (i < value_count)
+            return get_key(_map.map_b[_map.vs + i]);
         return null;
     }
 
     const(char)[] key_for(const void* value, int delegate(const void* a, const void* b) pure nothrow @nogc pred) const pure
     {
-        size_t i = binary_search(_values[0 .. count*stride], stride, value, pred);
-        if (i < count)
-            return get_key(_lookup_tables[count + i]);
+        size_t i = binary_search(_map.v[0 .. value_count*stride], stride, value, pred);
+        if (i < value_count)
+            return get_key(_map.map_b[_map.vs + i]);
         return null;
     }
 
     const(char)[] key_by_decl_index(size_t i) const pure
     {
         assert(i < count, "Declaration index out of range");
-        return get_key(_lookup_tables[count*2 + i]);
+        return get_key(declarations[i]);
     }
 
     const(char)[] key_by_sorted_index(size_t i) const pure
@@ -101,12 +118,12 @@ nothrow @nogc:
     }
 
     bool has_display_names() const pure
-        => _display !is null;
+        => (_map.stride_flags & 2) != 0;
 
     const(char)[] display_by_decl_index(size_t i) const pure
     {
         assert(i < count, "Declaration index out of range");
-        return get_display(_lookup_tables[count*2 + i]);
+        return get_display(declarations[i]);
     }
 
     const(char)[] display_by_sorted_index(size_t i) const pure
@@ -117,39 +134,38 @@ nothrow @nogc:
 
     Variant value_for(const(char)[] key) const pure
     {
-        size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
+        size_t i = binary_search!key_compare(_map.k[0 .. count], key, _map.k_strings);
         if (i == count)
             return Variant();
-        i = _lookup_tables[i];
-        return _get_value(_values + i*stride, &this);
+        return _prefix.get_value(_map.v + _map.map_b[i]*stride, &this);
     }
 
     // display names are stored in key order, so this scans where value_for can binary search
     Variant value_for_display(const(char)[] display) const pure
     {
         // an empty name is no name; it must not match every unlabelled entry
-        if (_display is null || display.length == 0)
+        if (!has_display_names || display.length == 0)
             return Variant();
         foreach (i; 0 .. count)
         {
             if (get_display(i) == display)
-                return _get_value(_values + _lookup_tables[i]*stride, &this);
+                return _prefix.get_value(_map.v + _map.map_b[i]*stride, &this);
         }
         return Variant();
     }
 
     bool contains(const(char)[] key) const pure
     {
-        size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
+        size_t i = binary_search!key_compare(_map.k[0 .. count], key, _map.k_strings);
         return i < count;
     }
 
     const(char)[] key_for_raw(long value) const
     {
-        foreach (i; 0 .. count)
+        foreach (i; 0 .. value_count)
         {
-            if (_get_value(_values + i*stride, &this).asLong == value)
-                return get_key(_lookup_tables[count + i]);
+            if (_prefix.get_value(_map.v + i*stride, &this).asLong == value)
+                return get_key(_map.map_b[_map.vs + i]);
         }
         return null;
     }
@@ -193,13 +209,13 @@ nothrow @nogc:
             return append(buffer, offset, exact) ? offset : -1;
 
         long residue = value;
-        foreach (i; 0 .. count)
+        foreach (i; 0 .. value_count)
         {
-            long m = _get_value(_values + i*stride, &this).asLong;
+            long m = _prefix.get_value(_map.v + i*stride, &this).asLong;
             if (m == 0 || (residue & m) != m)
                 continue;
             residue &= ~m;
-            const(char)[] key = get_key(_lookup_tables[count + i]);
+            const(char)[] key = get_key(_map.map_b[_map.vs + i]);
             if (offset && !append(buffer, offset, "|"))
                 return -1;
             if (!append(buffer, offset, key))
@@ -232,43 +248,68 @@ private:
         return true;
     }
 
-    const void* _values;
-    const ushort* _keys;
-    const ushort* _display;
-    const char* _string_buffer;
-
-    // these tables map between indices of keys and values
-    const ubyte* _lookup_tables;
-
-    const GetFun _get_value;
-
-    this(ubyte count, ushort stride, uint type_hash, inout void* values, inout ushort* keys, inout ushort* display, inout char* strings, inout ubyte* lookup, GetFun get_value, bool bitfield = false) inout pure
+    struct Prefix
     {
-        this.count = count;
-        this.stride = stride;
-        this.type_hash = type_hash;
-        this.bitfield = bitfield;
-        this._keys = keys;
-        this._display = display;
-        this._values = values;
-        this._string_buffer = strings;
-        this._lookup_tables = lookup;
-        this._get_value = get_value;
+        uint type_hash;
+        GetFun get_value;
+    }
+    Prefix _prefix;
+
+    struct MapHeader
+    {
+        const ushort* k;
+        const char* k_strings;
+        ushort k_slen;
+        ushort stride_flags;
+        const void* v;
+        ushort nk;
+        ushort nv;
+        ushort vs;
+        union
+        {
+            const ubyte* map_b;
+            const ushort* map_s;
+        }
+    }
+    MapHeader _map;
+
+    this(ushort stride, uint type_hash, inout(const void*) values, inout(const ushort*) keys,
+        inout(const char*) strings, ushort string_length, inout(const ubyte*) map_b, ushort vs,
+        ushort nk, ushort nv, GetFun get_value, bool bitfield = false, bool has_display = false) inout pure
+    {
+        assert(stride <= ushort.max >> 2);
+        this._prefix = inout(Prefix)(type_hash, get_value);
+        this._map = inout(MapHeader)(keys, strings, string_length,
+            cast(ushort)(stride << 2 | bitfield | has_display << 1), values, nk, nv, vs, map_b);
     }
 
     const(char)[] get_key(size_t i) const pure
     {
-        const(char)* s = _string_buffer + _keys[i];
+        if (_map.k[i] == 0)
+            return null;
+        const(char)* s = _map.k_strings + _map.k[i];
         return s[0 .. s.key_length];
     }
 
     const(char)[] get_display(size_t i) const pure
     {
         // offset 0 marks no display name; a real string never starts there, it needs its length prefix first
-        if (_display is null || _display[i] == 0)
+        const(ushort)* display = display_table;
+        if (display is null || display[i] == 0)
             return null;
-        const(char)* s = _string_buffer + _display[i];
+        const(char)* s = _map.k_strings + display[i];
         return s[0 .. s.key_length];
+    }
+
+    const(ubyte)* declarations() const pure
+        => _map.map_b + _map.vs + value_count;
+
+    const(ushort)* display_table() const pure
+    {
+        if (!has_display_names)
+            return null;
+        size_t address = cast(size_t)(declarations + count);
+        return cast(const(ushort)*)align_up(address, ushort.alignof);
     }
 }
 
@@ -285,19 +326,29 @@ template EnumInfo(E)
             import urt.algorithm : binary_search;
         nothrow @nogc:
 
-            static assert (EnumInfo.sizeof == EnumInfo.sizeof, "Template EnumInfo must not add any members!");
+            static assert(EnumInfo.sizeof == VoidEnumInfo.sizeof, "Template EnumInfo must not add any members!");
 
             static if (is(E T == enum))
                 alias V = T;
             else
                 static assert(false, E.string ~ " is not an enum type!");
+            alias Map = BiMap!(string, E);
+            static assert(VoidEnumInfo.MapHeader.sizeof == Map.sizeof);
+            static assert(VoidEnumInfo.MapHeader.k.offsetof == Map.k.offsetof &&
+                          VoidEnumInfo.MapHeader.k_strings.offsetof == Map.k_strings.offsetof &&
+                          VoidEnumInfo.MapHeader.k_slen.offsetof == Map.k_slen.offsetof &&
+                          VoidEnumInfo.MapHeader.v.offsetof == Map.v.offsetof &&
+                          VoidEnumInfo.MapHeader.nk.offsetof == Map.nk.offsetof &&
+                          VoidEnumInfo.MapHeader.nv.offsetof == Map.nv.offsetof &&
+                          VoidEnumInfo.MapHeader.vs.offsetof == Map.vs.offsetof &&
+                          VoidEnumInfo.MapHeader.map_b.offsetof == Map.map_b.offsetof);
 
             // keys and values are sorted for binary search
             union {
                 VoidEnumInfo _base;
                 struct {
-                    ubyte[VoidEnumInfo._values.offsetof] _pad;
-                    const E* _values; // shadows the _values in _base with a typed version
+                    ubyte[VoidEnumInfo._map.offsetof + VoidEnumInfo.MapHeader.v.offsetof] _pad;
+                    const E* _values;
                 }
             }
             alias _base this;
@@ -305,27 +356,30 @@ template EnumInfo(E)
             inout(VoidEnumInfo*) make_void() inout pure
                 => &_base;
 
-            this(ubyte count, uint type_hash, inout(E)* values, inout ushort* keys, inout ushort* display, inout char* strings, inout ubyte* lookup, bool bitfield = false) inout pure
+            this(uint type_hash, inout(const(E)*) values, inout(const ushort*) keys,
+                inout(const char*) strings, ushort string_length, inout(const ubyte*) map_b, ushort vs,
+                ushort nk, ushort nv, bool bitfield = false, bool has_display = false) inout pure
             {
-                _base = inout(VoidEnumInfo)(count, E.sizeof, type_hash, values, keys, display, strings, lookup, cast(GetFun)&get_value!V, bitfield);
+                _base = inout(VoidEnumInfo)(E.sizeof, type_hash, values, keys, strings, string_length,
+                    map_b, vs, nk, nv, cast(GetFun)&get_value!V, bitfield, has_display);
             }
 
             const(E)[] values() const pure
-                => _values[0 .. count];
+                => _values[0 .. value_count];
 
             const(char)[] key_for(V value) const pure
             {
-                size_t i = binary_search(values[0 .. count], value);
-                if (i < count)
-                    return get_key(_lookup_tables[count + i]);
+                size_t i = binary_search(values, value);
+                if (i < value_count)
+                    return get_key(_map.map_b[_map.vs + i]);
                 return null;
             }
 
             const(char)[] display_for(V value) const pure
             {
-                size_t i = binary_search(values[0 .. count], value);
-                if (i < count)
-                    return get_display(_lookup_tables[count + i]);
+                size_t i = binary_search(values, value);
+                if (i < value_count)
+                    return get_display(_map.map_b[_map.vs + i]);
                 return null;
             }
 
@@ -337,22 +391,22 @@ template EnumInfo(E)
 
             const(E)* value_for(const(char)[] key) const pure
             {
-                size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
+                size_t i = binary_search!key_compare(_map.k[0 .. count], key, _map.k_strings);
                 if (i == count)
                     return null;
-                return _values + _lookup_tables[i];
+                return _values + _map.map_b[i];
             }
 
             // display names are stored in key order, so this scans where value_for can binary search
             const(E)* value_for_display(const(char)[] display) const pure
             {
                 // an empty name is no name; it must not match every unlabelled entry
-                if (_display is null || display.length == 0)
+                if (!has_display_names || display.length == 0)
                     return null;
                 foreach (i; 0 .. count)
                 {
                     if (get_display(i) == display)
-                        return _values + _lookup_tables[i];
+                        return _values + _map.map_b[i];
                 }
                 return null;
             }
@@ -370,70 +424,68 @@ template enum_info(E)
 
     enum ubyte num_items = enum_members.length;
     static assert(num_items <= ubyte.max, "Too many enum items!");
-    // keys and display names are reached by ushort offsets carrying ushort length prefixes
+    static assert(MapData.key_count == num_items, "Duplicate enum key: " ~ E.stringof);
     static assert(total_strings <= ushort.max, "Enum key and display name data too large: " ~ E.stringof);
 
     __gshared immutable enum_info = immutable(EnumInfo!E)(
-        num_items,
         fnv1a(cast(ubyte[])E.stringof),
         _values.ptr,
         _keys.ptr,
-        has_display ? _display.ptr : null,
         _strings.ptr,
-        _lookup.ptr,
-        is_bitfield_enum!E
+        cast(ushort)total_strings,
+        _tables.ptr,
+        num_items,
+        num_items,
+        num_values,
+        is_bitfield_enum!E,
+        has_display
     );
 
 private:
-    import urt.algorithm : binary_search, compare, qsort;
     import urt.hash : fnv1a;
-    import urt.string.uni : uni_compare;
+    enum enum_members = __traits(allMembers, E);
+    enum entries = () {
+        KVP!(string, E)[num_items] result;
+        static foreach (i; 0 .. num_items)
+            result[i] = KVP!(string, E)(trim_key!(enum_members[i]), __traits(getMember, E, enum_members[i]));
+        return result;
+    }();
+    alias MapData = StaticBiMap!entries.Data;
+    enum ushort num_values = MapData.value_count;
+    enum string[num_items] displays = () {
+        string[num_items] result;
+        static foreach (i; 0 .. num_items)
+            result[i] = GetDisplay!i;
+        return result;
+    }();
 
-    // keys and values are sorted for binary search
-    __gshared immutable E[num_items] _values = [ STATIC_MAP!(GetValue, iota) ];
+    __gshared immutable E[num_values] _values = () {
+        E[num_values] result;
+        foreach (i; 0 .. num_values)
+            result[i] = entries[MapData.result.value_sources[i]].value;
+        return result;
+    }();
 
-    // keys are stored as offsets info the string buffer
     __gshared immutable ushort[num_items] _keys = () {
         ushort[num_items] key_offsets;
         size_t offset = 2;
         foreach (i; 0 .. num_items)
         {
-            const(char)[] key = by_key[i].k;
+            const(char)[] key = entries[MapData.result.key_sources[i]].key;
             key_offsets[i] = cast(ushort)offset;
             offset += 2 + key.length;
             if (key.length & 1)
-                offset += 1; // align to 2 bytes
+                ++offset;
         }
         return key_offsets;
     }();
 
-    // display names are stored in sorted-key order; members without one are left at offset 0
-    enum size_t num_display = has_display ? num_items : 0;
-    __gshared immutable ushort[num_display] _display = () {
-        ushort[num_display] offsets;
-        static if (has_display)
-        {
-            size_t offset = total_key_strings + 2;
-            foreach (i; 0 .. num_items)
-            {
-                string d = display_by_sorted[i];
-                if (d.length != 0)
-                {
-                    offsets[i] = cast(ushort)offset;
-                    offset += 2 + d.length + (d.length & 1);
-                }
-            }
-        }
-        return offsets;
-    }();
-
-    // build the string buffer
     __gshared immutable char[total_strings] _strings = () {
         char[total_strings] str_data;
         char* ptr = str_data.ptr;
         foreach (i; 0 .. num_items)
         {
-            const(char)[] key = by_key[i].k;
+            const(char)[] key = entries[MapData.result.key_sources[i]].key;
             version (LittleEndian)
             {
                 *ptr++ = key.length & 0xFF;
@@ -447,11 +499,11 @@ private:
             ptr[0 .. key.length] = key[];
             ptr += key.length;
             if (key.length & 1)
-                *ptr++ = 0; // align to 2 bytes
+                *ptr++ = 0;
         }
         foreach (i; 0 .. num_items)
         {
-            string d = display_by_sorted[i];
+            string d = displays[MapData.result.key_sources[i]];
             if (d.length == 0)
                 continue;
             version (LittleEndian)
@@ -467,45 +519,65 @@ private:
             ptr[0 .. d.length] = d[];
             ptr += d.length;
             if (d.length & 1)
-                *ptr++ = 0; // align to 2 bytes
+                *ptr++ = 0;
         }
         return str_data;
     }();
 
-    // these tables map between indices of keys and values
-    __gshared immutable ubyte[num_items * 3] _lookup = [ STATIC_MAP!(GetKeyRedirect, iota),
-                                                         STATIC_MAP!(GetValRedirect, iota),
-                                                         STATIC_MAP!(GetKeyOrig, iota) ];
+    enum size_t map_size = num_items * 2 + num_values;
+    enum size_t display_offset = align_up(map_size, ushort.alignof);
+    enum size_t table_size = has_display ? display_offset + ushort.sizeof*num_items : map_size;
+    align(ushort.alignof) __gshared immutable ubyte[table_size] _tables = () {
+        ubyte[table_size] result;
+        foreach (key_index; 0 .. num_items)
+        {
+            ushort source = MapData.result.key_sources[key_index];
+            result[key_index] = cast(ubyte)MapData.result.source_to_value[source];
+        }
+        foreach (value_index; 0 .. num_values)
+        {
+            ushort source = MapData.result.value_sources[value_index];
+            result[num_items + value_index] = cast(ubyte)MapData.result.source_to_key[source];
+        }
+        foreach (source; 0 .. num_items)
+            result[num_items + num_values + source] = cast(ubyte)MapData.result.source_to_key[source];
+        static if (has_display)
+        {
+            size_t offset = total_key_strings + 2;
+            foreach (i; 0 .. num_items)
+            {
+                string d = displays[MapData.result.key_sources[i]];
+                if (d.length != 0)
+                {
+                    version (LittleEndian)
+                    {
+                        result[display_offset + i*2] = offset & 0xFF;
+                        result[display_offset + i*2 + 1] = (offset >> 8) & 0xFF;
+                    }
+                    else
+                    {
+                        result[display_offset + i*2] = (offset >> 8) & 0xFF;
+                        result[display_offset + i*2 + 1] = offset & 0xFF;
+                    }
+                    offset += 2 + d.length + (d.length & 1);
+                }
+            }
+        }
+        return result;
+    }();
 
-    // a whole bunch of nonsense to build the tables...
-    struct KI
-    {
-        string k;
-        ubyte i;
-    }
-    struct VI
-    {
-        E v;
-        ubyte i;
-    }
+    enum has_display = () {
+        foreach (source; MapData.result.key_sources[0 .. num_items])
+            if (displays[source].length != 0)
+                return true;
+        return false;
+    }();
 
-    alias iota = Iota!(enum_members.length);
-    enum enum_members = __traits(allMembers, E);
-    enum by_key = (){ KI[num_items] r = [ STATIC_MAP!(MakeKI, iota) ]; r.qsort!((ref a, ref b) => uni_compare(a.k, b.k)); return r; }();
-    enum by_value = (){ VI[num_items] r = [ STATIC_MAP!(MakeVI, iota) ]; r.qsort!((ref a, ref b) => compare(a.v, b.v)); return r; }();
-    enum inv_key = (){ KI[num_items] bk = by_key; ubyte[num_items] r; foreach (ubyte i, ref ki; bk) r[ki.i] = i; return r; }();
-    enum inv_val = (){ VI[num_items] bv = by_value; ubyte[num_items] r; foreach (ubyte i, ref vi; bv) r[vi.i] = i; return r; }();
-
-    enum string[num_items] displays = [ STATIC_MAP!(GetDisplay, iota) ];
-    enum display_by_sorted = (){ string[num_items] r; foreach (i; 0 .. num_items) r[i] = displays[by_key[i].i]; return r; }();
-    enum has_display = (){ foreach (d; display_by_sorted) { if (d.length != 0) return true; } return false; }();
-
-    // must measure the trimmed keys; this is where the display strings begin, not just a buffer bound
     enum total_key_strings = () {
         size_t total = 0;
         foreach (i; 0 .. num_items)
         {
-            size_t l = by_key[i].k.length;
+            size_t l = entries[MapData.result.key_sources[i]].key.length;
             total += 2 + l + (l & 1);
         }
         return total;
@@ -513,32 +585,21 @@ private:
 
     enum total_strings = () {
         size_t total = total_key_strings;
-        foreach (d; display_by_sorted)
-        {
+        foreach (source; MapData.result.key_sources[0 .. num_items])
+        {{
+            string d = displays[source];
             if (d.length != 0)
                 total += 2 + d.length + (d.length & 1);
-        }
+        }}
         return total;
     }();
 
-    enum MakeKI(ushort i) = KI(trim_key!(enum_members[i]), i);
-    enum MakeVI(ushort i) = VI(__traits(getMember, E, enum_members[i]), i);
     enum GetDisplay(size_t i) = get_display_attr!(__traits(getAttributes, __traits(getMember, E, enum_members[i])));
-    enum GetValue(size_t i) = by_value[i].v;
-    enum GetKeyRedirect(size_t i) = inv_val[by_key[i].i];
-    enum GetValRedirect(size_t i) = inv_key[by_value[i].i];
-    enum GetKeyOrig(size_t i) = inv_key[i];
 }
 
 VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] values, const(char)[][] display_names = null)
 {
-    import urt.algorithm;
     import urt.hash : fnv1a;
-    import urt.mem.temp;
-    import urt.string;
-    import urt.string.uni;
-    import urt.util;
-
     assert(keys.length == values.length, "keys and values must have the same length");
     assert(display_names is null || display_names.length == keys.length, "keys and display_names must have the same length");
     assert(keys.length <= ubyte.max, "Too many enum items!");
@@ -553,128 +614,53 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         }
     }
 
-    size_t count = keys.length;
+    ushort count = cast(ushort)keys.length;
+    size_t display_string_length;
+    foreach (d; display_names)
+        if (d.length != 0)
+            display_string_length += 2 + d.length + (d.length & 1);
+    assert(display_string_length <= ushort.max, "Enum display name data too large");
 
-    struct VI(T)
+    size_t tail_size = count + (any_display ? ushort.alignof - 1 + ushort.sizeof*count : 0);
+    alias Map = BiMap!(const(char)[], T);
+    ushort[] scratch = (cast(ushort*)alloca(count*5*ushort.sizeof))[0 .. count*5];
+    ushort[] sources = scratch[0 .. count];
+    auto storage = synthesise_bimap_storage!(true, const(char)[], T)(keys.ptr, (const(char)[]).sizeof, values.ptr, T.sizeof, count, scratch,
+        VoidEnumInfo._map.offsetof, cast(ushort)display_string_length, tail_size);
+    assert(storage.memory.ptr !is null);
+
+    Map* map = cast(Map*)storage.map;
+    ubyte* declarations = cast(ubyte*)storage.tail;
+    ushort* displays = any_display ? cast(ushort*)align_up(cast(size_t)(declarations + count), ushort.alignof) : null;
+    if (displays !is null)
+        displays[0 .. count] = 0;
+    size_t string_used = storage.key_data_slen;
+    foreach (key_index, source; sources)
     {
-        T v;
-        ubyte i;
+        declarations[source] = cast(ubyte)key_index;
+        if (displays is null || display_names[source].length == 0)
+            continue;
+        displays[key_index] = static_bimap_write_string(map.k_strings[0 .. map.k_slen], string_used, display_names[source]);
     }
+    assert(string_used == map.k_slen);
 
-    // first we'll sort the keys and values for binary searching
-    // we need to associate their original indices for the lookup tables
-    auto ksort = talloc_array!(VI!(const(char)[]))(count);
-    auto vsort = talloc_array!(VI!T)(count);
-    foreach (i; 0 .. count)
-    {
-        ksort[i] = VI!(const(char)[])(keys[i], cast(ubyte)i);
-        vsort[i] = VI!T(values[i], cast(ubyte)i);
-    }
-    ksort.qsort!((ref a, ref b) => uni_compare(a.v, b.v));
-    vsort.qsort!((ref a, ref b) => compare(a.v, b.v));
-
-    // build the reverse lookup tables
-    ubyte[] inv_k = talloc_array!ubyte(count);
-    ubyte[] inv_v = talloc_array!ubyte(count);
-    foreach (i, ref ki; ksort)
-        inv_k[ki.i] = cast(ubyte)i;
-    foreach (i, ref vi; vsort)
-        inv_v[vi.i] = cast(ubyte)i;
-
-    // count the string memory
-    size_t total_string;
-    foreach (i; 0 .. count)
-        total_string += 2 + keys[i].length + (keys[i].length & 1);
-    if (any_display)
-    {
-        foreach (d; display_names)
-        {
-            if (d.length != 0)
-                total_string += 2 + d.length + (d.length & 1);
-        }
-    }
-    // keys and display names are reached by ushort offsets carrying ushort length prefixes
-    assert(total_string <= ushort.max, "Enum key and display name data too large");
-
-    // calculate the total size
-    size_t total_size = VoidEnumInfo.sizeof + T.sizeof*count;
-    total_size += (total_size & 1) + ushort.sizeof*count*(any_display ? 2 : 1) + count*3;
-    total_size += (total_size & 1) + total_string;
-
-    // allocate a buffer and assign all the sub-buffers
-    void[] info = alloc(total_size);
-    VoidEnumInfo* result = cast(VoidEnumInfo*)info.ptr;
-    T* value_ptr = cast(T*)&result[1];
-    char* str_data = cast(char*)&value_ptr[count];
-    if (cast(size_t)str_data & 1)
-        *str_data++ = 0; // align to 2 bytes
-    ushort* key_ptr = cast(ushort*)str_data;
-    ushort* disp_ptr = any_display ? &key_ptr[count] : null;
-    ubyte* lookup = any_display ? cast(ubyte*)&disp_ptr[count] : cast(ubyte*)&key_ptr[count];
-    str_data = cast(char*)&lookup[count*3];
-    if (cast(size_t)str_data & 1)
-        *str_data++ = 0; // align to 2 bytes
-    char* str_ptr = str_data + 2;
-
-    // populate the enum info data
-    foreach (i; 0 .. count)
-    {
-        value_ptr[i] = vsort[i].v;
-
-        // write the string data and store the key offset
-        const(char)[] key = ksort[i].v;
-        key_ptr[i] = cast(ushort)(str_ptr - str_data);
-        write_string(str_ptr, key);
-        if (key.length & 1)
-            (str_ptr++)[key.length] = 0; // align to 2 bytes
-        str_ptr += 2 + key.length;
-
-        if (disp_ptr !is null)
-        {
-            const(char)[] d = display_names[ksort[i].i];
-            if (d.length == 0)
-                disp_ptr[i] = 0;
-            else
-            {
-                disp_ptr[i] = cast(ushort)(str_ptr - str_data);
-                write_string(str_ptr, d);
-                if (d.length & 1)
-                    (str_ptr++)[d.length] = 0; // align to 2 bytes
-                str_ptr += 2 + d.length;
-            }
-        }
-
-        lookup[i] = inv_v[ksort[i].i];
-        lookup[count + i] = inv_k[vsort[i].i];
-        lookup[count*2 + i] = inv_k[i];
-    }
-
-    VoidEnumInfo value = VoidEnumInfo(cast(ubyte)keys.length, cast(ushort)T.sizeof, fnv1a(cast(ubyte[])name), cast(void*)value_ptr, key_ptr, disp_ptr, str_data, lookup, cast(GetFun)&get_value!T);
-    return result.emplace(value);
+    VoidEnumInfo* result = cast(VoidEnumInfo*)storage.memory.ptr;
+    assert(T.sizeof <= ushort.max >> 2);
+    result._prefix = VoidEnumInfo.Prefix(fnv1a(cast(ubyte[])name), cast(GetFun)&get_value!T);
+    result._map.stride_flags = cast(ushort)(T.sizeof << 2 | any_display << 1);
+    return result;
 }
 
 size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc
 {
-    size_t total_string;
-    foreach (i; 0 .. info.count)
-    {
-        size_t l = info.key_by_sorted_index(i).length;
-        total_string += 2 + l + (l & 1);
-        size_t dl = info.display_by_sorted_index(i).length;
-        if (dl != 0)
-            total_string += 2 + dl + (dl & 1);
-    }
-    size_t total = VoidEnumInfo.sizeof + info.stride*info.count;
-    total += (total & 1) + ushort.sizeof*info.count*(info._display ? 2 : 1) + info.count*3;
-    total += (total & 1) + total_string;
-    return total;
+    return cast(size_t)(info._map.k_strings - cast(const(char)*)&info) + info._map.k_slen;
 }
 
 bool enum_info_equal(ref const VoidEnumInfo a, ref const VoidEnumInfo b) pure nothrow @nogc
 {
-    if (a.count != b.count || a.stride != b.stride || a.bitfield != b.bitfield || a.type_hash != b.type_hash)
+    if (a.count != b.count || a.value_count != b.value_count || a.stride != b.stride || a.bitfield != b.bitfield || a.type_hash != b.type_hash)
         return false;
-    if ((cast(const(ubyte)*)a._values)[0 .. a.count*a.stride] != (cast(const(ubyte)*)b._values)[0 .. b.count*b.stride])
+    if ((cast(const(ubyte)*)a._map.v)[0 .. a.value_count*a.stride] != (cast(const(ubyte)*)b._map.v)[0 .. b.value_count*b.stride])
         return false;
     foreach (i; 0 .. a.count)
     {
@@ -742,9 +728,14 @@ unittest
     assert(info.parse_flags("a|nope", ok) == 0 && !ok);
 
     enum TestDisplay { @display_name("First Thing") first, second, @display_name("Third Thing") third }
+    enum TestAlias { first = 1, alias_ = 1, second = 2 }
 
     assert(!enum_info!TestPlain.has_display_names);
     assert(enum_info!TestPlain.display_by_decl_index(0) is null);
+    assert(enum_info!TestAlias.count == 3 && enum_info!TestAlias.value_count == 2);
+    assert(enum_info!TestAlias.key_for(TestAlias.first) == "first");
+    assert(enum_info!TestAlias.key_by_decl_index(1) == "alias");
+    assert(*enum_info!TestAlias.value_for("alias") == TestAlias.first);
 
     // trimmed keys must not desynchronise the display offsets from the packed strings
     enum TestTrimmed { _alpha_, @display_name("Beta Name") beta }
@@ -796,4 +787,29 @@ unittest
     assert(enum_info_size(*named) > enum_info_size(*plain));
     free((cast(void*)plain)[0 .. enum_info_size(*plain)]);
     free((cast(void*)named)[0 .. enum_info_size(*named)]);
+
+    const(char)[][3] alias_keys = [ "zeta", "alpha", "beta" ];
+    int[3] alias_values = [ 1, 1, 2 ];
+    VoidEnumInfo* aliases = make_enum_info("Alias", alias_keys[], alias_values[]);
+    assert(aliases.count == 3 && aliases.value_count == 2);
+    assert(aliases.key_for_raw(1) == "zeta");
+    assert(aliases.key_by_decl_index(1) == "alpha");
+    assert(aliases.value_for("alpha").asLong == 1);
+    free((cast(void*)aliases)[0 .. enum_info_size(*aliases)]);
+
+    enum many_count = ubyte.max;
+    char[2][many_count] key_data;
+    const(char)[][many_count] many_keys;
+    int[many_count] many_values;
+    foreach (i; 0 .. many_count)
+    {
+        key_data[i][0] = cast(char)('a' + i/16);
+        key_data[i][1] = cast(char)('a' + i%16);
+        many_keys[i] = key_data[i][];
+        many_values[i] = cast(int)i;
+    }
+    VoidEnumInfo* many = make_enum_info("Many", many_keys[], many_values[]);
+    assert(many && many.count == many_count && many.value_count == many_count);
+    assert(many.value_for(many_keys[254]).asLong == 254);
+    free((cast(void*)many)[0 .. enum_info_size(*many)]);
 }

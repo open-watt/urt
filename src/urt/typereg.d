@@ -194,9 +194,6 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
     else
         enum destroy_fun = null;
 
-    // Only a codec pair the type declares itself is treated as reversible. Formatting alone
-    // always compiles -- a struct without toString gets the generic TypeName(fields) form,
-    // which an unrelated fromString has no reason to accept.
     static if (__traits(hasMember, T, "toString") && __traits(hasMember, T, "fromString") && is(typeof(parse!T)))
         enum text_round_trip = true;
     else
@@ -347,7 +344,6 @@ unittest
     assert(r.serialise is null && r.destroy is null);
     assert(binary_representable(r));
 
-    // a generic struct formats as Vec2(x, y), which nothing claims to parse back
     static assert(!r.text_round_trip);
 
     static struct Stamp

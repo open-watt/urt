@@ -26,6 +26,7 @@ struct TypeDetails
     bool embedded;          // registrar's contract: type_id is 16-bit folded and Variant may store inline
                             // (not derivable from size/align: registry-native ids are unfolded hashes)
     bool pod;
+    bool text_round_trip;   // stringify works in both directions, so the value survives a text wire
     void function(void* src, void* dst, bool move) nothrow @nogc copy_emplace;
     void function(void* val) nothrow @nogc destroy;
     ptrdiff_t function(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc stringify;
@@ -193,6 +194,12 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
     else
         enum destroy_fun = null;
 
+    // a text wire can only carry the value if it both formats and parses
+    static if (__traits(compiles, { formatValue(*cast(const T*)null, char[].init, null, null); }) && is(typeof(parse!T)))
+        enum text_round_trip = true;
+    else
+        enum text_round_trip = false;
+
     static ptrdiff_t stringify(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc
     {
         if (do_format)
@@ -314,8 +321,8 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
         enum swap_fun = null;
 
     enum TypeRecordFor = TypeDetails(type_name, type_id, super_type_id, T.sizeof, T.alignof,
-                                     embedded, pod, move_emplace, destroy_fun, &stringify, &compare,
-                                     ser_fun, var_fun, swap_fun);
+                                     embedded, pod, text_round_trip, move_emplace, destroy_fun,
+                                     &stringify, &compare, ser_fun, var_fun, swap_fun);
 }
 
 

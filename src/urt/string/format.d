@@ -212,6 +212,8 @@ private:
     ptrdiff_t function() pure nothrow @nogc _to_int_fun;
 }
 
+package(urt) enum has_custom_stringifier(T) = to_string_overload_index!T >= 0;
+
 
 private:
 

@@ -129,78 +129,7 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
                 return 2 + enc_len;
             }
 
-            const char[] s = val.asString();
-
-            if (!buffer.ptr)
-            {
-                size_t len = 0;
-                foreach (c; s)
-                {
-                    if (c < 0x20)
-                    {
-                        if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
-                            len += 2;
-                        else
-                            len += 6;
-                    }
-                    else if (c == '"' || c == '\\')
-                        len += 2;
-                    else
-                        len += 1;
-                }
-                return len + 2;
-            }
-
-            if (buffer.length < s.length + 2)
-                return -1;
-
-            buffer[0] = '"';
-            // escape strings
-            size_t offset = 1;
-            foreach (c; s)
-            {
-                char sub = void;
-                if (c < 0x20)
-                {
-                    if (c == '\n')
-                        sub = 'n';
-                    else if (c == '\r')
-                        sub = 'r';
-                    else if (c == '\t')
-                        sub = 't';
-                    else if (c == '\b')
-                        sub = 'b';
-                    else if (c == '\f')
-                        sub = 'f';
-                    else
-                    {
-                        if (buffer.length < offset + 7)
-                            return -1;
-                        buffer[offset .. offset + 4] = "\\u00";
-                        offset += 4;
-                        buffer[offset++] = hex_digits[c >> 4];
-                        buffer[offset++] = hex_digits[c & 0xF];
-                        continue;
-                    }
-                }
-                else if (c == '"' || c == '\\')
-                    sub = c;
-                else
-                {
-                    if (buffer.length < offset + 2)
-                        return -1;
-                    buffer[offset++] = c;
-                    continue;
-                }
-
-                // write escape sequence
-                if (buffer.length < offset + 3)
-                    return -1;
-                buffer[offset++] = '\\';
-                buffer[offset++] = sub;
-            }
-            buffer[offset++] = '"';
-            return offset;
+            return write_json_string(buffer, val.asString());
 
         case Variant.Type.Number:
             import urt.conv;
@@ -263,92 +192,122 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             return result_len;
 
         case Variant.Type.User:
-            // for custom types, we'll use the type's regular string format into a json string
-            if (!buffer.ptr)
-                return val.toString(null, null, null) + 2;
-            if (buffer.length < 1)
-                return -1;
-            buffer[0] = '\"';
-            ptrdiff_t len = val.toString(buffer[1 .. $], null, null);
-            if (len < 0)
-                return len;
-            if (buffer.length < len + 2)
-                return -1;
-            buffer[1 + len] = '\"';
-            return len + 2;
+            return write_json_user(val, buffer);
     }
 }
 
+private:
 
-unittest
+ptrdiff_t write_json_user(ref const Variant val, char[] buffer)
 {
-    enum doc = `{
-        "nothing": null,
-        "name": "John Doe",
-        "age": 42,
-        "neg": -42,
-        "sobig": 8234567890,
-        "married": true,
-        "worried": false,
-        "children": [
-            {
-                "name": "Jane Doe",
-                "age": 12
-            },
-            {
-                "name": "Jack Doe",
-                "age": 8
-            }
-        ]
-    }`;
+    ptrdiff_t len = val.toString(null, null, null);
+    if (len < 0)
+        return len;
+    size_t text_length = cast(size_t)len;
 
-    Variant root = parse_json(doc);
+    if (!buffer.ptr)
+    {
+        import urt.mem : alloc, free;
 
-    // check the data was parsed correctly...
-    assert(root["nothing"].isNull);
-    assert(root["name"].asString == "John Doe");
-    assert(root["age"].asUint == 42);
-    assert(root["neg"].asInt == -42);
-    assert(root["sobig"].asLong == 8234567890);
-    assert(root["married"].isTrue);
-    assert(root["worried"].asBool == false);
-    assert(root["children"].length == 2);
-    assert(root["children"][0]["name"].asString == "Jane Doe");
-    assert(root["children"][0]["age"].asInt == 12);
-    assert(root["children"][1]["name"].asString == "Jack Doe");
-    assert(root["children"][1]["age"].asInt == 8);
+        char[512] local = void;
+        char[] text = text_length <= local.length
+            ? local[0 .. text_length]
+            : cast(char[])alloc(text_length, char.alignof);
+        if (text_length && !text.ptr)
+            return -1;
+        bool allocated = text.ptr !is local.ptr;
+        scope(exit) if (allocated) free(text);
+        if (val.toString(text, null, null) != len)
+            return -1;
+        return write_json_string(null, text);
+    }
 
-    char[1024] buffer = void;
-    // check the dense writer...
-    assert(root["children"].write_json(null, true) == 61);
-    assert(root["children"].write_json(buffer, true) == 61);
-    assert(buffer[0 .. 61] == `[{"name":"Jane Doe", "age":12}, {"name":"Jack Doe", "age":8}]`);
+    if (buffer.length < text_length + 2)
+        return -1;
+    if (val.toString(buffer[0 .. text_length], null, null) != len)
+        return -1;
+    ptrdiff_t json_length = write_json_string(null, buffer[0 .. text_length]);
+    if (json_length < 0 || buffer.length < json_length)
+        return -1;
 
-    // check the expanded writer
-    assert(root["children"].write_json(null, false, 0, 1) == 83);
-    assert(root["children"].write_json(buffer, false, 0, 1) == 83);
-    assert(buffer[0 .. 83] == "[\n {\n  \"name\": \"Jane Doe\",\n  \"age\": 12\n },\n {\n  \"name\": \"Jack Doe\",\n  \"age\": 8\n }\n]");
+    import urt.mem : memmove;
 
-    // check indentation works properly
-    assert(root["children"].write_json(null, false, 0, 2) == 95);
-    assert(root["children"].write_json(buffer, false, 0, 2) == 95);
-    assert(buffer[0 .. 95] == "[\n  {\n    \"name\": \"Jane Doe\",\n    \"age\": 12\n  },\n  {\n    \"name\": \"Jack Doe\",\n    \"age\": 8\n  }\n]");
-
-    // fabricate a JSON object
-    Variant write;
-    write.asArray ~= Variant(42);
-    write.asArray ~= Variant(VariantKVP("wow", Variant(true)), VariantKVP("bogus", Variant(false)));
-
-    assert(write.length == 2);
-    assert(write[0].asInt == 42);
-    assert(write[1]["wow"].isTrue);
-    assert(write[1]["bogus"].asBool == false);
-    assert(write.write_json(buffer, true) == 33);
-    assert(buffer[0 .. 33] == "[42, {\"wow\":true, \"bogus\":false}]");
+    size_t source = cast(size_t)json_length - text_length;
+    memmove(buffer.ptr + source, buffer.ptr, text_length);
+    return write_json_string(buffer, buffer[source .. source + text_length]);
 }
 
+ptrdiff_t write_json_string(char[] buffer, const(char)[] s)
+{
+    if (!buffer.ptr)
+    {
+        size_t len = 0;
+        foreach (c; s)
+        {
+            if (c < 0x20)
+            {
+                if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
+                    len += 2;
+                else
+                    len += 6;
+            }
+            else if (c == '"' || c == '\\')
+                len += 2;
+            else
+                len += 1;
+        }
+        return len + 2;
+    }
 
-private:
+    if (buffer.length < s.length + 2)
+        return -1;
+
+    buffer[0] = '"';
+    size_t offset = 1;
+    foreach (c; s)
+    {
+        char sub = void;
+        if (c < 0x20)
+        {
+            if (c == '\n')
+                sub = 'n';
+            else if (c == '\r')
+                sub = 'r';
+            else if (c == '\t')
+                sub = 't';
+            else if (c == '\b')
+                sub = 'b';
+            else if (c == '\f')
+                sub = 'f';
+            else
+            {
+                if (buffer.length < offset + 7)
+                    return -1;
+                buffer[offset .. offset + 4] = "\\u00";
+                offset += 4;
+                buffer[offset++] = hex_digits[c >> 4];
+                buffer[offset++] = hex_digits[c & 0xF];
+                continue;
+            }
+        }
+        else if (c == '"' || c == '\\')
+            sub = c;
+        else
+        {
+            if (buffer.length < offset + 2)
+                return -1;
+            buffer[offset++] = c;
+            continue;
+        }
+
+        if (buffer.length < offset + 3)
+            return -1;
+        buffer[offset++] = '\\';
+        buffer[offset++] = sub;
+    }
+    buffer[offset++] = '"';
+    return offset;
+}
 
 bool append(char[] buffer, ref ptrdiff_t offset, char c)
 {
@@ -512,4 +471,100 @@ Variant parse_node(ref const(char)[] text)
     }
     else
         assert(false, "Invalid JSON!");
+}
+
+
+unittest
+{
+    struct JsonUserText
+    {
+        enum text_length = 600;
+
+        ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const nothrow @nogc
+        {
+            if (!buffer.ptr)
+                return text_length;
+            if (buffer.length < text_length)
+                return -1;
+            buffer[0] = '"';
+            buffer[1] = '\\';
+            buffer[2] = '\n';
+            buffer[3 .. text_length] = 'x';
+            return text_length;
+        }
+    }
+
+    enum doc = `{
+        "nothing": null,
+        "name": "John Doe",
+        "age": 42,
+        "neg": -42,
+        "sobig": 8234567890,
+        "married": true,
+        "worried": false,
+        "children": [
+            {
+                "name": "Jane Doe",
+                "age": 12
+            },
+            {
+                "name": "Jack Doe",
+                "age": 8
+            }
+        ]
+    }`;
+
+    Variant root = parse_json(doc);
+
+    // check the data was parsed correctly...
+    assert(root["nothing"].isNull);
+    assert(root["name"].asString == "John Doe");
+    assert(root["age"].asUint == 42);
+    assert(root["neg"].asInt == -42);
+    assert(root["sobig"].asLong == 8234567890);
+    assert(root["married"].isTrue);
+    assert(root["worried"].asBool == false);
+    assert(root["children"].length == 2);
+    assert(root["children"][0]["name"].asString == "Jane Doe");
+    assert(root["children"][0]["age"].asInt == 12);
+    assert(root["children"][1]["name"].asString == "Jack Doe");
+    assert(root["children"][1]["age"].asInt == 8);
+
+    char[1024] buffer = void;
+    // check the dense writer...
+    assert(root["children"].write_json(null, true) == 61);
+    assert(root["children"].write_json(buffer, true) == 61);
+    assert(buffer[0 .. 61] == `[{"name":"Jane Doe", "age":12}, {"name":"Jack Doe", "age":8}]`);
+
+    // check the expanded writer
+    assert(root["children"].write_json(null, false, 0, 1) == 83);
+    assert(root["children"].write_json(buffer, false, 0, 1) == 83);
+    assert(buffer[0 .. 83] == "[\n {\n  \"name\": \"Jane Doe\",\n  \"age\": 12\n },\n {\n  \"name\": \"Jack Doe\",\n  \"age\": 8\n }\n]");
+
+    // check indentation works properly
+    assert(root["children"].write_json(null, false, 0, 2) == 95);
+    assert(root["children"].write_json(buffer, false, 0, 2) == 95);
+    assert(buffer[0 .. 95] == "[\n  {\n    \"name\": \"Jane Doe\",\n    \"age\": 12\n  },\n  {\n    \"name\": \"Jack Doe\",\n    \"age\": 8\n  }\n]");
+
+    // fabricate a JSON object
+    Variant write;
+    write.asArray ~= Variant(42);
+    write.asArray ~= Variant(VariantKVP("wow", Variant(true)), VariantKVP("bogus", Variant(false)));
+
+    assert(write.length == 2);
+    assert(write[0].asInt == 42);
+    assert(write[1]["wow"].isTrue);
+    assert(write[1]["bogus"].asBool == false);
+    assert(write.write_json(buffer, true) == 33);
+    assert(buffer[0 .. 33] == "[42, {\"wow\":true, \"bogus\":false}]");
+
+    Variant user = Variant(JsonUserText());
+    enum user_json_length = JsonUserText.text_length + 5;
+    assert(user.write_json(null) == user_json_length);
+    assert(user.write_json(buffer) == user_json_length);
+    assert(buffer[0] == '"');
+    assert(buffer[1 .. 3] == "\\\"");
+    assert(buffer[3 .. 5] == "\\\\");
+    assert(buffer[5 .. 7] == "\\n");
+    assert(buffer[user_json_length - 1] == '"');
 }

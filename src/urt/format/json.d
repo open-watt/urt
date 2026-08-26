@@ -18,6 +18,81 @@ Variant parse_json(const(char)[] text)
     return parse_node(text);
 }
 
+// a json string is its escaped form; the null-buffer pass has to price the escapes too
+ptrdiff_t write_json_string(char[] buffer, const(char)[] s) nothrow @nogc
+{
+        if (!buffer.ptr)
+        {
+            size_t len = 0;
+            foreach (c; s)
+            {
+                if (c < 0x20)
+                {
+                    if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
+                        len += 2;
+                    else
+                        len += 6;
+                }
+                else if (c == '"' || c == '\\')
+                    len += 2;
+                else
+                    len += 1;
+            }
+            return len + 2;
+        }
+
+        if (buffer.length < s.length + 2)
+            return -1;
+
+        buffer[0] = '"';
+        // escape strings
+        size_t offset = 1;
+        foreach (c; s)
+        {
+            char sub = void;
+            if (c < 0x20)
+            {
+                if (c == '\n')
+                    sub = 'n';
+                else if (c == '\r')
+                    sub = 'r';
+                else if (c == '\t')
+                    sub = 't';
+                else if (c == '\b')
+                    sub = 'b';
+                else if (c == '\f')
+                    sub = 'f';
+                else
+                {
+                    if (buffer.length < offset + 7)
+                        return -1;
+                    buffer[offset .. offset + 4] = "\\u00";
+                    offset += 4;
+                    buffer[offset++] = hex_digits[c >> 4];
+                    buffer[offset++] = hex_digits[c & 0xF];
+                    continue;
+                }
+            }
+            else if (c == '"' || c == '\\')
+                sub = c;
+            else
+            {
+                if (buffer.length < offset + 2)
+                    return -1;
+                buffer[offset++] = c;
+                continue;
+            }
+
+            // write escape sequence
+            if (buffer.length < offset + 3)
+                return -1;
+            buffer[offset++] = '\\';
+            buffer[offset++] = sub;
+        }
+        buffer[offset++] = '"';
+        return offset;
+}
+
 ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, uint level = 0, uint indent = 2)
 {
     final switch (val.type)
@@ -129,78 +204,7 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
                 return 2 + enc_len;
             }
 
-            const char[] s = val.asString();
-
-            if (!buffer.ptr)
-            {
-                size_t len = 0;
-                foreach (c; s)
-                {
-                    if (c < 0x20)
-                    {
-                        if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
-                            len += 2;
-                        else
-                            len += 6;
-                    }
-                    else if (c == '"' || c == '\\')
-                        len += 2;
-                    else
-                        len += 1;
-                }
-                return len + 2;
-            }
-
-            if (buffer.length < s.length + 2)
-                return -1;
-
-            buffer[0] = '"';
-            // escape strings
-            size_t offset = 1;
-            foreach (c; s)
-            {
-                char sub = void;
-                if (c < 0x20)
-                {
-                    if (c == '\n')
-                        sub = 'n';
-                    else if (c == '\r')
-                        sub = 'r';
-                    else if (c == '\t')
-                        sub = 't';
-                    else if (c == '\b')
-                        sub = 'b';
-                    else if (c == '\f')
-                        sub = 'f';
-                    else
-                    {
-                        if (buffer.length < offset + 7)
-                            return -1;
-                        buffer[offset .. offset + 4] = "\\u00";
-                        offset += 4;
-                        buffer[offset++] = hex_digits[c >> 4];
-                        buffer[offset++] = hex_digits[c & 0xF];
-                        continue;
-                    }
-                }
-                else if (c == '"' || c == '\\')
-                    sub = c;
-                else
-                {
-                    if (buffer.length < offset + 2)
-                        return -1;
-                    buffer[offset++] = c;
-                    continue;
-                }
-
-                // write escape sequence
-                if (buffer.length < offset + 3)
-                    return -1;
-                buffer[offset++] = '\\';
-                buffer[offset++] = sub;
-            }
-            buffer[offset++] = '"';
-            return offset;
+            return write_json_string(buffer, val.asString());
 
         case Variant.Type.Number:
             import urt.conv;
@@ -263,19 +267,13 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             return result_len;
 
         case Variant.Type.User:
-            // for custom types, we'll use the type's regular string format into a json string
-            if (!buffer.ptr)
-                return val.toString(null, null, null) + 2;
-            if (buffer.length < 1)
-                return -1;
-            buffer[0] = '\"';
-            ptrdiff_t len = val.toString(buffer[1 .. $], null, null);
-            if (len < 0)
-                return len;
-            if (buffer.length < len + 2)
-                return -1;
-            buffer[1 + len] = '\"';
-            return len + 2;
+            // the type's own text form, escaped like any other json string: it is arbitrary
+            // text, and a quote or control character in it would otherwise break the frame
+            char[512] text = void;
+            ptrdiff_t len = val.toString(text[], null, null);
+            if (len < 0 || len > text.length)
+                return len < 0 ? len : -1;
+            return write_json_string(buffer, text[0 .. len]);
     }
 }
 

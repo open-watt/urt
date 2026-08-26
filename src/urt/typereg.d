@@ -194,8 +194,10 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
     else
         enum destroy_fun = null;
 
-    // a text wire can only carry the value if it both formats and parses
-    static if (__traits(compiles, { formatValue(*cast(const T*)null, char[].init, null, null); }) && is(typeof(parse!T)))
+    // Only a codec pair the type declares itself is treated as reversible. Formatting alone
+    // always compiles -- a struct without toString gets the generic TypeName(fields) form,
+    // which an unrelated fromString has no reason to accept.
+    static if (__traits(hasMember, T, "toString") && __traits(hasMember, T, "fromString") && is(typeof(parse!T)))
         enum text_round_trip = true;
     else
         enum text_round_trip = false;
@@ -344,6 +346,19 @@ unittest
     // memcpy-is-canonical for pods: no serialise handler, no destructor, trivial copy
     assert(r.serialise is null && r.destroy is null);
     assert(binary_representable(r));
+
+    // a generic struct formats as Vec2(x, y), which nothing claims to parse back
+    static assert(!r.text_round_trip);
+
+    static struct Stamp
+    {
+        int v;
+        ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const nothrow @nogc
+            => formatValue(v, buffer, null, null);
+        ptrdiff_t fromString(const(char)[] s) nothrow @nogc
+            => s.parse!int(v);
+    }
+    static assert(TypeRecordFor!(Stamp, 2, 0, false).text_round_trip);
 
     // a non-pod without a serialise pair has no binary form; declaring the pair restores it
     // and a `type_name` member names the type without registration-site strings

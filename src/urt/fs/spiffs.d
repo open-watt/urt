@@ -28,6 +28,9 @@ static nothrow @nogc:
 
     enum name = "spiffs";
 
+    // One object per whole path; hierarchy is urt.file's to synthesise.
+    enum flat = true;
+
     // False when the partition is absent or unformatted, which lets urt.file
     // separate "no filesystem" from "the operation failed".
     bool available()
@@ -36,19 +39,14 @@ static nothrow @nogc:
     int last_error()
         => urt_spiffs_last_error();
 
-    int dir_open(const(char)[] path)
-        => urt_spiffs_dir_open(path.ptr, path.length);
+    int scan_open()
+        => urt_spiffs_scan_open();
 
-    ptrdiff_t dir_read(int fd, char[] name, out ulong size, out bool is_dir)
-    {
-        int dir;
-        ptrdiff_t r = urt_spiffs_dir_read(fd, name.ptr, name.length, &size, &dir);
-        is_dir = dir != 0;
-        return r;
-    }
+    ptrdiff_t scan_read(int fd, char[] name, out ulong size)
+        => urt_spiffs_scan_read(fd, name.ptr, name.length, &size);
 
-    void dir_close(int fd)
-        => urt_spiffs_dir_close(fd);
+    void scan_close(int fd)
+        => urt_spiffs_scan_close(fd);
 
     bool info(out ulong total, out ulong used)
         => urt_spiffs_info(&total, &used) == 0;
@@ -97,9 +95,9 @@ private extern(C)
     int urt_spiffs_format_status();
     int urt_spiffs_available();
     int urt_spiffs_last_error();
-    int urt_spiffs_dir_open(const(char)* path, size_t path_len);
-    ptrdiff_t urt_spiffs_dir_read(int fd, char* name, size_t name_len, ulong* size, int* is_dir);
-    void urt_spiffs_dir_close(int fd);
+    int urt_spiffs_scan_open();
+    ptrdiff_t urt_spiffs_scan_read(int fd, char* name, size_t name_len, ulong* size);
+    void urt_spiffs_scan_close(int fd);
     int urt_spiffs_info(ulong* total, ulong* used);
     int urt_spiffs_exists(const(char)* path, size_t path_len);
     int urt_spiffs_stat(const(char)* path, size_t path_len, ulong* size);

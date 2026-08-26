@@ -12,6 +12,10 @@ public import urt.result;
 version (UseSpiffs)   version = HasFileBackend;
 version (UseLittleFS) version = HasFileBackend;
 
+// A flat backend stores one object per whole path and has no directory nodes;
+// Directory synthesises them from '/' in those names.
+version (UseSpiffs) version = EmulateDirectories;
+
 version (HasFileBackend)
 {
     import urt.meta : AliasSeq;
@@ -163,6 +167,122 @@ struct DirEntry
         => (attributes & FileAttributeFlag.Symlink) != 0;
 }
 
+version (EmulateDirectories)
+{
+    private enum max_emulated_prefix = 64;
+    private enum max_emulated_name = 32;
+    // A listing with more distinct subdirectories than this repeats one.
+    private enum max_emulated_seen = 8;
+
+    private const(char)[] strip_slashes(const(char)[] path)
+    {
+        size_t b = 0, e = path.length;
+        while (b < e && path[b] == '/')
+            ++b;
+        while (e > b && path[e - 1] == '/')
+            --e;
+        return path[b .. e];
+    }
+
+    private bool emulated_open(alias B)(ref Directory dir, const(char)[] path)
+    {
+        const(char)[] rel = strip_slashes(path);
+        if (rel.length + 1 > max_emulated_prefix)
+            return false;
+
+        // the root always exists; any other name only when something lives under it
+        if (rel.length)
+        {
+            int probe = B.scan_open();
+            if (probe < 0)
+                return false;
+            bool found = false;
+            char[256] buffer = void;
+            for (;;)
+            {
+                ulong size;
+                ptrdiff_t len = B.scan_read(probe, buffer[], size);
+                if (len <= 0)
+                    break;
+                const(char)[] n = buffer[0 .. len];
+                if (n.length > rel.length && n[0 .. rel.length] == rel && n[rel.length] == '/')
+                {
+                    found = true;
+                    break;
+                }
+            }
+            B.scan_close(probe);
+            if (!found)
+                return false;
+        }
+
+        int fd = B.scan_open();
+        if (fd < 0)
+            return false;
+        dir.fd = fd;
+        dir.prefix[0 .. rel.length] = rel[];
+        dir.prefix_len = cast(ubyte)rel.length;
+        if (rel.length)
+        {
+            dir.prefix[rel.length] = '/';
+            dir.prefix_len = cast(ubyte)(rel.length + 1);
+        }
+        dir.seen_count = 0;
+        return true;
+    }
+
+    private bool emulated_seen(ref Directory dir, const(char)[] child)
+    {
+        foreach (i; 0 .. dir.seen_count)
+        {
+            if (dir.seen_len[i] == child.length && dir.seen[i][0 .. child.length] == child)
+                return true;
+        }
+        if (child.length <= max_emulated_name && dir.seen_count < max_emulated_seen)
+        {
+            dir.seen[dir.seen_count][0 .. child.length] = child[];
+            dir.seen_len[dir.seen_count] = cast(ubyte)child.length;
+            ++dir.seen_count;
+        }
+        return false;
+    }
+
+    private bool emulated_read(alias B)(ref Directory dir, out DirEntry entry)
+    {
+        const(char)[] prefix = dir.prefix[0 .. dir.prefix_len];
+        for (;;)
+        {
+            ulong size;
+            ptrdiff_t len = B.scan_read(dir.fd, dir.name_buffer[], size);
+            if (len <= 0)
+                return false;
+
+            const(char)[] flat = dir.name_buffer[0 .. len];
+            if (flat.length <= prefix.length || flat[0 .. prefix.length] != prefix)
+                continue;
+            const(char)[] rest = flat[prefix.length .. $];
+
+            size_t slash = 0;
+            while (slash < rest.length && rest[slash] != '/')
+                ++slash;
+            if (slash == rest.length)
+            {
+                entry.name = rest;
+                entry.size = size;
+                return true;
+            }
+
+            const(char)[] child = rest[0 .. slash];
+            if (emulated_seen(dir, child))
+                continue;
+            entry.name = child;
+            entry.size = 0;
+            entry.attributes |= FileAttributeFlag.Directory;
+            return true;
+        }
+    }
+}
+
 struct Directory
 {
     version (Windows)
@@ -181,6 +301,14 @@ struct Directory
         {
             ubyte backend = ubyte.max;
             char[256] name_buffer = void;
+            version (EmulateDirectories)
+            {
+                ubyte prefix_len;
+                ubyte seen_count;
+                char[max_emulated_prefix] prefix = void;
+                char[max_emulated_name][max_emulated_seen] seen = void;
+                ubyte[max_emulated_seen] seen_len = void;
+            }
         }
     }
     else
@@ -613,11 +741,19 @@ Result open(ref Directory dir, const(char)[] path)
         {
             if (dir.fd < 0)
             {
-                int fd = B.dir_open(path);
-                if (fd >= 0)
+                static if (B.flat)
                 {
-                    dir.fd = fd;
-                    dir.backend = i;
+                    if (emulated_open!B(dir, path))
+                        dir.backend = i;
+                }
+                else
+                {
+                    int fd = B.dir_open(path);
+                    if (fd >= 0)
+                    {
+                        dir.fd = fd;
+                        dir.backend = i;
+                    }
                 }
             }
         }
@@ -728,6 +864,9 @@ bool read(ref Directory dir, out DirEntry entry)
         {
             if (dir.backend == i)
             {
+                static if (B.flat)
+                    return emulated_read!B(dir, entry);
+                else
                 for (;;)
                 {
                     bool is_dir;
@@ -776,7 +915,12 @@ void close(ref Directory dir)
         static foreach (i, B; FileBackends)
         {
             if (dir.backend == i)
-                B.dir_close(dir.fd);
+            {
+                static if (B.flat)
+                    B.scan_close(dir.fd);
+                else
+                    B.dir_close(dir.fd);
+            }
         }
         dir.fd = -1;
         dir.backend = ubyte.max;

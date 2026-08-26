@@ -18,78 +18,6 @@ Variant parse_json(const(char)[] text)
     return parse_node(text);
 }
 
-ptrdiff_t write_json_string(char[] buffer, const(char)[] s) nothrow @nogc
-{
-    if (!buffer.ptr)
-    {
-        size_t len = 0;
-        foreach (c; s)
-        {
-            if (c < 0x20)
-            {
-                if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
-                    len += 2;
-                else
-                    len += 6;
-            }
-            else if (c == '"' || c == '\\')
-                len += 2;
-            else
-                len += 1;
-        }
-        return len + 2;
-    }
-
-    if (buffer.length < s.length + 2)
-        return -1;
-
-    buffer[0] = '"';
-    size_t offset = 1;
-    foreach (c; s)
-    {
-        char sub = void;
-        if (c < 0x20)
-        {
-            if (c == '\n')
-                sub = 'n';
-            else if (c == '\r')
-                sub = 'r';
-            else if (c == '\t')
-                sub = 't';
-            else if (c == '\b')
-                sub = 'b';
-            else if (c == '\f')
-                sub = 'f';
-            else
-            {
-                if (buffer.length < offset + 7)
-                    return -1;
-                buffer[offset .. offset + 4] = "\\u00";
-                offset += 4;
-                buffer[offset++] = hex_digits[c >> 4];
-                buffer[offset++] = hex_digits[c & 0xF];
-                continue;
-            }
-        }
-        else if (c == '"' || c == '\\')
-            sub = c;
-        else
-        {
-            if (buffer.length < offset + 2)
-                return -1;
-            buffer[offset++] = c;
-            continue;
-        }
-
-        if (buffer.length < offset + 3)
-            return -1;
-        buffer[offset++] = '\\';
-        buffer[offset++] = sub;
-    }
-    buffer[offset++] = '"';
-    return offset;
-}
-
 ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, uint level = 0, uint indent = 2)
 {
     final switch (val.type)
@@ -264,11 +192,7 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             return result_len;
 
         case Variant.Type.User:
-            char[512] text = void;
-            ptrdiff_t len = val.toString(text[], null, null);
-            if (len < 0 || len > text.length)
-                return len < 0 ? len : -1;
-            return write_json_string(buffer, text[0 .. len]);
+            return write_json_user(val, buffer);
     }
 }
 
@@ -338,10 +262,150 @@ unittest
     assert(write[1]["bogus"].asBool == false);
     assert(write.write_json(buffer, true) == 33);
     assert(buffer[0 .. 33] == "[42, {\"wow\":true, \"bogus\":false}]");
+
+    Variant user = Variant(JsonUserText());
+    enum user_json_length = JsonUserText.text_length + 5;
+    assert(user.write_json(null) == user_json_length);
+    assert(user.write_json(buffer) == user_json_length);
+    assert(buffer[0] == '"');
+    assert(buffer[1 .. 3] == "\\\"");
+    assert(buffer[3 .. 5] == "\\\\");
+    assert(buffer[5 .. 7] == "\\n");
+    assert(buffer[user_json_length - 1] == '"');
 }
 
 
 private:
+
+version (unittest)
+struct JsonUserText
+{
+    enum text_length = 600;
+
+    ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const nothrow @nogc
+    {
+        if (!buffer.ptr)
+            return text_length;
+        if (buffer.length < text_length)
+            return -1;
+        buffer[0] = '"';
+        buffer[1] = '\\';
+        buffer[2] = '\n';
+        buffer[3 .. text_length] = 'x';
+        return text_length;
+    }
+}
+
+ptrdiff_t write_json_user(ref const Variant val, char[] buffer)
+{
+    ptrdiff_t len = val.toString(null, null, null);
+    if (len < 0)
+        return len;
+    size_t text_length = cast(size_t)len;
+
+    if (!buffer.ptr)
+    {
+        import urt.mem : alloc, free;
+
+        char[512] local = void;
+        char[] text = text_length <= local.length
+            ? local[0 .. text_length]
+            : cast(char[])alloc(text_length, char.alignof);
+        if (text_length && !text.ptr)
+            return -1;
+        bool allocated = text.ptr !is local.ptr;
+        scope(exit) if (allocated) free(text);
+        if (val.toString(text, null, null) != len)
+            return -1;
+        return write_json_string(null, text);
+    }
+
+    if (buffer.length < text_length + 2)
+        return -1;
+    if (val.toString(buffer[0 .. text_length], null, null) != len)
+        return -1;
+    ptrdiff_t json_length = write_json_string(null, buffer[0 .. text_length]);
+    if (json_length < 0 || buffer.length < json_length)
+        return -1;
+
+    import urt.mem : memmove;
+
+    size_t source = cast(size_t)json_length - text_length;
+    memmove(buffer.ptr + source, buffer.ptr, text_length);
+    return write_json_string(buffer, buffer[source .. source + text_length]);
+}
+
+ptrdiff_t write_json_string(char[] buffer, const(char)[] s)
+{
+    if (!buffer.ptr)
+    {
+        size_t len = 0;
+        foreach (c; s)
+        {
+            if (c < 0x20)
+            {
+                if (c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f')
+                    len += 2;
+                else
+                    len += 6;
+            }
+            else if (c == '"' || c == '\\')
+                len += 2;
+            else
+                len += 1;
+        }
+        return len + 2;
+    }
+
+    if (buffer.length < s.length + 2)
+        return -1;
+
+    buffer[0] = '"';
+    size_t offset = 1;
+    foreach (c; s)
+    {
+        char sub = void;
+        if (c < 0x20)
+        {
+            if (c == '\n')
+                sub = 'n';
+            else if (c == '\r')
+                sub = 'r';
+            else if (c == '\t')
+                sub = 't';
+            else if (c == '\b')
+                sub = 'b';
+            else if (c == '\f')
+                sub = 'f';
+            else
+            {
+                if (buffer.length < offset + 7)
+                    return -1;
+                buffer[offset .. offset + 4] = "\\u00";
+                offset += 4;
+                buffer[offset++] = hex_digits[c >> 4];
+                buffer[offset++] = hex_digits[c & 0xF];
+                continue;
+            }
+        }
+        else if (c == '"' || c == '\\')
+            sub = c;
+        else
+        {
+            if (buffer.length < offset + 2)
+                return -1;
+            buffer[offset++] = c;
+            continue;
+        }
+
+        if (buffer.length < offset + 3)
+            return -1;
+        buffer[offset++] = '\\';
+        buffer[offset++] = sub;
+    }
+    buffer[offset++] = '"';
+    return offset;
+}
 
 bool append(char[] buffer, ref ptrdiff_t offset, char c)
 {

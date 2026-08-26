@@ -9,7 +9,7 @@ import urt.endian : can_reverse_endian, reverse_endian;
 import urt.hash : fnv1a;
 import urt.internal.traits : hasIndirections;
 import urt.lifetime;
-import urt.string.format : FormatArg, formatValue;
+import urt.string.format : FormatArg, formatValue, has_custom_stringifier;
 import urt.traits : is_trivial, Unqual;
 import urt.variant : EmbedUserType, ValidUserType, Variant;
 
@@ -194,7 +194,7 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
     else
         enum destroy_fun = null;
 
-    static if (__traits(hasMember, T, "toString") && __traits(hasMember, T, "fromString") && is(typeof(parse!T)))
+    static if (has_custom_stringifier!T && __traits(hasMember, T, "fromString") && is(typeof(parse!T)))
         enum text_round_trip = true;
     else
         enum text_round_trip = false;
@@ -355,6 +355,15 @@ unittest
             => s.parse!int(v);
     }
     static assert(TypeRecordFor!(Stamp, 2, 0, false).text_round_trip);
+
+    static struct InvalidStamp
+    {
+        int v;
+        const(char)[] toString() const nothrow @nogc => null;
+        ptrdiff_t fromString(const(char)[] s) nothrow @nogc
+            => s.parse!int(v);
+    }
+    static assert(!TypeRecordFor!(InvalidStamp, 3, 0, false).text_round_trip);
 
     // a non-pod without a serialise pair has no binary form; declaring the pair restores it
     // and a `type_name` member names the type without registration-site strings

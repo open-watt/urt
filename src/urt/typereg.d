@@ -26,7 +26,7 @@ struct TypeDetails
     bool embedded;          // registrar's contract: type_id is 16-bit folded and Variant may store inline
                             // (not derivable from size/align: registry-native ids are unfolded hashes)
     bool pod;
-    bool text_round_trip;   // stringify works in both directions, so the value survives a text wire
+    bool text_round_trip;
     void function(void* src, void* dst, bool move) nothrow @nogc copy_emplace;
     void function(void* val) nothrow @nogc destroy;
     ptrdiff_t function(void* val, char[] buffer, bool do_format, const(char)[] format_spec, const(FormatArg)[] format_args) nothrow @nogc stringify;
@@ -194,10 +194,8 @@ template TypeRecordFor(T, uint type_id, uint super_type_id, bool embedded, strin
     else
         enum destroy_fun = null;
 
-    // Only a codec pair the type declares itself is treated as reversible. Formatting alone
-    // always compiles -- a struct without toString gets the generic TypeName(fields) form,
-    // which an unrelated fromString has no reason to accept.
-    static if (__traits(hasMember, T, "toString") && __traits(hasMember, T, "fromString") && is(typeof(parse!T)))
+    static if (__traits(hasMember, T, "toString") && __traits(hasMember, T, "fromString")
+               && is(typeof(parse!T)))
         enum text_round_trip = true;
     else
         enum text_round_trip = false;
@@ -332,6 +330,14 @@ unittest
 {
     static struct Vec2 { int x, y; }
     static struct Boxed { int* p; }
+    static struct Stamp
+    {
+        int v;
+        ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const nothrow @nogc
+            => formatValue(v, buffer, null, null);
+        ptrdiff_t fromString(const(char)[] s) nothrow @nogc
+            => s.parse!int(v);
+    }
 
     enum r = TypeRecordFor!(Vec2, fnv1a(cast(const(ubyte)[])"vec2"), 0, false, "vec2");
     static assert(r.pod && r.size == 8 && r.name == "vec2");
@@ -347,17 +353,8 @@ unittest
     assert(r.serialise is null && r.destroy is null);
     assert(binary_representable(r));
 
-    // a generic struct formats as Vec2(x, y), which nothing claims to parse back
     static assert(!r.text_round_trip);
 
-    static struct Stamp
-    {
-        int v;
-        ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const nothrow @nogc
-            => formatValue(v, buffer, null, null);
-        ptrdiff_t fromString(const(char)[] s) nothrow @nogc
-            => s.parse!int(v);
-    }
     static assert(TypeRecordFor!(Stamp, 2, 0, false).text_round_trip);
 
     // a non-pod without a serialise pair has no binary form; declaring the pair restores it

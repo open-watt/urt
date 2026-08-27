@@ -627,12 +627,20 @@ void[] load_file(const(char)[] path)
         return null; // TODO: are there any errors we can handle?
     }
     ulong size = f.get_size();
-    assert(size <= size_t.max, "File is too large");
+    if (size > size_t.max)
+    {
+        f.close();
+        return null;
+    }
     void[] buffer = alloc(cast(size_t)size);
     size_t bytesRead;
     r = f.read(buffer[], bytesRead);
-    assert(r, "TODO: handle error");
     f.close();
+    if (!r)
+    {
+        free(buffer);
+        return null;
+    }
     return buffer[0..bytesRead];
 }
 

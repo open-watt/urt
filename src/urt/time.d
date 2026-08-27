@@ -370,6 +370,22 @@ pure nothrow @nogc:
     }
 }
 
+Duration random_delay(Duration limit)
+{
+    import urt.rand : rand;
+
+    if (limit <= Duration.zero)
+        return Duration.zero;
+
+    ulong bound = cast(ulong)limit.ticks;
+    ulong value;
+    ulong threshold = -bound % bound;
+    do
+        value = cast(ulong)rand() << 32 | rand();
+    while (value < threshold);
+    return Duration(cast(long)(value % bound + 1));
+}
+
 alias Timer = FixedTimer!();
 
 struct FixedTimer(uint milliseconds = 0)
@@ -1433,6 +1449,13 @@ ptrdiff_t time_to_string(long ns, char[] buffer) pure
 unittest
 {
     import urt.mem.temp;
+
+    assert(random_delay(Duration.zero) == Duration.zero);
+    foreach (_; 0 .. 100)
+    {
+        Duration delay = random_delay(10.msecs);
+        assert(delay > Duration.zero && delay <= 10.msecs);
+    }
 
     assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "3h47m34s123ms");
     assert(tconcat(msecs(3_600_000*-123))[] == "-5d3h");

@@ -5,7 +5,27 @@ version (Tiny) {} else
 
 version (Tiny)
 {
-    public import urt.mem.pagepool_tiny;
+    import urt.mem.pagepool_tiny;
+
+    // Capacities are compile-time on this variant, so the pool is instantiated
+    // here and its members aliased out: consumers call the same free functions
+    // whichever variant they build against.
+    //
+    // Sized for network buffers: a page carries the caller's own header plus a
+    // frame, with room left to prepend link/network/transport headers in place
+    // rather than copying to make space.
+    //   small -- 802.15.4 / Modbus sized frames
+    //   large -- an ethernet MTU
+    alias Pool = PagePool!(384, 16, 4, 1664, 8, 2);
+
+    alias page_pool_init     = Pool.page_pool_init;
+    alias page_alloc_for     = Pool.page_alloc_for;
+    alias page_adopt         = Pool.page_adopt;
+    alias page_free          = Pool.page_free;
+    alias page_category      = Pool.page_category;
+    alias page_payload_size  = Pool.page_payload_size;
+    alias page_pool_trim     = Pool.page_pool_trim;
+    alias page_pool_deinit   = Pool.page_pool_deinit;
 
     unittest
     {
@@ -208,6 +228,33 @@ void[] page_alloc_for(size_t bytes)
             _jumbo_stats.high_water = _jumbo_stats.pages_in_use;
     }
     return (mem.ptr + page_header_size)[0 .. bytes];
+}
+
+// Take over a block the caller allocated, so it can be released through
+// page_free like any other page. The caller must reserve page_header_size at
+// the front, and must not touch the block again -- the returned slice is the
+// only handle to it.
+void[] page_adopt(void[] block)
+{
+    if (block.length <= page_header_size || (cast(size_t)block.ptr & 15) != 0)
+        return null;
+
+    PageHeader* h = cast(PageHeader*)block.ptr;
+    h.next = null;
+    h.slab_offset = cast(uint)block.length;
+    h.category = page_category_heap;
+    h.flags = page_flag_heap;
+    h.refcount = 0;
+
+    const size_t payload = block.length - page_header_size;
+    {
+        auto guard = _lock.acquire();
+        ++_jumbo_stats.alloc_count;
+        ++_jumbo_stats.size_histogram[histogram_bucket(payload)];
+        if (++_jumbo_stats.pages_in_use > _jumbo_stats.high_water)
+            _jumbo_stats.high_water = _jumbo_stats.pages_in_use;
+    }
+    return (block.ptr + page_header_size)[0 .. payload];
 }
 
 void page_free(void* payload)

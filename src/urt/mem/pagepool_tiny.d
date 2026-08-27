@@ -84,6 +84,24 @@ template PagePool(
         return (mem.ptr + page_header_size)[0 .. bytes];
     }
 
+    // Take over a block the caller allocated, so it can be released through
+    // page_free like any other page. The caller must reserve page_header_size
+    // at the front, and must not touch the block again -- the returned slice
+    // is the only handle to it.
+    void[] page_adopt(void[] block)
+    {
+        assert(_initialised, "Page pool not initialised!");
+        if (block.length <= page_header_size || (cast(size_t)block.ptr & 7) != 0)
+            return null;
+        if ((block.length & page_tag_mask) != 0)
+            return null;    // the size shares its low bits with the tag
+
+        PageHeader* header = cast(PageHeader*)block.ptr;
+        header.tag = block.length | page_tag_heap;
+        record_jumbo_alloc();
+        return (block.ptr + page_header_size)[0 .. block.length - page_header_size];
+    }
+
     void page_free(void* payload)
     {
         assert(payload);

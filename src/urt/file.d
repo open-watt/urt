@@ -174,6 +174,7 @@ version (EmulateDirectories)
     // A listing with more distinct subdirectories than this repeats one.
     private enum max_emulated_seen = 8;
 
+    // "." is the root, as it would be on a filesystem that had one.
     private const(char)[] strip_slashes(const(char)[] path)
     {
         size_t b = 0, e = path.length;
@@ -181,7 +182,8 @@ version (EmulateDirectories)
             ++b;
         while (e > b && path[e - 1] == '/')
             --e;
-        return path[b .. e];
+        const(char)[] rel = path[b .. e];
+        return rel == "." ? null : rel;
     }
 
     private bool emulated_open(alias B)(ref Directory dir, const(char)[] path)

@@ -40,30 +40,47 @@ int *ow_errno_location(void)
 extern ssize_t _write_r_console(struct _reent *r, int fd, const void *data, size_t size);
 extern ssize_t _read_r_console(struct _reent *r, int fd, void *data, size_t size);
 
+extern ssize_t __real__write_r(struct _reent *r, int fd, const void *data, size_t size);
+extern ssize_t __real__read_r(struct _reent *r, int fd, void *data, size_t size);
+extern int __real__close_r(struct _reent *r, int fd);
+extern int __real__fcntl_r(struct _reent *r, int fd, int cmd, int arg);
+
+// Only the three standard streams belong to the console; every other descriptor
+// is a VFS file and must reach it, or the filesystem has no read or write.
+#define OW_IS_CONSOLE_FD(fd) ((fd) >= 0 && (fd) <= 2)
+
 ssize_t __wrap__write_r(struct _reent *r, int fd, const void *data, size_t size)
 {
-    return _write_r_console(r, fd, data, size);
+    if (OW_IS_CONSOLE_FD(fd))
+        return _write_r_console(r, fd, data, size);
+    return __real__write_r(r, fd, data, size);
 }
 
 ssize_t __wrap__read_r(struct _reent *r, int fd, void *data, size_t size)
 {
-    return _read_r_console(r, fd, data, size);
+    if (OW_IS_CONSOLE_FD(fd))
+        return _read_r_console(r, fd, data, size);
+    return __real__read_r(r, fd, data, size);
 }
 
 int __wrap__close_r(struct _reent *r, int fd)
 {
-    (void)fd;
-    __errno_r(r) = ENOSYS;
-    return -1;
+    if (OW_IS_CONSOLE_FD(fd))
+    {
+        __errno_r(r) = ENOSYS;
+        return -1;
+    }
+    return __real__close_r(r, fd);
 }
 
 int __wrap__fcntl_r(struct _reent *r, int fd, int cmd, int arg)
 {
-    (void)fd;
-    (void)cmd;
-    (void)arg;
-    __errno_r(r) = ENOSYS;
-    return -1;
+    if (OW_IS_CONSOLE_FD(fd))
+    {
+        __errno_r(r) = ENOSYS;
+        return -1;
+    }
+    return __real__fcntl_r(r, fd, cmd, arg);
 }
 
 // -- WFI shim --
@@ -2143,6 +2160,7 @@ void ow_lwip_freeaddrinfo(struct addrinfo *ai)
 // the partition is mounted internally, which a format also does, and mounting
 // the partition does not put a VFS on OW_SPIFFS_ROOT. -1 latches a failed mount
 // so an unformatted partition is not retried on every access.
+static int ow_spiffs_last_errno = 0;
 static bool ow_spiffs_registered = false;
 static int ow_spiffs_mount_state = 0;
 
@@ -2199,15 +2217,20 @@ int urt_spiffs_open(const char *path, size_t path_len, bool write, bool truncate
     int flags = write ? (O_RDWR | O_CREAT) : O_RDONLY;
     if (write && truncate)
         flags |= O_TRUNC;
-    return open(buffer, flags, 0644);
+    int fd = open(buffer, flags, 0644);
+    if (fd < 0)
+        ow_spiffs_last_errno = errno;
+    return fd;
 }
 
 ptrdiff_t urt_spiffs_read(int fd, void *buffer, size_t length)
 {
-    return read(fd, buffer, length);
+    ptrdiff_t n = read(fd, buffer, length);
+    if (n < 0)
+        ow_spiffs_last_errno = errno;
+    return n;
 }
 
-static int ow_spiffs_last_errno = 0;
 
 int urt_spiffs_info(uint64_t *total, uint64_t *used)
 {
@@ -2321,7 +2344,10 @@ void urt_spiffs_close(int fd)
 uint64_t urt_spiffs_size(int fd)
 {
     struct stat st;
-    return fstat(fd, &st) == 0 ? (uint64_t)st.st_size : 0;
+    if (fstat(fd, &st) == 0)
+        return (uint64_t)st.st_size;
+    ow_spiffs_last_errno = errno;
+    return 0;
 }
 
 int64_t urt_spiffs_seek(int fd, int64_t offset, int whence)

@@ -11,12 +11,12 @@ version (Tiny)
     // here and its members aliased out: consumers call the same free functions
     // whichever variant they build against.
     //
-    // Sized for network buffers: a page carries the caller's own header plus a
-    // frame, with room left to prepend link/network/transport headers in place
-    // rather than copying to make space.
-    //   small -- 802.15.4 / Modbus sized frames
-    //   large -- an ethernet MTU
-    alias Pool = PagePool!(384, 16, 4, 1664, 8, 2);
+    // A page carries the caller's own Packet (48 bytes on 32-bit, measured), a
+    // frame, and room to prepend the medium's headers in place. The ethernet
+    // header sits outside the MTU, so the large class is 48 + 18 (ethernet 14 +
+    // vlan 4) + 1500 = 1566, the largest tagged frame ethernet permits. 32 large
+    // pages matches a router interface's queue depth.
+    alias Pool = PagePool!(320, 64, 4, 1600, 32, 2);
 
     alias page_pool_init     = Pool.page_pool_init;
     alias page_alloc_for     = Pool.page_alloc_for;
@@ -86,6 +86,17 @@ struct PagePoolStats
 
 // Categories must be given in ascending page_size order. Idempotent; returns false if
 // the pool is already initialised or its reclaimer cannot be registered.
+// Default categories, matching the Tiny variant: a page carries a packet header,
+// a frame, and room to prepend headers in place. page_size includes the header.
+bool page_pool_init()
+{
+    static immutable PageCategoryConfig[2] defaults = [
+        { page_size:  320 + page_header_size, pages_per_slab: 8, max_slabs: 8, prealloc_slabs: 1 },
+        { page_size: 1600 + page_header_size, pages_per_slab: 4, max_slabs: 8, prealloc_slabs: 1 },
+    ];
+    return page_pool_init(defaults[]);
+}
+
 bool page_pool_init(const(PageCategoryConfig)[] categories)
 {
     assert(categories.length > 0 && categories.length <= max_page_categories);

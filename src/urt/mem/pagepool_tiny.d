@@ -65,6 +65,11 @@ template PagePool(
         if (bytes <= large_capacity)
             return alloc_pooled(1, bytes);
 
+        return alloc_heap_page(bytes);
+    }
+
+    void[] alloc_heap_page(size_t bytes)
+    {
         if (bytes > size_t.max - page_header_size - 7)
         {
             record_jumbo_failure();
@@ -84,10 +89,7 @@ template PagePool(
         return (mem.ptr + page_header_size)[0 .. bytes];
     }
 
-    // Take over a block the caller allocated, so it can be released through
-    // page_free like any other page. The caller must reserve page_header_size
-    // at the front, and must not touch the block again -- the returned slice
-    // is the only handle to it.
+    // The returned slice is the only handle; the caller reserves page_header_size ahead of it.
     void[] page_adopt(void[] block)
     {
         assert(_initialised, "Page pool not initialised!");
@@ -329,7 +331,7 @@ template PagePool(
         if (!page)
         {
             record_failure(category);
-            return null;
+            return alloc_heap_page(bytes);   // past the cap, the heap carries it
         }
 
         page.tag = cast(size_t)category << 1;

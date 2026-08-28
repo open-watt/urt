@@ -7,15 +7,6 @@ version (Tiny)
 {
     import urt.mem.pagepool_tiny;
 
-    // Capacities are compile-time on this variant, so the pool is instantiated
-    // here and its members aliased out: consumers call the same free functions
-    // whichever variant they build against.
-    //
-    // A page carries the caller's own Packet (48 bytes on 32-bit, measured), a
-    // frame, and room to prepend the medium's headers in place. The ethernet
-    // header sits outside the MTU, so the large class is 48 + 18 (ethernet 14 +
-    // vlan 4) + 1500 = 1566, the largest tagged frame ethernet permits. 32 large
-    // pages matches a router interface's queue depth.
     alias Pool = PagePool!(320, 64, 4, 1600, 32, 2);
 
     alias page_pool_init     = Pool.page_pool_init;
@@ -86,8 +77,6 @@ struct PagePoolStats
 
 // Categories must be given in ascending page_size order. Idempotent; returns false if
 // the pool is already initialised or its reclaimer cannot be registered.
-// Default categories, matching the Tiny variant: a page carries a packet header,
-// a frame, and room to prepend headers in place. page_size includes the header.
 bool page_pool_init()
 {
     static immutable PageCategoryConfig[2] defaults = [
@@ -213,7 +202,7 @@ void[] page_alloc_for(size_t bytes)
             if (r)
                 return r[0 .. bytes];
         }
-        return null;
+        // capped out; the heap carries the overflow below
     }
 
     size_t block_size = page_header_size + bytes;
@@ -241,10 +230,7 @@ void[] page_alloc_for(size_t bytes)
     return (mem.ptr + page_header_size)[0 .. bytes];
 }
 
-// Take over a block the caller allocated, so it can be released through
-// page_free like any other page. The caller must reserve page_header_size at
-// the front, and must not touch the block again -- the returned slice is the
-// only handle to it.
+// The returned slice is the only handle; the caller reserves page_header_size ahead of it.
 void[] page_adopt(void[] block)
 {
     if (block.length <= page_header_size || (cast(size_t)block.ptr & 15) != 0)

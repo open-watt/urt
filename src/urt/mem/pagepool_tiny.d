@@ -65,6 +65,11 @@ template PagePool(
         if (bytes <= large_capacity)
             return alloc_pooled(1, bytes);
 
+        return alloc_heap_page(bytes);
+    }
+
+    void[] alloc_heap_page(size_t bytes)
+    {
         if (bytes > size_t.max - page_header_size - 7)
         {
             record_jumbo_failure();
@@ -82,6 +87,21 @@ template PagePool(
         header.tag = block_size | page_tag_heap;
         record_jumbo_alloc();
         return (mem.ptr + page_header_size)[0 .. bytes];
+    }
+
+    // The returned slice is the only handle; the caller reserves page_header_size ahead of it.
+    void[] page_adopt(void[] block)
+    {
+        assert(_initialised, "Page pool not initialised!");
+        if (block.length <= page_header_size || (cast(size_t)block.ptr & 7) != 0)
+            return null;
+        if ((block.length & page_tag_mask) != 0)
+            return null;    // the size shares its low bits with the tag
+
+        PageHeader* header = cast(PageHeader*)block.ptr;
+        header.tag = block.length | page_tag_heap;
+        record_jumbo_alloc();
+        return (block.ptr + page_header_size)[0 .. block.length - page_header_size];
     }
 
     void page_free(void* payload)
@@ -311,7 +331,7 @@ template PagePool(
         if (!page)
         {
             record_failure(category);
-            return null;
+            return alloc_heap_page(bytes);   // past the cap, the heap carries it
         }
 
         page.tag = cast(size_t)category << 1;

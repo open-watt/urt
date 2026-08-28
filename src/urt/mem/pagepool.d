@@ -5,7 +5,18 @@ version (Tiny) {} else
 
 version (Tiny)
 {
-    public import urt.mem.pagepool_tiny;
+    import urt.mem.pagepool_tiny;
+
+    alias Pool = PagePool!(320, 64, 4, 1600, 32, 2);
+
+    alias page_pool_init     = Pool.page_pool_init;
+    alias page_alloc_for     = Pool.page_alloc_for;
+    alias page_adopt         = Pool.page_adopt;
+    alias page_free          = Pool.page_free;
+    alias page_category      = Pool.page_category;
+    alias page_payload_size  = Pool.page_payload_size;
+    alias page_pool_trim     = Pool.page_pool_trim;
+    alias page_pool_deinit   = Pool.page_pool_deinit;
 
     unittest
     {
@@ -66,6 +77,15 @@ struct PagePoolStats
 
 // Categories must be given in ascending page_size order. Idempotent; returns false if
 // the pool is already initialised or its reclaimer cannot be registered.
+bool page_pool_init()
+{
+    static immutable PageCategoryConfig[2] defaults = [
+        { page_size:  320 + page_header_size, pages_per_slab: 8, max_slabs: 8, prealloc_slabs: 1 },
+        { page_size: 1600 + page_header_size, pages_per_slab: 4, max_slabs: 8, prealloc_slabs: 1 },
+    ];
+    return page_pool_init(defaults[]);
+}
+
 bool page_pool_init(const(PageCategoryConfig)[] categories)
 {
     assert(categories.length > 0 && categories.length <= max_page_categories);
@@ -182,7 +202,7 @@ void[] page_alloc_for(size_t bytes)
             if (r)
                 return r[0 .. bytes];
         }
-        return null;
+        // capped out; the heap carries the overflow below
     }
 
     size_t block_size = page_header_size + bytes;
@@ -208,6 +228,30 @@ void[] page_alloc_for(size_t bytes)
             _jumbo_stats.high_water = _jumbo_stats.pages_in_use;
     }
     return (mem.ptr + page_header_size)[0 .. bytes];
+}
+
+// The returned slice is the only handle; the caller reserves page_header_size ahead of it.
+void[] page_adopt(void[] block)
+{
+    if (block.length <= page_header_size || (cast(size_t)block.ptr & 15) != 0)
+        return null;
+
+    PageHeader* h = cast(PageHeader*)block.ptr;
+    h.next = null;
+    h.slab_offset = cast(uint)block.length;
+    h.category = page_category_heap;
+    h.flags = page_flag_heap;
+    h.refcount = 0;
+
+    const size_t payload = block.length - page_header_size;
+    {
+        auto guard = _lock.acquire();
+        ++_jumbo_stats.alloc_count;
+        ++_jumbo_stats.size_histogram[histogram_bucket(payload)];
+        if (++_jumbo_stats.pages_in_use > _jumbo_stats.high_water)
+            _jumbo_stats.high_water = _jumbo_stats.pages_in_use;
+    }
+    return (block.ptr + page_header_size)[0 .. payload];
 }
 
 void page_free(void* payload)

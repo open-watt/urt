@@ -28,6 +28,8 @@ static nothrow @nogc:
 
     enum name = "littlefs";
 
+    enum flat = false;
+
     bool available()
         => urt_littlefs_available() != 0;
 

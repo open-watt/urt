@@ -40,30 +40,47 @@ int *ow_errno_location(void)
 extern ssize_t _write_r_console(struct _reent *r, int fd, const void *data, size_t size);
 extern ssize_t _read_r_console(struct _reent *r, int fd, void *data, size_t size);
 
+extern ssize_t __real__write_r(struct _reent *r, int fd, const void *data, size_t size);
+extern ssize_t __real__read_r(struct _reent *r, int fd, void *data, size_t size);
+extern int __real__close_r(struct _reent *r, int fd);
+extern int __real__fcntl_r(struct _reent *r, int fd, int cmd, int arg);
+
+// Only the three standard streams belong to the console; every other descriptor
+// is a VFS file and must reach it, or the filesystem has no read or write.
+#define OW_IS_CONSOLE_FD(fd) ((fd) >= 0 && (fd) <= 2)
+
 ssize_t __wrap__write_r(struct _reent *r, int fd, const void *data, size_t size)
 {
-    return _write_r_console(r, fd, data, size);
+    if (OW_IS_CONSOLE_FD(fd))
+        return _write_r_console(r, fd, data, size);
+    return __real__write_r(r, fd, data, size);
 }
 
 ssize_t __wrap__read_r(struct _reent *r, int fd, void *data, size_t size)
 {
-    return _read_r_console(r, fd, data, size);
+    if (OW_IS_CONSOLE_FD(fd))
+        return _read_r_console(r, fd, data, size);
+    return __real__read_r(r, fd, data, size);
 }
 
 int __wrap__close_r(struct _reent *r, int fd)
 {
-    (void)fd;
-    __errno_r(r) = ENOSYS;
-    return -1;
+    if (OW_IS_CONSOLE_FD(fd))
+    {
+        __errno_r(r) = ENOSYS;
+        return -1;
+    }
+    return __real__close_r(r, fd);
 }
 
 int __wrap__fcntl_r(struct _reent *r, int fd, int cmd, int arg)
 {
-    (void)fd;
-    (void)cmd;
-    (void)arg;
-    __errno_r(r) = ENOSYS;
-    return -1;
+    if (OW_IS_CONSOLE_FD(fd))
+    {
+        __errno_r(r) = ENOSYS;
+        return -1;
+    }
+    return __real__fcntl_r(r, fd, cmd, arg);
 }
 
 // -- WFI shim --
@@ -2143,6 +2160,7 @@ void ow_lwip_freeaddrinfo(struct addrinfo *ai)
 // the partition is mounted internally, which a format also does, and mounting
 // the partition does not put a VFS on OW_SPIFFS_ROOT. -1 latches a failed mount
 // so an unformatted partition is not retried on every access.
+static int ow_spiffs_last_errno = 0;
 static bool ow_spiffs_registered = false;
 static int ow_spiffs_mount_state = 0;
 
@@ -2199,15 +2217,20 @@ int urt_spiffs_open(const char *path, size_t path_len, bool write, bool truncate
     int flags = write ? (O_RDWR | O_CREAT) : O_RDONLY;
     if (write && truncate)
         flags |= O_TRUNC;
-    return open(buffer, flags, 0644);
+    int fd = open(buffer, flags, 0644);
+    if (fd < 0)
+        ow_spiffs_last_errno = errno;
+    return fd;
 }
 
 ptrdiff_t urt_spiffs_read(int fd, void *buffer, size_t length)
 {
-    return read(fd, buffer, length);
+    ptrdiff_t n = read(fd, buffer, length);
+    if (n < 0)
+        ow_spiffs_last_errno = errno;
+    return n;
 }
 
-static int ow_spiffs_last_errno = 0;
 
 int urt_spiffs_info(uint64_t *total, uint64_t *used)
 {
@@ -2226,21 +2249,21 @@ int urt_spiffs_last_error(void)
 }
 
 // SPIFFS has no directories; its VFS reports the flat namespace as a single
-// listing at the mount root, so only the root enumerates anything.
-#define OW_SPIFFS_MAX_DIRS 2
+// listing at the mount root. Exposed raw -- urt.file synthesises the
+// hierarchy from '/' in the names.
+#define OW_SPIFFS_MAX_SCANS 2
 
-static DIR *ow_spiffs_dirs[OW_SPIFFS_MAX_DIRS];
+static DIR *ow_spiffs_scans[OW_SPIFFS_MAX_SCANS];
 
-int urt_spiffs_dir_open(const char *path, size_t path_len)
+int urt_spiffs_scan_open(void)
 {
-    char buffer[128];
-    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+    if (!ow_spiffs_ready())
         return -1;
 
     int h = -1;
-    for (int i = 0; i < OW_SPIFFS_MAX_DIRS; ++i)
+    for (int i = 0; i < OW_SPIFFS_MAX_SCANS; ++i)
     {
-        if (!ow_spiffs_dirs[i])
+        if (!ow_spiffs_scans[i])
         {
             h = i;
             break;
@@ -2249,23 +2272,23 @@ int urt_spiffs_dir_open(const char *path, size_t path_len)
     if (h < 0)
         return -1;
 
-    DIR *d = opendir(buffer);
+    DIR *d = opendir(OW_SPIFFS_ROOT);
     if (!d)
     {
         ow_spiffs_last_errno = errno;
         return -1;
     }
-    ow_spiffs_dirs[h] = d;
+    ow_spiffs_scans[h] = d;
     return h;
 }
 
-ptrdiff_t urt_spiffs_dir_read(int h, char *name, size_t name_len, uint64_t *size, int *is_dir)
+ptrdiff_t urt_spiffs_scan_read(int h, char *name, size_t name_len, uint64_t *size)
 {
-    if (h < 0 || h >= OW_SPIFFS_MAX_DIRS || !ow_spiffs_dirs[h])
+    if (h < 0 || h >= OW_SPIFFS_MAX_SCANS || !ow_spiffs_scans[h])
         return -1;
 
     errno = 0;
-    struct dirent *e = readdir(ow_spiffs_dirs[h]);
+    struct dirent *e = readdir(ow_spiffs_scans[h]);
     if (!e)
     {
         if (errno)
@@ -2280,26 +2303,29 @@ ptrdiff_t urt_spiffs_dir_read(int h, char *name, size_t name_len, uint64_t *size
     if (len > name_len)
         len = name_len;
     memcpy(name, e->d_name, len);
-    *is_dir = (e->d_type == DT_DIR);
+
     *size = 0;
-    if (!*is_dir)
+    char full[128];
+    const size_t root = sizeof(OW_SPIFFS_ROOT) - 1;
+    if (root + 1 + len + 1 <= sizeof(full))
     {
-        // d_name is relative to the directory, and there is no fstatat here.
-        char full[128];
-        int n = snprintf(full, sizeof(full), "%s/%s", OW_SPIFFS_ROOT, e->d_name);
+        memcpy(full, OW_SPIFFS_ROOT, root);
+        full[root] = '/';
+        memcpy(full + root + 1, e->d_name, len);
+        full[root + 1 + len] = '\0';
         struct stat st;
-        if (n > 0 && (size_t)n < sizeof(full) && stat(full, &st) == 0)
+        if (stat(full, &st) == 0)
             *size = (uint64_t)st.st_size;
     }
     return (ptrdiff_t)len;
 }
 
-void urt_spiffs_dir_close(int h)
+void urt_spiffs_scan_close(int h)
 {
-    if (h < 0 || h >= OW_SPIFFS_MAX_DIRS || !ow_spiffs_dirs[h])
+    if (h < 0 || h >= OW_SPIFFS_MAX_SCANS || !ow_spiffs_scans[h])
         return;
-    closedir(ow_spiffs_dirs[h]);
-    ow_spiffs_dirs[h] = NULL;
+    closedir(ow_spiffs_scans[h]);
+    ow_spiffs_scans[h] = NULL;
 }
 
 ptrdiff_t urt_spiffs_write(int fd, const void *data, size_t length)
@@ -2318,7 +2344,10 @@ void urt_spiffs_close(int fd)
 uint64_t urt_spiffs_size(int fd)
 {
     struct stat st;
-    return fstat(fd, &st) == 0 ? (uint64_t)st.st_size : 0;
+    if (fstat(fd, &st) == 0)
+        return (uint64_t)st.st_size;
+    ow_spiffs_last_errno = errno;
+    return 0;
 }
 
 int64_t urt_spiffs_seek(int fd, int64_t offset, int whence)

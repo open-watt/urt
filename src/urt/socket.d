@@ -74,7 +74,8 @@ else version (Posix)
 
     alias _bind = urt.internal.os.bind, _listen = urt.internal.os.listen, _connect = urt.internal.os.connect,
         _accept = urt.internal.os.accept, _send = urt.internal.os.send, _sendto = urt.internal.os.sendto, _sendmsg = urt.internal.os.sendmsg,
-        _recv = urt.internal.os.recv, _recvfrom = urt.internal.os.recvfrom, _shutdown = urt.internal.os.shutdown,
+        _recv = urt.internal.os.recv, _recvfrom = urt.internal.os.recvfrom, _recvmsg = urt.internal.os.recvmsg,
+        _shutdown = urt.internal.os.shutdown,
         _close = urt.internal.os.close, _poll = urt.internal.os.poll;
 
     version = BSDSockets;
@@ -232,6 +233,11 @@ else version (lwIP)
 }
 else
     static assert(false, "Platform not supported");
+
+version (WinSock)
+    version = TestReceiveContext;
+else version (linux)
+    version = TestReceiveContext;
 
 nothrow @nogc:
 
@@ -773,25 +779,25 @@ Result recv(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, size_t
     }
 }
 
-Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, InetAddress* sender_address = null, size_t* bytes_received, InetAddress* local_address = null)
+Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, InetAddress* sender_address = null, size_t* bytes_received, InetAddress* destination_address = null, uint* interface_index = null)
 {
     version (SocketCallbacks)
     {
-        assert(local_address is null, "local_address not supported on callback backend");
+        assert(destination_address is null && interface_index is null, "receive context not supported on callback backend");
         return Result(_socket_backend.recvfrom(socket, buffer, flags, sender_address, bytes_received));
     }
     else
     {
-        char[sockaddr_storage.sizeof] addr_buffer = void;
+        align(size_t.sizeof) ubyte[sockaddr_storage.sizeof] addr_buffer = void;
         sockaddr* addr = cast(sockaddr*)addr_buffer.ptr;
 
-        if (local_address)
+        if (destination_address || interface_index)
         {
             version (WinSock)
             {
                 assert(WSARecvMsg, "WSARecvMsg not available!");
 
-                void[1500] ctrl = void; // HUGE BUFFER!
+                align(size_t.sizeof) ubyte[64] control = void;
 
                 WSABUF msg_buf;
                 msg_buf.buf = cast(char*)buffer.ptr;
@@ -802,8 +808,8 @@ Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, In
                 msg.namelen = addr_buffer.sizeof;
                 msg.lpBuffers = &msg_buf;
                 msg.dwBufferCount = 1;
-                msg.Control.buf = cast(char*)ctrl.ptr;
-                msg.Control.len = cast(uint)ctrl.length;
+                msg.Control.buf = cast(char*)control.ptr;
+                msg.Control.len = cast(uint)control.length;
                 msg.dwFlags = 0;
                 uint bytes;
                 int r = WSARecvMsg(socket.handle, &msg, &bytes, null, null);
@@ -815,28 +821,77 @@ Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, In
                     goto fail;
                 }
 
-                // parse the control messages
-                *local_address = InetAddress();
+                if (destination_address)
+                    *destination_address = InetAddress();
+                if (interface_index)
+                    *interface_index = 0;
                 for (WSACMSGHDR* c = WSA_CMSG_FIRSTHDR(&msg); c != null; c = WSA_CMSG_NXTHDR(&msg, c))
                 {
                     if (c.cmsg_level == IPPROTO_IP && c.cmsg_type == IP_PKTINFO)
                     {
                         IN_PKTINFO* pk = cast(IN_PKTINFO*)WSA_CMSG_DATA(c);
-                        *local_address = InetAddress(make_IPAddr(pk.ipi_addr), 0); // TODO: be nice to populate the listening port...
-                        // pk.ipi_ifindex   = receiving interface index
+                        if (destination_address)
+                            *destination_address = InetAddress(make_IPAddr(pk.ipi_addr), 0);
+                        if (interface_index)
+                            *interface_index = pk.ipi_ifindex;
                     }
                     if (c.cmsg_level == IPPROTO_IPV6 && c.cmsg_type == IPV6_PKTINFO)
                     {
                         IN6_PKTINFO* pk6 = cast(IN6_PKTINFO*)WSA_CMSG_DATA(c);
-                        *local_address = InetAddress(make_IPv6Addr(pk6.ipi6_addr), 0); // TODO: be nice to populate the listening port...
-                        // pk6.ipi6_ifindex = receiving interface index
+                        if (destination_address)
+                            *destination_address = InetAddress(make_IPv6Addr(pk6.ipi6_addr), 0);
+                        if (interface_index)
+                            *interface_index = pk6.ipi6_ifindex;
+                    }
+                }
+            }
+            else version (linux)
+            {
+                align(size_t.sizeof) ubyte[64] control = void;
+                iovec iov = iovec(buffer.ptr, buffer.length);
+                msghdr msg;
+                msg.msg_name = addr;
+                msg.msg_namelen = addr_buffer.sizeof;
+                msg.msg_iov = &iov;
+                msg.msg_iovlen = 1;
+                msg.msg_control = control.ptr;
+                msg.msg_controllen = control.length;
+
+                ptrdiff_t bytes = _recvmsg(socket.handle, &msg, map_message_flags(flags));
+                if (bytes >= 0)
+                    *bytes_received = bytes;
+                else
+                {
+                    *bytes_received = 0;
+                    goto fail;
+                }
+
+                if (destination_address)
+                    *destination_address = InetAddress();
+                if (interface_index)
+                    *interface_index = 0;
+                for (UrtCmsghdr* c = first_cmsg(msg); c; c = next_cmsg(msg, c))
+                {
+                    if (c.level == IPPROTO_IP && c.type == IP_PKTINFO)
+                    {
+                        UrtInPktinfo* info = cast(UrtInPktinfo*)cmsg_data(c);
+                        if (destination_address)
+                            *destination_address = InetAddress(make_IPAddr(info.address), 0);
+                        if (interface_index)
+                            *interface_index = info.interface_index;
+                    }
+                    else if (c.level == IPPROTO_IPV6 && c.type == IPV6_PKTINFO)
+                    {
+                        UrtIn6Pktinfo* info = cast(UrtIn6Pktinfo*)cmsg_data(c);
+                        if (destination_address)
+                            *destination_address = InetAddress(make_IPv6Addr(info.address), 0);
+                        if (interface_index)
+                            *interface_index = info.interface_index;
                     }
                 }
             }
             else
-            {
-                assert(false, "TODO: call recvmsg and all that...");
-            }
+                assert(false, "receive context not supported on this platform");
         }
         else
         {
@@ -2214,4 +2269,76 @@ version (WinSock)
     extern(Windows) int WSASendTo(SOCKET s, LPWSABUF lpBuffers, uint dwBufferCount, uint* lpNumberOfBytesSent, uint dwFlags, const(sockaddr)* lpTo, int iTolen, LPWSAOVERLAPPED lpOverlapped, LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 }
 
+version (linux)
+{
+    struct UrtCmsghdr
+    {
+        size_t length;
+        int level;
+        int type;
+    }
+
+    struct UrtInPktinfo
+    {
+        uint interface_index;
+        in_addr local_address;
+        in_addr address;
+    }
+
+    struct UrtIn6Pktinfo
+    {
+        in6_addr address;
+        uint interface_index;
+    }
+
+    UrtCmsghdr* first_cmsg(ref msghdr msg)
+        => msg.msg_controllen >= UrtCmsghdr.sizeof ? cast(UrtCmsghdr*)msg.msg_control : null;
+
+    UrtCmsghdr* next_cmsg(ref msghdr msg, UrtCmsghdr* current)
+    {
+        ubyte* next = cast(ubyte*)current + cmsg_align(current.length);
+        if (next + UrtCmsghdr.sizeof > cast(ubyte*)msg.msg_control + msg.msg_controllen)
+            return null;
+        return cast(UrtCmsghdr*)next;
+    }
+
+    void* cmsg_data(UrtCmsghdr* cmsg)
+        => cast(ubyte*)cmsg + cmsg_align(UrtCmsghdr.sizeof);
+
+    size_t cmsg_align(size_t length)
+        => (length + size_t.alignof - 1) & ~(size_t.alignof - 1);
+}
+
 } // SocketCallbacks
+
+
+version (TestReceiveContext) unittest
+{
+    Socket receiver;
+    Socket sender;
+    assert(create_socket(AddressFamily.ipv4, SocketType.datagram, Protocol.udp, receiver).succeeded);
+    scope(exit) receiver.close();
+    assert(create_socket(AddressFamily.ipv4, SocketType.datagram, Protocol.udp, sender).succeeded);
+    scope(exit) sender.close();
+
+    assert(receiver.set_socket_option(SocketOption.ip_pktinfo, true).succeeded);
+    InetAddress bound = InetAddress(IPAddr.any, 0);
+    assert(receiver.bind(bound).succeeded);
+    assert(receiver.get_socket_name(bound).succeeded);
+    InetAddress target = InetAddress(IPAddr.loopback, bound.port);
+
+    static immutable ubyte[1] payload = [ 0x5A ];
+    size_t sent;
+    assert(sender.sendto(payload, MsgFlags.none, &target, &sent).succeeded && sent == payload.length);
+
+    ubyte[1] received;
+    size_t length;
+    InetAddress source;
+    InetAddress destination;
+    uint interface_index;
+    assert(receiver.recvfrom(received, MsgFlags.none, &source, &length, &destination, &interface_index).succeeded);
+    assert(length == payload.length && received == payload);
+    assert(source.family == AddressFamily.ipv4 && source.port != 0);
+    assert(destination == InetAddress(IPAddr.loopback, 0));
+    assert(interface_index != 0);
+}

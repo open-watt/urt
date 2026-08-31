@@ -24,7 +24,8 @@ EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x00010000, LENGTH = 0x1206A0
+    /* FLASH includes unpacked RAM-image workspace; _image_limit is the packed boundary. */
+    FLASH (rx)  : ORIGIN = 0x00010000, LENGTH = 0x1385A0
     DTCM  (rw)  : ORIGIN = 0x003F0000, LENGTH = 60K - 512
     ITCM  (rwx) : ORIGIN = 0x003FEE00, LENGTH = 4608
     SRAM  (rwx) : ORIGIN = 0x00400100, LENGTH = 192K - 0x100

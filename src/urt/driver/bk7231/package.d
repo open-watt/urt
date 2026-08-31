@@ -1,6 +1,7 @@
 module urt.driver.bk7231;
 
 public import urt.driver.bk7231.irq;
+public import urt.driver.bk7231.pbuf : BekenEthernetInputHandler, beken_ethernet_input_handler;
 public import urt.driver.bk7231.timer;
 public import urt.driver.bk7231.uart;
 
@@ -23,12 +24,15 @@ extern(C) bool unpack_ram()
 
 extern(C) void sys_init()
 {
+    import urt.mem.pagepool : page_pool_init;
+
     install_exception_vectors();
     __register_frame_info(&__eh_frame_start, &__eh_frame_object);
 
     uart_hw_init(0, UartConfig.init);
     set_printf_port(1);
 
+    page_pool_init();
     bk_misc_init_start_type();
     driver_init();
     bk_misc_check_start_type();

@@ -145,6 +145,9 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     # ARMv5TE silently rounds unaligned halfword stores down.
     STRICT_ALIGN := 1
     MATTR = +strict-align
+    ifeq ($(PLATFORM),bk7231n)
+        TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
+    endif
     OS = baremetal
     RAM_IMAGE ?= raw
 else ifeq ($(PLATFORM),rp2350)

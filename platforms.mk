@@ -142,6 +142,9 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     # BK7231N adds BLE 5.0; BK7231T is Wi-Fi only. Same MCU peripherals.
     BUILDNAME := $(PLATFORM)
     PROCESSOR := arm968e-s
+    ifeq ($(PLATFORM),bk7231n)
+        TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
+    endif
     OS = baremetal
     RAM_IMAGE ?= raw
 else ifeq ($(PLATFORM),rp2350)

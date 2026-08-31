@@ -2,7 +2,8 @@ module urt.driver.bk7231.alloc;
 
 version (BK7231N) import urt.attribute : fast_data;
 import urt.mem.alloc : MemFlags;
-version (BK7231N) import urt.sync.critical : Critical;
+import urt.sync.critical : Critical;
+version (BK7231N) import urt.util : align_down;
 
 nothrow @nogc:
 
@@ -24,7 +25,10 @@ void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
         return (cast(AllocFn)&alloc_impl)(size, alignment, flags);
     }
     else
-        return picolibc_alloc(size, alignment);
+    {
+        alias AllocFn = void[] function(size_t, size_t) pure nothrow @nogc;
+        return (cast(AllocFn)&picolibc_alloc_impl)(size, alignment);
+    }
 }
 
 void _free(void* ptr) pure
@@ -35,7 +39,10 @@ void _free(void* ptr) pure
         (cast(FreeFn)&free_impl)(ptr);
     }
     else
-        picolibc_free(ptr);
+    {
+        alias FreeFn = void function(void*) pure nothrow @nogc;
+        (cast(FreeFn)&picolibc_free_impl)(ptr);
+    }
 }
 
 version (BK7231N) size_t _memsize(void* ptr) pure
@@ -68,24 +75,87 @@ void fast_free(void* ptr)
     version (BK7231N)
     {
         auto guard = _lock.acquire();
-        tlsf_free(_fast.tlsf, ptr);
+        deallocate(_fast, ptr);
     }
 }
 
-void fast_heap_stats(out size_t total, out size_t used, out size_t largest_free)
+void fast_heap_stats(out size_t total, out size_t used, out size_t peak_used, out size_t largest_free)
 {
     version (BK7231N)
-        heap_stats(_fast, total, used, largest_free);
+        heap_stats(_fast, total, used, peak_used, largest_free);
     else
-        total = used = largest_free = 0;
+        total = used = peak_used = largest_free = 0;
 }
 
-void sram_heap_stats(out size_t total, out size_t used, out size_t largest_free)
+void sram_heap_stats(out size_t total, out size_t used, out size_t peak_used, out size_t largest_free)
 {
     version (BK7231N)
-        heap_stats(_sram, total, used, largest_free);
+        heap_stats(_sram, total, used, peak_used, largest_free);
     else
-        picolibc_heap_stats(total, used, largest_free);
+        picolibc_heap_stats(total, used, peak_used, largest_free);
+}
+
+extern(C) void* pvPortMalloc(size_t size)
+{
+    if (!size)
+        size = uint.sizeof;
+    version (BK7231N)
+        return sram_alloc(size, 8);
+    else
+    {
+        auto guard = _lock.acquire();
+        return malloc(size);
+    }
+}
+
+extern(C) void vPortFree(void* ptr)
+{
+    if (!ptr)
+        return;
+    version (BK7231N)
+        sram_free(ptr);
+    else
+    {
+        auto guard = _lock.acquire();
+        free(ptr);
+    }
+}
+
+extern(C) void* pvPortRealloc(void* ptr, size_t size)
+{
+    if (!ptr)
+        return pvPortMalloc(size);
+    if (!size)
+    {
+        vPortFree(ptr);
+        return null;
+    }
+
+    version (BK7231N)
+    {
+        auto guard = _lock.acquire();
+        initialise();
+        return reallocate(_sram, ptr, size);
+    }
+    else
+    {
+        auto guard = _lock.acquire();
+        return realloc(ptr, size);
+    }
+}
+
+extern(C) size_t xPortGetFreeHeapSize()
+{
+    size_t total, used, peak, largest;
+    sram_heap_stats(total, used, peak, largest);
+    return total - used;
+}
+
+extern(C) size_t xPortGetMinimumEverFreeHeapSize()
+{
+    size_t total, used, peak, largest;
+    sram_heap_stats(total, used, peak, largest);
+    return total - peak;
 }
 
 version (BK7231N)
@@ -124,7 +194,7 @@ version (BK7231N)
 
         auto guard = _lock.acquire();
         initialise();
-        return tlsf_realloc(_sram.tlsf, ptr, size);
+        return reallocate(_sram, ptr, size);
     }
 
     pragma(mangle, "__malloc_malloc")
@@ -162,9 +232,11 @@ version (BK7231N)
 
 private:
 
+__gshared Critical _lock;
+
 version (BK7231N)
 {
-    enum size_t tlsf_control_bytes = 3200;
+    enum size_t tlsf_control_bytes = 912;
 
     alias tlsf_t = void*;
     alias pool_t = void*;
@@ -174,11 +246,13 @@ version (BK7231N)
     {
         tlsf_t tlsf;
         pool_t pool;
+        size_t total;
+        size_t used;
+        size_t peak_used;
     }
 
     struct HeapStats
     {
-        size_t total;
         size_t used;
         size_t largest_free;
     }
@@ -186,7 +260,6 @@ version (BK7231N)
     __gshared Pool _fast;
     __gshared Pool _sram;
     @fast_data align(16) __gshared ubyte[tlsf_control_bytes][2] _control;
-    __gshared Critical _lock;
     __gshared bool _initialised;
 
     extern(C) extern const ubyte _fast_heap_start, _fast_heap_end;
@@ -197,6 +270,8 @@ version (BK7231N)
         tlsf_t tlsf_create(void* mem);
         pool_t tlsf_add_pool(tlsf_t tlsf, void* mem, size_t bytes);
         size_t tlsf_size();
+        size_t tlsf_align_size();
+        size_t tlsf_pool_overhead();
         void* tlsf_memalign(tlsf_t tlsf, size_t alignment, size_t bytes);
         void* tlsf_realloc(tlsf_t tlsf, void* ptr, size_t bytes);
         void tlsf_free(tlsf_t tlsf, void* ptr);
@@ -220,7 +295,7 @@ version (BK7231N)
     void free_impl(void* ptr)
     {
         auto guard = _lock.acquire();
-        tlsf_free(owner(ptr).tlsf, ptr);
+        deallocate(*owner(ptr), ptr);
     }
 
     size_t memsize_impl(void* ptr)
@@ -242,11 +317,39 @@ version (BK7231N)
     void sram_free(void* ptr)
     {
         auto guard = _lock.acquire();
-        tlsf_free(_sram.tlsf, ptr);
+        deallocate(_sram, ptr);
     }
 
     void* allocate(ref Pool pool, size_t size, size_t alignment)
-        => pool.tlsf ? tlsf_memalign(pool.tlsf, alignment, size) : null;
+    {
+        void* ptr = pool.tlsf ? tlsf_memalign(pool.tlsf, alignment, size) : null;
+        if (ptr)
+        {
+            pool.used += tlsf_block_size(ptr);
+            if (pool.used > pool.peak_used)
+                pool.peak_used = pool.used;
+        }
+        return ptr;
+    }
+
+    void* reallocate(ref Pool pool, void* ptr, size_t size)
+    {
+        size_t old_size = tlsf_block_size(ptr);
+        void* result = tlsf_realloc(pool.tlsf, ptr, size);
+        if (result)
+        {
+            pool.used = pool.used - old_size + tlsf_block_size(result);
+            if (pool.used > pool.peak_used)
+                pool.peak_used = pool.used;
+        }
+        return result;
+    }
+
+    void deallocate(ref Pool pool, void* ptr)
+    {
+        pool.used -= tlsf_block_size(ptr);
+        tlsf_free(pool.tlsf, ptr);
+    }
 
     void initialise()
     {
@@ -265,24 +368,25 @@ version (BK7231N)
         assert(tlsf_size() <= control.length);
         pool.tlsf = tlsf_create(control.ptr);
         pool.pool = tlsf_add_pool(pool.tlsf, cast(void*)start, size);
+        pool.total = align_down(size - tlsf_pool_overhead(), tlsf_align_size());
     }
 
-    void heap_stats(ref Pool pool, out size_t total, out size_t used, out size_t largest_free)
+    void heap_stats(ref Pool pool, out size_t total, out size_t used, out size_t peak_used, out size_t largest_free)
     {
         auto guard = _lock.acquire();
         initialise();
 
         HeapStats stats;
         tlsf_walk_pool(pool.pool, &walk_pool, &stats);
-        total = stats.total;
+        total = pool.total;
         used = stats.used;
+        peak_used = pool.peak_used;
         largest_free = stats.largest_free;
     }
 
     extern(C) void walk_pool(void*, size_t size, int used, void* context)
     {
         HeapStats* stats = cast(HeapStats*)context;
-        stats.total += size;
         if (used)
             stats.used += size;
         else if (size > stats.largest_free)
@@ -295,7 +399,20 @@ else
 
     extern(C) void* malloc(size_t size) pure;
     extern(C) void free(void* ptr) pure;
+    extern(C) void* realloc(void* ptr, size_t size) pure;
     extern(C) void* sbrk(ptrdiff_t increment) pure;
+
+    void[] picolibc_alloc_impl(size_t size, size_t alignment)
+    {
+        auto guard = _lock.acquire();
+        return picolibc_alloc(size, alignment);
+    }
+
+    void picolibc_free_impl(void* ptr)
+    {
+        auto guard = _lock.acquire();
+        picolibc_free(ptr);
+    }
 
     void[] picolibc_alloc(size_t size, size_t alignment) pure
     {
@@ -316,12 +433,14 @@ else
         free((cast(void**)ptr)[-1]);
     }
 
-    void picolibc_heap_stats(out size_t total, out size_t used, out size_t largest_free)
+    void picolibc_heap_stats(out size_t total, out size_t used, out size_t peak_used, out size_t largest_free)
     {
+        auto guard = _lock.acquire();
         size_t start = cast(size_t)&__heap_start;
         total = cast(size_t)&__heap_end - start;
         void* current = sbrk(0);
         used = current > cast(void*)start ? cast(size_t)current - start : 0;
+        peak_used = used;
         largest_free = total - used;
     }
 }
@@ -331,15 +450,15 @@ void report_oom(size_t size)
     import urt.driver.bk7231.uart : uart0_hw_puts;
 
     char[16] buf = void;
-    size_t total, used, largest;
+    size_t total, used, peak, largest;
     uart0_hw_puts("\r\nOOM: alloc ");
     uart0_hw_puts(hex(buf, size));
-    fast_heap_stats(total, used, largest);
+    fast_heap_stats(total, used, peak, largest);
     uart0_hw_puts(" DTCM ");
     uart0_hw_puts(hex(buf, used));
     uart0_hw_puts("/");
     uart0_hw_puts(hex(buf, total));
-    sram_heap_stats(total, used, largest);
+    sram_heap_stats(total, used, peak, largest);
     uart0_hw_puts(" SRAM ");
     uart0_hw_puts(hex(buf, used));
     uart0_hw_puts("/");

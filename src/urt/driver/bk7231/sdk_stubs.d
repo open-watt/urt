@@ -19,11 +19,5 @@ void bk_trap_pabt() {}
 void bk_trap_dabt() {}
 void bk_trap_resv() {}
 void vTaskSwitchContext() {}
-size_t xPortGetFreeHeapSize() { return cast(size_t)&_vendor_heap_size; }
-size_t xPortGetMinimumEverFreeHeapSize() { return cast(size_t)&_vendor_heap_size; }
 __gshared void* pxCurrentTCB;
 __gshared uint ulCriticalNesting;
-
-private:
-
-extern(C) extern const ubyte _vendor_heap_size;

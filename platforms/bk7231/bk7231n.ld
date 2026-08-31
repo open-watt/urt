@@ -12,8 +12,7 @@
  *   DTCM   0x003F0000..0x003FEE00   data, TLSF controls, fast heap, UND/ABT/main stacks
  *   ITCM   0x003FEE00..0x00400000   interrupt and flash-control code
  *   SRAM   0x00400000..0x00400100   vectors and exception register capture
- *   SRAM   0x00400100..0x00426000   data, BSS, and the DMA-capable TLSF heap
- *   SRAM   0x00426000..0x00430000   vendor heap_4
+ *   SRAM   0x00400100..0x00430000   data, BSS, and the DMA-capable TLSF heap
  *
  * Flash addresses below are logical addresses after controller CRC removal.
  */
@@ -178,13 +177,9 @@ SECTIONS
         __bss_end__ = .;
     } > SRAM
 
-    /* Vendor heap_4 occupies _empty_ram through the fixed SRAM top sentinel. */
-    _vendor_heap_size = 40K;
     _stack_size       = 8K;
     _abt_stack_size   = 1K;
     _und_stack_size   = 1K;
-
-    _empty_ram = ORIGIN(SRAM) + LENGTH(SRAM) - _vendor_heap_size;
 
     _stack_top    = ORIGIN(DTCM) + LENGTH(DTCM);
     _stack_bottom = _stack_top - _stack_size;
@@ -195,7 +190,7 @@ SECTIONS
     ASSERT(_fast_heap_end >= _fast_heap_start, "DTCM data and stacks overlap")
 
     __heap_start = ALIGN(_bss_end, 8);
-    __heap_end   = _empty_ram;
+    __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM);
     ASSERT(__heap_end - __heap_start >= 32K, "static data has squeezed the heap below 32K")
     _stack_low = _stack_bottom;
     __StackTop = _stack_top;

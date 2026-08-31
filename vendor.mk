@@ -37,7 +37,7 @@ endif
 ifdef TLSF_DIR
   TLSF_OBJS    = $(patsubst $(TLSF_DIR)/%.c,$(OBJDIR)/tlsf/%.o,$(TLSF_SRCS))
   TLSF_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
-      -ffunction-sections -fdata-sections -DNDEBUG -fcommon \
+      -ffunction-sections -fdata-sections -DNDEBUG -fcommon $(TLSF_DEFINES) \
       -include $(TLSF_DIR)/tlsf_silent.h
 endif
 
@@ -66,7 +66,8 @@ ifdef MBEDTLS_LIB
 endif
 
 ifdef TLSF_DIR
-$(OBJDIR)/tlsf/%.o: $(TLSF_DIR)/%.c
+$(OBJDIR)/tlsf/%.o: $(TLSF_DIR)/%.c $(TLSF_DIR)/tlsf.h $(TLSF_DIR)/tlsf_silent.h \
+    $(URT_ROOT)platforms.mk $(URT_ROOT)vendor.mk
 	@mkdir -p $(OBJDIR)/tlsf
 	$(BAREMETAL_GCC) $(TLSF_CFLAGS) -c -o $@ $<
 endif

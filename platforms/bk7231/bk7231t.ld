@@ -11,10 +11,9 @@
  * Runtime SRAM:
  *   0x00400000..0x00400100   vectors and exception register capture
  *   0x00400100..__heap_start  data and BSS
- *   __heap_start..0x00433800  general heap
- *   0x00433800..0x00434000   UND and ABT stacks
- *   0x00434000..0x00436000   main stack
- *   0x00436000..0x00440000   vendor heap_4
+ *   __heap_start..0x0043D800  general heap
+ *   0x0043D800..0x0043E000   UND and ABT stacks
+ *   0x0043E000..0x00440000   main stack
  *
  * Flash addresses below are logical addresses after controller CRC removal.
  */
@@ -178,14 +177,11 @@ SECTIONS
         __bss_end__ = .;
     } > SRAM
 
-    /* Vendor heap_4 occupies _empty_ram through the fixed SRAM top sentinel. */
-    _vendor_heap_size = 40K;
     _stack_size       = 8K;
     _abt_stack_size   = 1K;
     _und_stack_size   = 1K;
 
-    _empty_ram    = ORIGIN(SRAM) + LENGTH(SRAM) - _vendor_heap_size;
-    _stack_top    = _empty_ram;
+    _stack_top    = ORIGIN(SRAM) + LENGTH(SRAM);
     _stack_bottom = _stack_top - _stack_size;
     _abt_stack_start = _stack_bottom - _abt_stack_size;
     _und_stack_start = _abt_stack_start - _und_stack_size;

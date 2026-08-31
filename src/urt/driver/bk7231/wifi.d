@@ -14,12 +14,24 @@ import urt.result : Result;
 
 nothrow @nogc:
 
+/+ =========================================================================
+   TODO: L-SIG monitor observations
+
+   If CFG_SUPPORT_ALIOS is enabled to harvest real-time air statistics,
+   lsig_input() may invoke the monitor callback with a reconstructed 30-byte
+   header and a larger over-air length. Do not expose it as a normal Packet.
+   Either suppress it or extend raw RX with explicit synthetic/original-length
+   metadata first.
+   ========================================================================= +/
+
 enum uint num_wifi = 1;
 enum ubyte wifi_max_ap_clients = 0;
 
 void wifi_hw_set_ready_callback(WifiReadyCallback cb)
 {
     _ready_cb = cb;
+    if (cb && needs_service_wake())
+        cb();
 }
 
 bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
@@ -73,6 +85,8 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
         _channel = cfg.channel;
     }
     beken_ethernet_input_handler(&ethernet_input);
+    if (_ready_cb && needs_service_wake())
+        _ready_cb();
     return true;
 }
 
@@ -88,13 +102,14 @@ void wifi_hw_close(ubyte port)
         release_raw_rx_pages();
     }
     if (_scanning)
-        ow_rw_scan_cancel();
+    {
+        _scan_cancelled = true;
+        _scan_cancel_pending = ow_rw_scan_cancel() == 0;
+    }
     stop_sta();
     _sta_active = false;
     beken_ethernet_input_handler(null);
     _mode = WifiMode.none;
-    _scanning = false;
-    _scan_cancelled = false;
     _open = false;
     _rx_cb = null;
     _raw_rx_cb = null;
@@ -127,6 +142,8 @@ bool wifi_hw_set_mode(ubyte port, WifiMode mode)
         _sta_active = false;
     }
     _mode = WifiMode.none;
+    if (mode == WifiMode.monitor && (_sta_scan_pending || _scan_cancel_pending))
+        return false;
 
     final switch (mode)
     {
@@ -168,8 +185,8 @@ bool wifi_hw_sta_configure(ubyte port, ref const WifiStaConfig cfg)
 {
     if (!_open || _sta_state != StaState.idle)
         return false;
-    if (cfg.ssid.length == 0 || cfg.ssid.length > 32 || cfg.password.length > 63 ||
-        (cfg.band != WifiBand.any && cfg.band != WifiBand._2_4ghz))
+    if (cfg.ssid.length == 0 || cfg.ssid.length > 32 ||
+        cfg.password.length > 63 || (cfg.band != WifiBand.any && cfg.band != WifiBand._2_4ghz))
     {
         _sta_status = StaStatus.configuration_rejected;
         return false;
@@ -211,7 +228,8 @@ const(char)[] wifi_hw_sta_status_message(ubyte port)
 
 bool wifi_hw_sta_connect(ubyte port)
 {
-    if (!_open || !_mac_ready || _mode != WifiMode.sta || !_sta_active || _scanning ||
+    if (!_open || !_mac_ready || _mode != WifiMode.sta || !_sta_active ||
+        _scanning || _sta_scan_pending || _scan_cancel_pending ||
         _sta_state != StaState.idle || _sta_ssid_len == 0)
         return false;
 
@@ -258,8 +276,8 @@ bool wifi_hw_scan_start(ubyte port, ref const WifiScanConfig cfg)
     bool has_bssid;
     foreach (b; cfg.bssid)
         has_bssid |= b != 0;
-    if (!_open || _mode == WifiMode.monitor || _scanning || _sta_state != StaState.idle ||
-        cfg.ssid.length || has_bssid ||
+    if (!_open || _mode == WifiMode.monitor || _scanning || _sta_scan_pending || _scan_cancel_pending ||
+        _sta_state != StaState.idle || cfg.ssid.length || has_bssid ||
         cfg.channel || cfg.passive || cfg.dwell_ms ||
         (cfg.band != WifiBand.any && cfg.band != WifiBand._2_4ghz))
         return false;
@@ -274,7 +292,10 @@ bool wifi_hw_scan_start(ubyte port, ref const WifiScanConfig cfg)
 void wifi_hw_scan_stop(ubyte port)
 {
     if (_scanning && !_scan_cancelled && ow_rw_scan_cancel() == 0)
+    {
         _scan_cancelled = true;
+        _scan_cancel_pending = true;
+    }
 }
 
 size_t wifi_hw_scan_get_results(ubyte port, WifiScanResult[] buf)
@@ -316,8 +337,8 @@ size_t wifi_hw_scan_get_results(ubyte port, WifiScanResult[] buf)
 
 bool wifi_hw_tx(ubyte port, WifiVif vif, const(ubyte)[] data)
 {
-    if (!_open || vif != WifiVif.sta || !_sta_active || _sta_state != StaState.connected ||
-        _sta_vif == no_vif ||
+    if (!_open || vif != WifiVif.sta || !_sta_active ||
+        _sta_state != StaState.connected || _sta_vif == no_vif ||
         data.length < 14 || data.length > max_frame)
         return false;
 
@@ -331,14 +352,12 @@ void wifi_hw_set_rx_callback(ubyte port, WifiRxCallback cb)
 
 uint wifi_hw_take_rx_drops(ubyte port)
 {
-    uint n = _rx_drops;
-    _rx_drops = 0;
-    return n;
+    return take_drop_count(_rx_drops);
 }
 
 bool wifi_hw_raw_tx(ubyte port, const(ubyte)[] frame)
 {
-    if (!_open || frame.length < 10 || frame.length > max_raw_tx_frame)
+    if (!_open || frame.length < 10 || frame.length > max_raw_frame)
         return false;
     return rwm_raw_frame_with_cb(cast(ubyte*)frame.ptr, cast(int)frame.length, null, null) != 0;
 }
@@ -352,9 +371,7 @@ void wifi_hw_set_raw_rx_callback(ubyte port, WifiRawRxCallback cb)
 
 uint wifi_hw_take_raw_rx_drops(ubyte port)
 {
-    uint n = _raw_rx_drops;
-    _raw_rx_drops = 0;
-    return n;
+    return take_drop_count(_raw_rx_drops);
 }
 
 bool wifi_hw_get_mac(ubyte port, WifiVif vif, ref ubyte[6] mac)
@@ -423,9 +440,7 @@ void wifi_hw_set_event_callback(ubyte port, WifiEventCallback cb)
 
 uint wifi_hw_take_event_drops(ubyte port)
 {
-    uint n = _event_drops;
-    _event_drops = 0;
-    return n;
+    return take_drop_count(_event_drops);
 }
 
 bool wifi_hw_service(ubyte port, size_t budget)
@@ -505,8 +520,7 @@ enum ubyte bk_role_null = 0;
 enum ubyte bk_role_sta = 2;
 
 enum uint max_frame = 1600;
-enum uint max_raw_tx_frame = 2346;
-enum uint monitor_frame_length = 30;
+enum uint max_raw_frame = 2346;
 enum ubyte max_raw_rx_pending = 4;
 
 enum ubyte no_vif = 0xFF;
@@ -650,6 +664,26 @@ struct RawRxInfo
 
 alias MonitorDataCallback = extern(C) void function(ubyte* data, int len, WifiLinkInfo* info) nothrow @nogc;
 
+immutable const(char)[][StaStatus.max + 1] sta_status_messages = [
+    "idle",
+    "vif add failed",
+    "unsupported security",
+    "configuration rejected",
+    "deriving key",
+    "connecting",
+    "disconnected",
+    "scan failed",
+    "network not found",
+    "connect request failed",
+    "connected",
+    "beacon lost",
+    "auth failed",
+    "association refused",
+    "association failed",
+    "key install failed",
+    "control port failed",
+];
+
 __gshared
 {
     bool _open;
@@ -658,6 +692,7 @@ __gshared
     bool _monitor;
     bool _scanning;
     bool _scan_cancelled;
+    bool _scan_cancel_pending;
     ubyte _channel;
     byte _rssi;
     WifiMode _mode;
@@ -667,6 +702,7 @@ __gshared
     StaState _sta_state;
     ubyte _sta_vif;
     bool _sta_vif_pending;
+    bool _sta_scan_pending;
     ubyte _sta_ap_idx;
     ubyte _key_pending;
     bool _auth_pending;
@@ -728,18 +764,17 @@ extern(C) nothrow @nogc
     int ow_rw_transfer(ubyte vif_idx, ubyte* buf, uint len);
     byte ow_rw_get_rssi();
     int ow_rw_connect(ubyte vif_idx, const(ubyte)* ssid, ubyte ssid_len,
-        const(ubyte)* bssid, const(ubyte)* ie, ushort ie_len, int psk,
-        byte* rssi, ubyte* channel);
+                      const(ubyte)* bssid, const(ubyte)* ie, ushort ie_len, int psk,
+                      byte* rssi, ubyte* channel);
     int ow_rw_disconnect(ubyte vif_idx, ushort reason);
-    int ow_rw_key_add_ccmp(ubyte vif_idx, ubyte sta_idx, ubyte key_idx,
-        const(ubyte)* key, ubyte len);
+    int ow_rw_key_add_ccmp(ubyte vif_idx, ubyte sta_idx, ubyte key_idx, const(ubyte)* key, ubyte len);
     int ow_rw_control_port(ubyte sta_idx, int open);
     int ow_rw_classify(const(KeMsg)* m);
     void ow_rw_add_if_cfm(const(KeMsg)* m, ubyte* status, ubyte* vif_idx);
     void ow_rw_scanu_start_cfm(const(KeMsg)* m, ubyte* status, ubyte* vif_idx);
     void ow_rw_connect_cfm(const(KeMsg)* m, ubyte* status);
     void ow_rw_connect_ind(const(KeMsg)* m, ushort* status, ubyte* vif_idx,
-        ubyte* ap_idx, ubyte* bssid, ushort* aid);
+                           ubyte* ap_idx, ubyte* bssid, ushort* aid);
     void ow_rw_disconnect_ind(const(KeMsg)* m, ubyte* vif_idx, ushort* reason);
     void ow_rw_fail_ind(const(KeMsg)* m, ushort* status);
     void ow_rw_key_add_cfm(const(KeMsg)* m, ubyte* status, ubyte* hw_key_idx);
@@ -813,7 +848,7 @@ bool prepare_raw_rx_pages()
     release_raw_rx_pages();
     foreach (_; 0 .. max_raw_rx_pending)
     {
-        Page* page = page_alloc(monitor_frame_length, ubyte.alignof, RawRxInfo.sizeof);
+        Page* page = page_alloc(max_raw_frame, ubyte.alignof, RawRxInfo.sizeof);
         if (!page)
             break;
         page.next = _raw_rx_free;
@@ -893,9 +928,11 @@ void release_raw_rx_pages()
 
 extern(C) void monitor_callback(ubyte* data, int len, WifiLinkInfo* info)
 {
-    if (!_raw_rx_cb || !data || len <= 0)
+    if (!_raw_rx_cb || !data || len <= 0 || len > max_raw_frame)
     {
         ++_raw_rx_drops;
+        if (_ready_cb)
+            _ready_cb();
         return;
     }
 
@@ -903,15 +940,16 @@ extern(C) void monitor_callback(ubyte* data, int len, WifiLinkInfo* info)
     if (!page)
     {
         ++_raw_rx_drops;
+        if (_ready_cb)
+            _ready_cb();
         return;
     }
-    // The SDK reports the over-air length for a 30-byte synthetic header.
-    memcpy(page.data.ptr, data, monitor_frame_length);
+    memcpy(page.data.ptr, data, len);
     RawRxInfo* rx_info = raw_rx_info(page);
     rx_info.rssi = info ? info.rssi : 0;
     rx_info.channel = _channel;
 
-    page.length = monitor_frame_length;
+    page.length = cast(ushort)len;
     immutable bool prev = irq_disable();
     if (_raw_rx_tail)
         _raw_rx_tail.next = page;
@@ -927,26 +965,7 @@ extern(C) void monitor_callback(ubyte* data, int len, WifiLinkInfo* info)
 
 const(char)[] sta_status_message(StaStatus status)
 {
-    final switch (status)
-    {
-        case StaStatus.idle:                   return "idle";
-        case StaStatus.vif_add_failed:         return "vif add failed";
-        case StaStatus.unsupported_security:   return "unsupported security";
-        case StaStatus.configuration_rejected: return "configuration rejected";
-        case StaStatus.deriving_key:           return "deriving key";
-        case StaStatus.connecting:             return "connecting";
-        case StaStatus.disconnected:           return "disconnected";
-        case StaStatus.scan_failed:            return "scan failed";
-        case StaStatus.network_not_found:      return "network not found";
-        case StaStatus.connect_request_failed: return "connect request failed";
-        case StaStatus.connected:              return "connected";
-        case StaStatus.beacon_lost:            return "beacon lost";
-        case StaStatus.auth_failed:             return "auth failed";
-        case StaStatus.association_refused:     return "association refused";
-        case StaStatus.association_failed:      return "association failed";
-        case StaStatus.key_install_failed:      return "key install failed";
-        case StaStatus.control_port_failed:     return "control port failed";
-    }
+    return sta_status_messages[status];
 }
 
 WifiAuth scan_auth(int security)
@@ -954,6 +973,8 @@ WifiAuth scan_auth(int security)
 
 void stop_sta()
 {
+    if (_sta_state == StaState.scanning && _sta_scan_pending && ow_rw_scan_cancel() == 0)
+        _scan_cancel_pending = true;
     if (_sta_vif != no_vif && _sta_state >= StaState.associating)
         ow_rw_disconnect(_sta_vif, reason_deauth_leaving);
     _supp.disconnected(reason_deauth_leaving);
@@ -1004,6 +1025,7 @@ bool sta_scan()
         _sta_status = StaStatus.scan_failed;
         return false;
     }
+    _sta_scan_pending = true;
     _sta_state = StaState.scanning;
     return true;
 }
@@ -1027,8 +1049,7 @@ void sta_join()
         bssid, ie, ie_length, psk, &_rssi, &_channel);
     if (rc != 0)
     {
-        StaStatus status = rc == -2
-            ? StaStatus.network_not_found : StaStatus.connect_request_failed;
+        StaStatus status = rc == -2 ? StaStatus.network_not_found : StaStatus.connect_request_failed;
         sta_failed(status, 0);
         return;
     }
@@ -1158,32 +1179,39 @@ extern(C) void __wrap_rwnx_handle_recv_msg(KeMsg* m)
             {
                 bool cancelled = _scan_cancelled;
                 _scanning = false;
-                _scan_cancelled = false;
                 if (!cancelled)
                     push_event(WifiEventRecord(WifiEvent.scan_done));
+                else if (!_scan_cancel_pending)
+                    _scan_cancelled = false;
             }
-            else if (_sta_state == StaState.scanning && vif == _sta_vif)
+            else if (_sta_scan_pending && vif == _sta_vif)
             {
-                if (status == 0)
-                    sta_join();
-                else
-                    sta_failed(StaStatus.scan_failed, status);
+                _sta_scan_pending = false;
+                if (_sta_state == StaState.scanning)
+                {
+                    if (status == 0)
+                        sta_join();
+                    else
+                        sta_failed(StaStatus.scan_failed, status);
+                }
             }
             break;
         }
         case OwRwMsg.scan_cancel_cfm:
             _scanning = false;
             _scan_cancelled = false;
+            _scan_cancel_pending = false;
+            _sta_scan_pending = false;
             break;
         case OwRwMsg.beacon_lose_ind:
-            if (_sta_state != StaState.idle)
+            if (_sta_state >= StaState.keying)
                 sta_failed(StaStatus.beacon_lost, 0);
             break;
         case OwRwMsg.auth_fail_ind:
         {
             ushort status;
             ow_rw_fail_ind(m, &status);
-            if (_sta_state != StaState.idle)
+            if (_sta_state == StaState.associating)
             {
                 StaStatus failure = status == reason_too_many_stations
                     ? StaStatus.association_refused : StaStatus.auth_failed;
@@ -1195,7 +1223,7 @@ extern(C) void __wrap_rwnx_handle_recv_msg(KeMsg* m)
         {
             ushort status;
             ow_rw_fail_ind(m, &status);
-            if (_sta_state != StaState.idle)
+            if (_sta_state == StaState.associating)
             {
                 StaStatus failure = status == status_too_many_stations
                     ? StaStatus.association_refused : StaStatus.association_failed;
@@ -1207,7 +1235,7 @@ extern(C) void __wrap_rwnx_handle_recv_msg(KeMsg* m)
         {
             ushort status;
             ow_rw_fail_ind(m, &status);
-            if (_sta_state != StaState.idle)
+            if (_sta_state >= StaState.keying)
                 sta_failed(StaStatus.disconnected, status);
             break;
         }
@@ -1216,7 +1244,7 @@ extern(C) void __wrap_rwnx_handle_recv_msg(KeMsg* m)
             ubyte status;
             ow_rw_connect_cfm(m, &status);
             if (status != 0 && _sta_state == StaState.associating)
-                sta_failed(StaStatus.connect_request_failed, 0);
+                sta_failed(StaStatus.connect_request_failed, status);
             break;
         }
         case OwRwMsg.connect_ind:
@@ -1225,7 +1253,7 @@ extern(C) void __wrap_rwnx_handle_recv_msg(KeMsg* m)
             ubyte vif, ap_idx;
             ubyte[6] bssid = void;
             ow_rw_connect_ind(m, &status, &vif, &ap_idx, bssid.ptr, &aid);
-            if (vif != _sta_vif)
+            if (vif != _sta_vif || _sta_state != StaState.associating)
                 break;
             if (status != 0)
             {
@@ -1244,7 +1272,7 @@ extern(C) void __wrap_rwnx_handle_recv_msg(KeMsg* m)
             ushort reason;
             ow_rw_disconnect_ind(m, &vif, &reason);
             writeDebug("wifi: sta disconnect ind reason=", reason);
-            if (vif == _sta_vif && _sta_state != StaState.idle)
+            if (vif == _sta_vif && _sta_state >= StaState.associating)
                 sta_failed(StaStatus.disconnected, reason);
             break;
         }
@@ -1282,6 +1310,23 @@ void push_event(WifiEventRecord event)
         ++_event_drops;
     else if (_ready_cb)
         _ready_cb();
+}
+
+uint take_drop_count(ref uint count)
+{
+    immutable bool prev = irq_disable();
+    uint result = count;
+    count = 0;
+    if (prev)
+        irq_enable();
+    return result;
+}
+
+bool needs_service_wake()
+{
+    return _rx_pending || _raw_rx_pending || !_events.empty || _scanning ||
+        _sta_vif_pending || _sta_scan_pending || _scan_cancel_pending ||
+        _sta_state == StaState.deriving;
 }
 
 extern(C) int ethernetif_init(void* netif)

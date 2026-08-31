@@ -172,7 +172,6 @@ extern(C) void ethernetif_input(int vif, Pbuf* p)
 }
 
 private:
-
 enum ushort pbuf_offset = 8;
 enum size_t pbuf_headroom = ushort.sizeof + Pbuf.sizeof;
 enum ubyte[5] protocol_headrooms = [74, 54, 14, 0, 0];

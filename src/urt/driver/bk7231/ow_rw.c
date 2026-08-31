@@ -114,9 +114,8 @@ int8_t ow_rw_get_rssi(void)
     return rx_rssi;
 }
 
-int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len,
-                  const uint8_t *bssid, const uint8_t *ie, uint16_t ie_len,
-                  int psk, int8_t *rssi, uint8_t *channel)
+int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len, const uint8_t *bssid,
+                  const uint8_t *ie, uint16_t ie_len, int psk, int8_t *rssi, uint8_t *channel)
 {
     CONNECT_PARAM_T c;
     struct mac_scan_result *bss;
@@ -168,8 +167,7 @@ int ow_rw_disconnect(uint8_t vif_idx, uint16_t reason)
     return rw_msg_send(req, SM_DISCONNECT_CFM, NULL);
 }
 
-int ow_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx,
-                       const uint8_t *key, uint8_t len)
+int ow_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx, const uint8_t *key, uint8_t len)
 {
     KEY_PARAM_T k;
     os_memset(&k, 0, sizeof(k));
@@ -242,9 +240,8 @@ void ow_rw_connect_cfm(const struct ke_msg *m, uint8_t *status)
     *status = c->status;
 }
 
-void ow_rw_connect_ind(const struct ke_msg *m, uint16_t *status,
-                       uint8_t *vif_idx, uint8_t *ap_idx, uint8_t bssid[6],
-                       uint16_t *aid)
+void ow_rw_connect_ind(const struct ke_msg *m, uint16_t *status, uint8_t *vif_idx,
+                       uint8_t *ap_idx, uint8_t bssid[6], uint16_t *aid)
 {
     const struct sm_connect_indication *c = (const struct sm_connect_indication *)m->param;
     *status = c->status_code;

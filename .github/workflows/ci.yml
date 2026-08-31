@@ -36,7 +36,7 @@ jobs:
       - name: Setup D compiler
         uses: dlang-community/setup-dlang@v2
         with:
-          compiler: ${{ matrix.compiler == 'dmd' && 'dmd-master' || matrix.compiler }}
+          compiler: ${{ matrix.compiler }}
 
       - name: Install mbedtls (Linux host)
         if: matrix.os == 'ubuntu'

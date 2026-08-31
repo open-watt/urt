@@ -135,9 +135,6 @@ static if (__VERSION__ >= 2113)
 class Object
 {
 @nogc:
-    static if (__VERSION__ >= 2113)
-        void* __monitor;
-
     size_t toHash() @trusted nothrow
     {
         size_t addr = cast(size_t) cast(void*) this;

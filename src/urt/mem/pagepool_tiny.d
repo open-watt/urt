@@ -90,7 +90,7 @@ template PagePool(
             return null;
         }
         size_t block_size = (allocation_header_size + bytes + 7) & ~cast(size_t)7;
-        void[] mem = alloc(block_size, 8);
+        void[] mem = alloc(block_size, 8, MemFlags.dma);
         if (!mem.ptr)
         {
             record_jumbo_failure();
@@ -318,7 +318,7 @@ template PagePool(
             ++_allocated_pages[category];
         }
 
-        void[] mem = alloc(page_size(category), 8);
+        void[] mem = alloc(page_size(category), 8, MemFlags.dma);
         if (mem.ptr)
             return cast(AllocationHeader*)mem.ptr;
 

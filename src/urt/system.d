@@ -183,6 +183,30 @@ SystemInfo get_sysinfo()
 
         r.uptime = get_app_time();
     }
+    else version (Beken)
+    {
+        import urt.driver.bk7231.alloc : fast_heap_stats, sram_heap_stats;
+
+        size_t total, used, peak, largest;
+        sram_heap_stats(total, used, peak, largest);
+        r.pools[0].name = "SRAM";
+        r.pools[0].total = total;
+        r.pools[0].used = used;
+        r.pools[0].peak_used = peak;
+        r.pools[0].largest_free = largest;
+
+        version (BK7231N)
+        {
+            fast_heap_stats(total, used, peak, largest);
+            r.pools[1].name = "DTCM";
+            r.pools[1].total = total;
+            r.pools[1].used = used;
+            r.pools[1].peak_used = peak;
+            r.pools[1].largest_free = largest;
+        }
+
+        r.uptime = get_app_time();
+    }
     else version (Bouffalo)
     {
         import urt.driver.bl_common.alloc : num_pools, query_pool_stats, PoolStats;

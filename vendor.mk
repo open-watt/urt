@@ -1,13 +1,11 @@
-# Bouffalo vendor C deps (tlsf, mbedtls, BL808 M0 wifi/psram). Included via
-# platforms.mk so consumers inherit the paths, object lists, compile rules and
-# -L/-I without duplicating them. URT_ROOT resolves the trees whether make runs
-# from the URT root or a consumer root. OBJDIR comes from the consumer, hence
-# the deferred (=) object lists.
+# Embedded C dependencies included through platforms.mk.
+
+ifneq ($(filter bl808 bl618 bk7231n,$(PLATFORM)),)
+TLSF_DIR  := $(URT_ROOT)third_party/tlsf
+TLSF_SRCS := $(TLSF_DIR)/tlsf.c
+endif
 
 ifneq ($(filter bl808 bl618,$(PLATFORM)),)
-
-BL_TLSF_DIR  := $(URT_ROOT)third_party/tlsf
-BL_TLSF_SRCS := $(BL_TLSF_DIR)/tlsf.c
 
 # rv32 cores (BL618 + BL808 M0) share the BL618 .a; rv64 D0 uses its own. Key
 # on ARCH so a defaulted PROCESSOR can't pick the wrong-width archive.
@@ -33,10 +31,14 @@ ifeq ($(BUILDNAME),bl808-m0)
   BL_PSRAM_SRCS := $(wildcard $(BL_PSRAM_DIR)/src/*.c)
 endif
 
+endif
+
 # BAREMETAL_SPECS routes a bare cross-gcc to picolibc's hosted headers.
-ifdef BL_TLSF_DIR
-  BL_TLSF_OBJS    = $(patsubst $(BL_TLSF_DIR)/%.c,$(OBJDIR)/bl_tlsf/%.o,$(BL_TLSF_SRCS))
-  BL_TLSF_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os -DNDEBUG -fcommon -include $(BL_TLSF_DIR)/tlsf_silent.h
+ifdef TLSF_DIR
+  TLSF_OBJS    = $(patsubst $(TLSF_DIR)/%.c,$(OBJDIR)/tlsf/%.o,$(TLSF_SRCS))
+  TLSF_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
+      -ffunction-sections -fdata-sections -DNDEBUG -fcommon $(TLSF_DEFINES) \
+      -include $(TLSF_DIR)/tlsf_silent.h
 endif
 
 ifdef BL_WIFI_DIR
@@ -63,10 +65,11 @@ ifdef MBEDTLS_LIB
       -I$(MBEDTLS_INC) -DMBEDTLS_CONFIG_FILE='"mbedtls_config_openwatt.h"' -fcommon
 endif
 
-ifdef BL_TLSF_DIR
-$(OBJDIR)/bl_tlsf/%.o: $(BL_TLSF_DIR)/%.c
-	@mkdir -p $(OBJDIR)/bl_tlsf
-	$(BAREMETAL_GCC) $(BL_TLSF_CFLAGS) -c -o $@ $<
+ifdef TLSF_DIR
+$(OBJDIR)/tlsf/%.o: $(TLSF_DIR)/%.c $(TLSF_DIR)/tlsf.h $(TLSF_DIR)/tlsf_silent.h \
+    $(URT_ROOT)platforms.mk $(URT_ROOT)vendor.mk
+	@mkdir -p $(OBJDIR)/tlsf
+	$(BAREMETAL_GCC) $(TLSF_CFLAGS) -c -o $@ $<
 endif
 
 ifdef BL_WIFI_DIR
@@ -88,6 +91,4 @@ $(OBJDIR)/mbedtls/%.o: $(dir $(MBEDTLS_SHIM_SRC))%.c
 endif
 
 # Single aggregate for consumers to link; the per-blob lists above are private.
-VENDOR_OBJS = $(BL_TLSF_OBJS) $(BL_WIFI_OBJS) $(BL_PSRAM_OBJS) $(MBEDTLS_OBJS)
-
-endif
+VENDOR_OBJS = $(TLSF_OBJS) $(BL_WIFI_OBJS) $(BL_PSRAM_OBJS) $(MBEDTLS_OBJS)

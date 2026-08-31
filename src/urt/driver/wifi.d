@@ -116,6 +116,7 @@ enum WifiEvent : ubyte
     scan_done,
     sta_started,
     sta_stopped,
+    sta_start_failed,
 }
 
 static assert(WifiEvent.sta_connected == 0);

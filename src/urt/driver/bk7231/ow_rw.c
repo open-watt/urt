@@ -1,12 +1,15 @@
 #include "include.h"
 #include "rw_pub.h"
+#include "rw_msdu.h"
 #include "rw_msg_rx.h"
 #include "ke_msg.h"
 #include "mm_task.h"
 #include "me_task.h"
 #include "sm_task.h"
 #include "scanu_task.h"
+#include "scan_task.h"
 #include "scanu.h"
+#include "txu_cntrl.h"
 #include "mac_frame.h"
 #include "mac_common.h"
 #include "mem_pub.h"
@@ -19,6 +22,11 @@ enum
     OW_RW_OTHER = 0,
     OW_RW_ADD_IF_CFM,
     OW_RW_SCANU_START_CFM,
+    OW_RW_SCAN_CANCEL_CFM,
+    OW_RW_BEACON_LOSE_IND,
+    OW_RW_AUTH_FAIL_IND,
+    OW_RW_ASSOC_FAIL_IND,
+    OW_RW_DISASSOC_IND,
     OW_RW_CONNECT_CFM,
     OW_RW_CONNECT_IND,
     OW_RW_DISCONNECT_IND,
@@ -26,7 +34,28 @@ enum
     OW_RW_CONTROL_PORT_CFM,
 };
 
+extern bool __real_txu_cntrl_push(struct txdesc *txdesc, uint8_t access_category);
+extern uint32_t __real_rwm_upload_data(RW_RXIFO_PTR rx_info);
 extern void ke_msg_send(void const *param_ptr);
+
+static bool tx_tracking;
+static bool tx_admitted;
+static int8_t rx_rssi;
+
+bool __wrap_txu_cntrl_push(struct txdesc *txdesc, uint8_t access_category)
+{
+    bool admitted = __real_txu_cntrl_push(txdesc, access_category);
+    if (tx_tracking)
+        tx_admitted = admitted;
+    return admitted;
+}
+
+uint32_t __wrap_rwm_upload_data(RW_RXIFO_PTR rx_info)
+{
+    rx_rssi = rx_info->rssi;
+    return __real_rwm_upload_data(rx_info);
+}
+
 int __wrap_bmsg_ioctl_sender(void *arg)
 {
     ke_msg_send(arg);
@@ -60,17 +89,41 @@ int ow_rw_scan(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len)
     if (ssid_len > sizeof(p.ssids[0].array))
         ssid_len = sizeof(p.ssids[0].array);
     p.ssids[0].length = ssid_len;
-    os_memcpy(p.ssids[0].array, ssid, ssid_len);
+    if (ssid_len)
+        os_memcpy(p.ssids[0].array, ssid, ssid_len);
     os_memset(&p.bssid, 0xff, sizeof(p.bssid));
     return rw_msg_send_scanu_req(&p);
 }
 
-int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len, const uint8_t *bssid,
-                  const uint8_t *ie, uint16_t ie_len, int psk, uint8_t *channel)
+int ow_rw_scan_cancel(void)
+{
+    return rw_msg_send_scan_cancel_req(NULL);
+}
+
+int ow_rw_transfer(uint8_t vif_idx, uint8_t *buf, uint32_t len)
+{
+    tx_admitted = false;
+    tx_tracking = true;
+    rwm_transfer(vif_idx, buf, len, 0, NULL);
+    tx_tracking = false;
+    return tx_admitted ? 0 : -1;
+}
+
+int8_t ow_rw_get_rssi(void)
+{
+    return rx_rssi;
+}
+
+int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len,
+                  const uint8_t *bssid, const uint8_t *ie, uint16_t ie_len,
+                  int psk, int8_t *rssi, uint8_t *channel)
 {
     CONNECT_PARAM_T c;
     struct mac_scan_result *bss;
     os_memset(&c, 0, sizeof(c));
+
+    if (ssid_len > sizeof(c.ssid.array))
+        return -1;
 
     c.vif_idx = vif_idx;
     c.ssid.length = ssid_len;
@@ -99,6 +152,7 @@ int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len, const 
     if (ie_len)
         os_memcpy(c.ie_buf, ie, ie_len);
 
+    *rssi = bss->rssi;
     *channel = (uint8_t)rw_ieee80211_get_chan_id(c.chan.freq);
     return rw_msg_send_sm_connect_req(&c, NULL);
 }
@@ -114,7 +168,8 @@ int ow_rw_disconnect(uint8_t vif_idx, uint16_t reason)
     return rw_msg_send(req, SM_DISCONNECT_CFM, NULL);
 }
 
-int ow_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx, const uint8_t *key, uint8_t len)
+int ow_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx,
+                       const uint8_t *key, uint8_t len)
 {
     KEY_PARAM_T k;
     os_memset(&k, 0, sizeof(k));
@@ -138,14 +193,32 @@ int ow_rw_classify(const struct ke_msg *m)
 {
     switch (m->id)
     {
-    case MM_ADD_IF_CFM:     return OW_RW_ADD_IF_CFM;
-    case SCANU_START_CFM:   return OW_RW_SCANU_START_CFM;
-    case SM_CONNECT_CFM:    return OW_RW_CONNECT_CFM;
-    case SM_CONNECT_IND:    return OW_RW_CONNECT_IND;
-    case SM_DISCONNECT_IND: return OW_RW_DISCONNECT_IND;
-    case MM_KEY_ADD_CFM:    return OW_RW_KEY_ADD_CFM;
-    case ME_SET_CONTROL_PORT_CFM: return OW_RW_CONTROL_PORT_CFM;
-    default:                return OW_RW_OTHER;
+    case MM_ADD_IF_CFM:
+        return OW_RW_ADD_IF_CFM;
+    case SCANU_START_CFM:
+        return OW_RW_SCANU_START_CFM;
+    case SCAN_CANCEL_CFM:
+        return OW_RW_SCAN_CANCEL_CFM;
+    case SM_BEACON_LOSE_IND:
+        return OW_RW_BEACON_LOSE_IND;
+    case SM_AUTHEN_FAIL_IND:
+        return OW_RW_AUTH_FAIL_IND;
+    case SM_ASSOC_FAIL_INID:
+        return OW_RW_ASSOC_FAIL_IND;
+    case SM_DISASSOC_IND:
+        return OW_RW_DISASSOC_IND;
+    case SM_CONNECT_CFM:
+        return OW_RW_CONNECT_CFM;
+    case SM_CONNECT_IND:
+        return OW_RW_CONNECT_IND;
+    case SM_DISCONNECT_IND:
+        return OW_RW_DISCONNECT_IND;
+    case MM_KEY_ADD_CFM:
+        return OW_RW_KEY_ADD_CFM;
+    case ME_SET_CONTROL_PORT_CFM:
+        return OW_RW_CONTROL_PORT_CFM;
+    default:
+        return OW_RW_OTHER;
     }
 }
 
@@ -169,8 +242,9 @@ void ow_rw_connect_cfm(const struct ke_msg *m, uint8_t *status)
     *status = c->status;
 }
 
-void ow_rw_connect_ind(const struct ke_msg *m, uint16_t *status, uint8_t *vif_idx, uint8_t *ap_idx,
-                       uint8_t bssid[6], uint16_t *aid)
+void ow_rw_connect_ind(const struct ke_msg *m, uint16_t *status,
+                       uint8_t *vif_idx, uint8_t *ap_idx, uint8_t bssid[6],
+                       uint16_t *aid)
 {
     const struct sm_connect_indication *c = (const struct sm_connect_indication *)m->param;
     *status = c->status_code;
@@ -187,14 +261,15 @@ void ow_rw_disconnect_ind(const struct ke_msg *m, uint8_t *vif_idx, uint16_t *re
     *reason = c->reason_code;
 }
 
+void ow_rw_fail_ind(const struct ke_msg *m, uint16_t *status)
+{
+    const struct sm_fail_stat *c = (const struct sm_fail_stat *)m->param;
+    *status = c->status;
+}
+
 void ow_rw_key_add_cfm(const struct ke_msg *m, uint8_t *status, uint8_t *hw_key_idx)
 {
     const struct mm_key_add_cfm *c = (const struct mm_key_add_cfm *)m->param;
     *status = c->status;
     *hw_key_idx = c->hw_key_idx;
-}
-
-uint16_t ow_rw_msg_id(const struct ke_msg *m)
-{
-    return m->id;
 }

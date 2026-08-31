@@ -8,7 +8,6 @@ import urt.util : byte_reverse;
 
 nothrow @nogc:
 
-
 alias BekenEthernetInputHandler = void function(uint vif, Page* pages) nothrow @nogc;
 
 void beken_ethernet_input_handler(BekenEthernetInputHandler handler)
@@ -218,4 +217,14 @@ void set_next(Pbuf* p, Pbuf* next)
 {
     p.next = next;
     page_from_pbuf(p).next = next ? page_from_pbuf(next) : null;
+}
+
+unittest
+{
+    uint address;
+    assert(ip4addr_aton("192.168.4.1".ptr, &address));
+    assert((cast(ubyte*)&address)[0 .. 4] == [192, 168, 4, 1]);
+    assert(!ip4addr_aton("192.168.4.256".ptr, &address));
+    assert(!ip4addr_aton("192.168.4.1x".ptr, &address));
+    assert(!ip4addr_aton(null, &address));
 }

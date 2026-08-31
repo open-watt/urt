@@ -502,10 +502,11 @@ ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     else
         DFLAGS := $(DFLAGS) -d-version=BK7231T
     endif
-    DFLAGS := $(DFLAGS) -L--wrap=app_set_sema
-    DFLAGS := $(DFLAGS) -L--wrap=bmsg_ioctl_sender -L--wrap=rwnx_handle_recv_msg -L--wrap=printf
-    DFLAGS := $(DFLAGS) -L--wrap=bmsg_null_sender -L--wrap=bmsg_rx_sender -L--wrap=bmsg_is_empty
-    DFLAGS := $(DFLAGS) -L--wrap=bk_printf
+    DFLAGS := $(DFLAGS) -L--wrap=app_set_sema -L--wrap=bk_printf
+    DFLAGS := $(DFLAGS) -L--wrap=bmsg_ioctl_sender -L--wrap=bmsg_is_empty
+    DFLAGS := $(DFLAGS) -L--wrap=bmsg_null_sender -L--wrap=bmsg_rx_sender
+    DFLAGS := $(DFLAGS) -L--wrap=printf -L--wrap=rwm_upload_data
+    DFLAGS := $(DFLAGS) -L--wrap=rwnx_handle_recv_msg -L--wrap=txu_cntrl_push
 endif
 
 # Chip-specific versions

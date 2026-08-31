@@ -31,6 +31,7 @@ template PagePool(
     size_t large_capacity, ushort large_max_pages, ushort large_prealloc_pages)
 {
     static assert(small_capacity > 0 && small_capacity < large_capacity);
+    static assert(large_capacity <= ushort.max);
     static assert(small_max_pages > 0 && small_prealloc_pages <= small_max_pages);
     static assert(large_max_pages > 0 && large_prealloc_pages <= large_max_pages);
 
@@ -59,7 +60,7 @@ template PagePool(
     {
         assert(_initialised, "Page pool not initialised!");
         size_t required = page_required_capacity(bytes, alignment, headroom, tailroom);
-        if (required == size_t.max)
+        if (required > ushort.max)
             return null;
 
         void[] storage;
@@ -100,7 +101,7 @@ template PagePool(
         header.tag = block_size | page_tag_heap;
         header.next = null;
         record_jumbo_alloc();
-        return (mem.ptr + allocation_header_size)[0 .. block_size - allocation_header_size];
+        return (mem.ptr + allocation_header_size)[0 .. bytes];
     }
 
     Page* page_adopt(void[] block, size_t bytes, size_t alignment = size_t.sizeof,
@@ -462,11 +463,15 @@ void page_pool_tiny_test()()
     TestPool.page_free(jumbo);
     TestPool.page_free(medium);
 
+    Page* reserved = TestPool.page_alloc(1000, size_t.sizeof, 3, 64);
+    assert(reserved.headroom >= 3 && reserved.tailroom >= 64);
+    TestPool.page_free(reserved);
+
     version (PagePoolDiagnostics)
     {
         PagePoolStats stats = TestPool.page_pool_stats(0);
         assert(stats.high_water == 8 && stats.fail_count == 1);
-        assert(TestPool.page_pool_stats(page_category_heap).alloc_count == 2);
+        assert(TestPool.page_pool_stats(page_category_heap).alloc_count == 3);
     }
 
     import urt.mem.reclaim : reclaim_memory;

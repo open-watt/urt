@@ -79,7 +79,8 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
         foreach (i, ref cfg; categories)
         {
             assert(cfg.page_size % 16 == 0 && cfg.page_size > allocation_header_size + Page.sizeof);
-            assert(cfg.pages_per_slab > 0 && cfg.max_slabs > 0);
+            assert(cfg.page_size - allocation_header_size <= ushort.max);
+            assert(cfg.pages_per_slab > 0 && cfg.pages_per_slab <= ubyte.max + 1 && cfg.max_slabs > 0);
             assert(cfg.prealloc_slabs <= cfg.max_slabs);
             assert(i == 0 || cfg.page_size > categories[i - 1].page_size);
             _categories[i].cfg = cfg;
@@ -111,7 +112,7 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
 Page* page_alloc(size_t bytes, size_t alignment = size_t.sizeof, size_t headroom = 0, size_t tailroom = 0)
 {
     size_t required = page_required_capacity(bytes, alignment, headroom, tailroom);
-    if (required == size_t.max)
+    if (required > ushort.max)
         return null;
     void[] storage = alloc_payload(required);
     if (!storage.ptr)
@@ -135,11 +136,11 @@ Page* page_adopt(void[] block, size_t bytes, size_t alignment = size_t.sizeof, s
         return null;
 
     AllocationHeader* h = cast(AllocationHeader*)block.ptr;
-    h.slab_offset = cast(uint)block.length;
-    h.category = page_category_heap;
-    h.flags = page_flag_heap;
+    static if (size_t.sizeof == 8)
+        h.slab_offset = cast(uint)block.length;
+    h.allocation = cast(ushort)storage_capacity;
     h.refcount = 0;
-    h.next = null;
+    h.next = cast(AllocationHeader*)page_flag_heap;
 
     {
         auto guard = _lock.acquire();
@@ -158,7 +159,10 @@ void page_free(Page* page)
 }
 
 ubyte page_category(const Page* page)
-    => header_of(page).category;
+{
+    AllocationHeader* h = header_of(page);
+    return is_heap(h) ? page_category_heap : allocation_category(h);
+}
 
 size_t page_payload_size(ubyte category)
 {
@@ -241,12 +245,10 @@ private:
 
 struct AllocationHeader
 {
-    uint slab_offset;
-    ubyte category;
-    ubyte flags;
     ushort refcount;
-    static if (size_t.sizeof == 4)
-        uint alignment_padding;
+    ushort allocation;
+    static if (size_t.sizeof == 8)
+        uint slab_offset;
     AllocationHeader* next;
 }
 
@@ -258,8 +260,9 @@ struct SlabHeader
     ushort page_count;
 }
 enum slab_header_size = (SlabHeader.sizeof + 15) & ~15;
-enum allocation_header_size = (AllocationHeader.sizeof + 15) & ~15;
-enum ubyte page_flag_heap = 0x01;
+enum allocation_header_size = AllocationHeader.sizeof;
+enum size_t page_flag_heap = page_next_flags;
+static assert(allocation_header_size == (size_t.sizeof == 4 ? 8 : 16));
 static assert(AllocationHeader.next.offsetof + (void*).sizeof == allocation_header_size);
 
 struct Category
@@ -296,7 +299,6 @@ void[] alloc_category(ubyte category)
                 best.free_list = p.next;
                 --best.free_count;
                 p.next = null;
-                p.flags = 0;
                 p.refcount = 0;
 
                 ++c.stats.alloc_count;
@@ -357,11 +359,11 @@ void[] alloc_payload(size_t bytes)
         return null;
     }
     AllocationHeader* h = cast(AllocationHeader*)mem.ptr;
-    h.slab_offset = cast(uint)block_size;
-    h.category = page_category_heap;
-    h.flags = page_flag_heap;
+    static if (size_t.sizeof == 8)
+        h.slab_offset = cast(uint)block_size;
+    h.allocation = cast(ushort)bytes;
     h.refcount = 0;
-    h.next = null;
+    h.next = cast(AllocationHeader*)page_flag_heap;
 
     {
         auto guard = _lock.acquire();
@@ -376,9 +378,12 @@ void[] alloc_payload(size_t bytes)
 void free_payload(void* payload)
 {
     AllocationHeader* h = header_of(payload);
-    if (h.flags & page_flag_heap)
+    if (is_heap(h))
     {
-        size_t block_size = h.slab_offset;
+        static if (size_t.sizeof == 8)
+            size_t block_size = h.slab_offset;
+        else
+            size_t block_size = allocation_header_size + h.allocation;
         {
             auto guard = _lock.acquire();
             --_jumbo_stats.pages_in_use;
@@ -387,9 +392,10 @@ void free_payload(void* payload)
         return;
     }
 
-    assert(h.category < _num_categories);
-    Category* c = &_categories[h.category];
-    SlabHeader* slab = cast(SlabHeader*)(cast(void*)h - h.slab_offset);
+    ubyte category = allocation_category(h);
+    assert(category < _num_categories);
+    Category* c = &_categories[category];
+    SlabHeader* slab = slab_for(h);
 
     auto guard = _lock.acquire();
     h.next = slab.free_list;
@@ -423,6 +429,24 @@ size_t slab_bytes(ref const PageCategoryConfig cfg)
 AllocationHeader* header_of(const(void)* payload)
     => cast(AllocationHeader*)(payload - allocation_header_size);
 
+bool is_heap(const AllocationHeader* h)
+    => (cast(size_t)h.next & page_flag_heap) != 0;
+
+ubyte allocation_category(const AllocationHeader* h)
+    => cast(ubyte)h.allocation;
+
+ubyte allocation_page_index(const AllocationHeader* h)
+    => h.allocation >> 8;
+
+SlabHeader* slab_for(AllocationHeader* h)
+{
+    static if (size_t.sizeof == 8)
+        return cast(SlabHeader*)(cast(void*)h - h.slab_offset);
+    else
+        return cast(SlabHeader*)(cast(void*)h - slab_header_size
+            - allocation_page_index(h) * _categories[allocation_category(h)].cfg.page_size);
+}
+
 void[] payload_of(AllocationHeader* h, uint page_size)
     => (cast(void*)h + allocation_header_size)[0 .. page_size - allocation_header_size];
 
@@ -454,11 +478,11 @@ bool add_slab(Category* c)
     ubyte category = cast(ubyte)(c - _categories.ptr);
     foreach_reverse (i; 0 .. c.cfg.pages_per_slab)
     {
-        uint offset = cast(uint)(slab_header_size + i * c.cfg.page_size);
+        size_t offset = slab_header_size + i * c.cfg.page_size;
         AllocationHeader* p = cast(AllocationHeader*)(mem.ptr + offset);
-        p.slab_offset = offset;
-        p.category = category;
-        p.flags = 0;
+        static if (size_t.sizeof == 8)
+            p.slab_offset = cast(uint)offset;
+        p.allocation = cast(ushort)(category | i << 8);
         p.refcount = 0;
         p.next = prev;
         prev = p;
@@ -491,12 +515,6 @@ unittest
         PageCategoryConfig(256, 2, 2, 0),
     ];
 
-    static void* slab_of(void* payload)
-    {
-        AllocationHeader* h = header_of(payload);
-        return cast(void*)h - h.slab_offset;
-    }
-
     page_pool_deinit();
 
     assert(page_pool_init(test_cfg));
@@ -509,7 +527,7 @@ unittest
 
     void[] a = alloc_category(0);
     assert(a.length == 64 - allocation_header_size);
-    assert(header_of(a.ptr).category == 0);
+    assert(allocation_category(header_of(a.ptr)) == 0);
     s = page_pool_stats(0);
     assert(s.pages_in_use == 1 && s.alloc_count == 1 && s.high_water == 1);
     free_payload(a.ptr);
@@ -532,11 +550,11 @@ unittest
     foreach (i; 0 .. 3)
     {
         void[] p = alloc_category(0);
-        assert(slab_of(p.ptr) is slab_of(keep.ptr));
+        assert(slab_for(header_of(p.ptr)) is slab_for(header_of(keep.ptr)));
         pages[i] = p;
     }
     void[] other = alloc_category(0);
-    assert(slab_of(other.ptr) !is slab_of(keep.ptr));
+    assert(slab_for(header_of(other.ptr)) !is slab_for(header_of(keep.ptr)));
     foreach (i; 0 .. 3)
         free_payload(pages[i].ptr);
     free_payload(other.ptr);
@@ -552,9 +570,14 @@ unittest
     assert(page_category(mid) == 1);
     Page* jumbo = page_alloc(1000);
     assert(jumbo.length == 1000 && page_category(jumbo) == page_category_heap);
+    Page* jumbo_next = page_alloc(8);
+    jumbo.next = jumbo_next;
+    assert(jumbo.next is jumbo_next && page_category(jumbo) == page_category_heap);
+    jumbo.capacity = 8;
     PagePoolStats js = page_pool_stats(page_category_heap);
     assert(js.pages_in_use == 1 && js.alloc_count == 1);
     page_free(jumbo);
+    page_free(jumbo_next);
     js = page_pool_stats(page_category_heap);
     assert(js.pages_in_use == 0);
     page_free(mid);
@@ -564,11 +587,16 @@ unittest
     Page* aligned = page_alloc(17, 64, 3, 5);
     assert(linked && aligned);
     assert((cast(size_t)aligned.data.ptr & 63) == 0);
+    assert(aligned.headroom >= 3 && aligned.tailroom >= 5);
     aligned.next = linked;
     assert(aligned.next is linked);
     aligned.next = null;
     page_free(aligned);
     page_free(linked);
+
+    Page* reserved = page_alloc(1000, size_t.sizeof, 0, 64);
+    assert(reserved.tailroom >= 64);
+    page_free(reserved);
 
     import urt.mem.reclaim : reclaim_memory;
     reclaim_memory(1);

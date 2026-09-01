@@ -798,7 +798,7 @@ else ifeq ($(COMPILER),dmd)
     endif
 
     ifeq ($(CONFIG),release)
-        DFLAGS := $(DFLAGS) -release -O -inline
+        DFLAGS := $(DFLAGS) -release -check=assert=on -O -inline
     else
         DFLAGS := $(DFLAGS) -g -debug
     endif

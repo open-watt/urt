@@ -8,6 +8,7 @@
 //   Result counter_hw_open(uint port, ref const CounterConfig);
 //   Result counter_hw_arm(uint port, ulong ticks, bool periodic);
 //   void counter_hw_reload(uint port);
+//   void counter_hw_rearm(uint port, ulong ticks);
 //   ulong counter_hw_read(uint port);
 //   void counter_hw_close(uint port);
 module urt.driver.counter;
@@ -56,6 +57,24 @@ Result counter_open(ref Counter counter, ubyte port, ref const CounterConfig con
     }
 }
 
+// Open on any free port, scanning downward so fixed low-port claims stay clear.
+Result counter_acquire(ref Counter counter, ref const CounterConfig config)
+{
+    static if (num_counters == 0)
+        return InternalResult.unsupported;
+    else
+    {
+        if (counter.is_open)
+            return InternalResult.already_exists;
+        foreach_reverse (port; 0 .. num_counters)
+        {
+            if (counter_open(counter, cast(ubyte)port, config))
+                return Result.success;
+        }
+        return InternalResult.failed;
+    }
+}
+
 // Alarm after ticks counts from zero. Periodic alarms self-rearm; a one-shot
 // alarm fires once and is rearmed by reload().
 Result counter_arm(ref Counter counter, ulong ticks, bool periodic)
@@ -80,7 +99,17 @@ Result counter_arm(ref Counter counter, ulong ticks, bool periodic)
     }
 }
 
-ulong counter_read(ref Counter counter)
+// Replace the alarm tick count, zero the count, and rearm. Safe from interrupt context.
+@critical void counter_rearm(ref Counter counter, ulong ticks)
+{
+    static if (num_counters != 0)
+    {
+        if (counter.is_open && ticks)
+            counter_hw_rearm(counter.port, ticks);
+    }
+}
+
+@critical ulong counter_read(ref Counter counter)
 {
     static if (num_counters == 0)
         return 0;

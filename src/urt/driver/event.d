@@ -177,6 +177,28 @@ Result link_open(ref Link link, ubyte slot, EventSource event, Task task, LinkTi
     }
 }
 
+// Open on any free slot, scanning downward so fixed low-slot claims stay clear.
+Result link_acquire(ref Link link, EventSource event, Task task, LinkTier minimum = LinkTier.interrupt)
+{
+    static if (num_links == 0)
+        return InternalResult.unsupported;
+    else
+    {
+        if (link.is_open)
+            return InternalResult.already_exists;
+        Result result = InternalResult.failed;
+        foreach_reverse (slot; 0 .. num_links)
+        {
+            result = link_open(link, cast(ubyte)slot, event, task, minimum);
+            if (result)
+                return Result.success;
+            if (result != InternalResult.already_exists)
+                return result;
+        }
+        return result;
+    }
+}
+
 void link_close(ref Link link)
 {
     static if (num_links != 0)

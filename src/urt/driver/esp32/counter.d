@@ -7,7 +7,7 @@ module urt.driver.esp32.counter;
 
 import urt.attribute : critical;
 import urt.driver.counter;
-import urt.result : InternalResult, Result;
+import urt.result : Result;
 
 nothrow @nogc:
 
@@ -19,12 +19,12 @@ else
 
 Result counter_hw_open(uint port, ref const CounterConfig config)
 {
-    return ow_counter_open(port, config.resolution_hz) == 0 ? Result.success : InternalResult.failed;
+    return ow_counter_open(port, config.resolution_hz);
 }
 
 Result counter_hw_arm(uint port, ulong ticks, bool periodic)
 {
-    return ow_counter_arm(port, ticks, periodic) == 0 ? Result.success : InternalResult.failed;
+    return ow_counter_arm(port, ticks, periodic);
 }
 
 @critical void counter_hw_reload(uint port)
@@ -32,7 +32,12 @@ Result counter_hw_arm(uint port, ulong ticks, bool periodic)
     ow_counter_reload(port);
 }
 
-ulong counter_hw_read(uint port)
+@critical void counter_hw_rearm(uint port, ulong ticks)
+{
+    ow_counter_rearm(port, ticks);
+}
+
+@critical ulong counter_hw_read(uint port)
 {
     return ow_counter_read(port);
 }
@@ -47,9 +52,10 @@ private:
 
 extern(C) nothrow @nogc
 {
-    int ow_counter_open(uint port, uint resolution_hz);
-    int ow_counter_arm(uint port, ulong ticks, bool periodic);
+    Result ow_counter_open(uint port, uint resolution_hz);
+    Result ow_counter_arm(uint port, ulong ticks, bool periodic);
     void ow_counter_reload(uint port);
+    void ow_counter_rearm(uint port, ulong ticks);
     ulong ow_counter_read(uint port);
     void ow_counter_close(uint port);
 }

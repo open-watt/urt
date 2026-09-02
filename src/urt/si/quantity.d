@@ -606,6 +606,18 @@ unittest
     assert(sec.fromString("5V") == -1);
     VarQuantity dyn;
     assert(dyn.fromString("12/hr") == 5 && dyn.value == 12 && dyn.unit == Hour^^-1);
+
+    // float quantities format with full round-trip precision
+    Volts v = Volts(3.14159265358979);
+    char[64] buf;
+    ptrdiff_t n = v.toString(buf, null, null);
+    assert(n > 0);
+    Volts v2;
+    assert(v2.fromString(buf[0 .. n]) == n && v2.value == v.value);
+    v = Volts(0.1);
+    n = v.toString(buf, null, null);
+    assert(buf[0 .. n] == "0.1V" || buf[0 .. n] == "100mV");
+    assert(v2.fromString(buf[0 .. n]) == n && v2.value == v.value);
 }
 
 
@@ -613,23 +625,24 @@ private:
 
 ptrdiff_t format_quantity_floating(double value, ScaledUnit unit, char[] buffer)
 {
-    import urt.conv : format_float;
+    import urt.conv : format_float_shortest;
 
     value *= normalise_quantity_unit(unit);
-    ptrdiff_t length = format_float(value, buffer);
+    ptrdiff_t length = format_float_shortest(value, buffer);
     return append_quantity_unit(buffer, length, unit);
 }
 
 ptrdiff_t format_quantity_integer(ulong value, bool signed_value, ScaledUnit unit, char[] buffer)
 {
-    import urt.conv : format_float, format_int, format_uint;
+    import urt.conv : format_int, format_uint;
+    import urt.conv : format_float_shortest;
 
     double scale = normalise_quantity_unit(unit);
     ptrdiff_t length;
     if (scale != 1)
     {
         double scaled = signed_value ? cast(long)value * scale : value * scale;
-        length = format_float(scaled, buffer);
+        length = format_float_shortest(scaled, buffer);
     }
     else
         length = signed_value ? format_int(cast(long)value, buffer) : format_uint(value, buffer);

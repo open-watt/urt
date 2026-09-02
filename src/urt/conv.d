@@ -43,11 +43,11 @@ long parse_int_with_base(const(char)[] str, size_t* bytes_taken = null) pure
     return neg ? -long(i) : long(i);
 }
 
-long parse_int_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10) pure
+long parse_int_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10, bool* truncated = null) pure
 {
     const(char)* s = str.ptr, e = s + str.length, p = s;
     uint neg = parse_sign(p, e);
-    ulong value = p[0 .. e - p].parse_uint_with_exponent(exponent, bytes_taken, base);
+    ulong value = p[0 .. e - p].parse_uint_with_exponent(exponent, bytes_taken, base, truncated);
     if (bytes_taken && *bytes_taken != 0)
         *bytes_taken += p - s;
     return neg ? -long(value) : long(value);
@@ -109,7 +109,7 @@ ulong parse_uint_with_base(const(char)[] str, size_t* bytes_taken = null) pure
     return i;
 }
 
-ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10) pure
+ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10, bool* truncated = null) pure
 {
     debug assert(base > 1 && base <= 36, "Invalid base");
 
@@ -120,6 +120,7 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
     int exp = 0;
     uint digits = 0;
     uint zero_seq = 0;
+    uint dropped = 0;
     char c = void;
 
     for (; s < e; ++s)
@@ -131,7 +132,7 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
             if (s == str.ptr)
                 goto done;
             ++s;
-            exp = zero_seq;
+            exp = zero_seq + dropped;
             goto parse_decimal;
         }
         else if (c == '0')
@@ -143,6 +144,16 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
         uint digit = get_digit(c);
         if (digit >= base)
             break;
+
+        // 18 significant digits keeps the mantissa clear of overflow; the rest scale the exponent
+        if (digits && digits + zero_seq + 1 > 18)
+        {
+            dropped += 1 + zero_seq;
+            zero_seq = 0;
+            if (truncated)
+                *truncated = true;
+            continue;
+        }
 
         if (digits)
         {
@@ -159,7 +170,7 @@ ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* byte
     if (!digits)
         goto nothing;
 
-    exp = zero_seq;
+    exp = zero_seq + dropped;
     goto check_exp;
 
 parse_decimal:
@@ -176,6 +187,14 @@ parse_decimal:
         uint digit = get_digit(c);
         if (digit >= base)
             break;
+
+        if (digits && digits + zero_seq + 1 > 18)
+        {
+            zero_seq = 0;
+            if (truncated)
+                *truncated = true;
+            continue;
+        }
 
         if (digits)
         {
@@ -338,16 +357,80 @@ double parse_float(const(char)[] str, size_t* bytes_taken = null, uint base = 10
 {
     import urt.math : pow;
 
+    {
+        import urt.array : beginsWith;
+
+        bool neg = str.length > 0 && str[0] == '-';
+        const(char)[] body_ = neg || (str.length > 0 && str[0] == '+') ? str[1 .. $] : str;
+        if (body_.beginsWith("nan"))
+        {
+            if (bytes_taken)
+                *bytes_taken = str.length - body_.length + 3;
+            return double.nan;
+        }
+        if (body_.beginsWith("inf"))
+        {
+            if (bytes_taken)
+                *bytes_taken = str.length - body_.length + 3;
+            return neg ? -double.infinity : double.infinity;
+        }
+    }
+
     int e;
     size_t taken;
-    long mantissa = str.parse_int_with_exponent(e, &taken, base);
+    bool truncated;
+    long mantissa = str.parse_int_with_exponent(e, &taken, base, &truncated);
     if (bytes_taken)
         *bytes_taken = taken;
     if (taken == 0)
         return double.nan;
 
-    // TODO: the real work needs to happen here!
-    //       we want all the bits of precision!
+    if (base == 10)
+    {
+        // one exactly-representable multiply/divide is correctly rounded; covers the whole
+        // range shortest-form output produces for values of sane magnitude
+        static immutable double[23] pow10 = [
+            1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+            1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 ];
+        ulong m = mantissa < 0 ? cast(ulong)-mantissa : cast(ulong)mantissa;
+        if (m < (1uL << 53))
+        {
+            if (e >= 0 && e <= 22)
+                return mantissa * pow10[e];
+            if (e < 0 && e >= -22)
+                return mantissa / pow10[-e];
+        }
+
+        // Dekker splitting needs strict double rounding, which CTFE doesn't promise
+        if (!__ctfe)
+        {
+            bool certain;
+            double r = decimal_to_double(m, e, truncated, certain);
+            if (mantissa < 0)
+                r = -r;
+            if (certain)
+                return r;
+
+            version (Tiny) {} else
+            {
+                // the uncertifiable residue: within ~2^-90 of a rounding boundary, magnitude
+                // edges, or >18 significant digits. The CRT resolves it (as gcvt does for
+                // format_float); Tiny accepts the last ulp instead of newlib's dtoa machinery.
+                import urt.internal.stdc.stdlib : strtod;
+
+                char[64] tmp = void;
+                size_t len = taken < tmp.length - 1 ? taken : tmp.length - 1;
+                tmp[0 .. len] = str[0 .. len];
+                tmp[len] = '\0';
+
+                char* end;
+                double sr = strtod(tmp.ptr, &end);
+                if (end > tmp.ptr)
+                    return sr;
+            }
+            return r;
+        }
+    }
 
     if (__ctfe)
         return mantissa * double(base)^^e;
@@ -370,6 +453,42 @@ unittest
     assert(fcmp(parse_float("-123.456e10"), -1.23456e+12));
     assert(fcmp(parse_float("1101.11", &taken, 2), 13.75) && taken == 7);
     assert(parse_float("xyz", &taken) is double.nan && taken == 0);
+
+    // exact decimal -> binary; the compiler's own literals are the oracle
+    assert(parse_float("123.456") == 123.456);
+    assert(parse_float("0.3333333333333333") == 0.3333333333333333);
+    assert(parse_float("3.141592653589793") == 3.141592653589793);
+    assert(parse_float("1.7976931348623157e308") == 1.7976931348623157e308);
+    assert(parse_float("1e308") == 1e308);
+    assert(parse_float("2.5e-100") == 2.5e-100);
+    assert(parse_float("1e309") == double.infinity);
+    assert(parse_float("-1e400") == -double.infinity);
+    assert(parse_float("1e-400") == 0);
+    assert(parse_float("nan") is double.nan);
+    assert(parse_float("-inf") == -double.infinity);
+
+    version (Tiny) {} else
+    {
+        // subnormals and truncated mantissas resolve through the fallback
+        assert(parse_float("2.2250738585072011e-308") == 2.2250738585072011e-308);
+        assert(parse_float("4.9406564584124654e-324") == 4.9406564584124654e-324);
+        assert(parse_float("123456789012345678901234567890") == 123456789012345678901234567890.0);
+
+        // every double must round-trip through 17 significant digits
+        import urt.rand : rand;
+        char[32] fbuf;
+        foreach (i; 0 .. 10_000)
+        {
+            ulong bits = (ulong(rand()) << 32) | rand();
+            double v = *cast(double*)&bits;
+            if (v != v || v == double.infinity || v == -double.infinity)
+                continue;
+            ptrdiff_t n = format_float(v, fbuf, ".17");
+            assert(n > 0);
+            double r = parse_float(fbuf[0 .. n]);
+            assert(*cast(ulong*)&r == bits || (v == 0 && r == 0));
+        }
+    }
 }
 
 
@@ -760,6 +879,86 @@ template to(T)
 
 
 private:
+
+struct DD { double hi; double lo; }
+
+DD dd_mul(DD a, DD b) pure
+{
+    enum double splitter = 134217729.0; // 2^27 + 1
+
+    double ca = splitter * a.hi;
+    double ahi = ca - (ca - a.hi);
+    double alo = a.hi - ahi;
+    double cb = splitter * b.hi;
+    double bhi = cb - (cb - b.hi);
+    double blo = b.hi - bhi;
+
+    double p = a.hi * b.hi;
+    double err = ((ahi*bhi - p) + ahi*blo + alo*bhi) + alo*blo;
+    err += a.hi*b.lo + a.lo*b.hi;
+
+    double s = p + err;
+    return DD(s, err - (s - p));
+}
+
+// 10^(2^k) as exact hi/lo double pairs
+static immutable DD[9] dd_pow10_pos = [
+    DD(0x1.4p+3, 0.0), DD(0x1.9p+6, 0.0), DD(0x1.388p+13, 0.0), DD(0x1.7d784p+26, 0.0),
+    DD(0x1.1c37937e08p+53, 0.0), DD(0x1.3b8b5b5056e17p+106, -0x1.3107fp+52),
+    DD(0x1.84f03e93ff9f5p+212, -0x1.2ac340948e389p+157),
+    DD(0x1.27748f9301d32p+425, -0x1.901cc86649e4ap+371),
+    DD(0x1.54fdd7f73bf3cp+850, -0x1.7222446fe467p+795) ];
+static immutable DD[9] dd_pow10_neg = [
+    DD(0x1.999999999999ap-4, -0x1.999999999999ap-58),
+    DD(0x1.47ae147ae147bp-7, -0x1.eb851eb851eb8p-63),
+    DD(0x1.a36e2eb1c432dp-14, -0x1.6a161e4f765fep-68),
+    DD(0x1.5798ee2308c3ap-27, -0x1.03023df2d4c94p-82),
+    DD(0x1.cd2b297d889bcp-54, 0x1.5b4c2ebe68799p-109),
+    DD(0x1.9f623d5a8a733p-107, -0x1.a2cc10f3892d4p-161),
+    DD(0x1.50ffd44f4a73dp-213, 0x1.a53f2398d747bp-268),
+    DD(0x1.bba08cf8c979dp-426, -0x1.afa9c1a60497dp-480),
+    DD(0x1.8062864ac6f43p-851, 0x1.39fa911155ffp-906) ];
+
+// ~106-bit m*10^e; certain reports that the double rounding is proven correct, which holds
+// for everything except values within ~2^-90 of a rounding boundary and the magnitude edges
+double decimal_to_double(ulong m, int e, bool truncated, out bool certain) pure
+{
+    if (m == 0)
+    {
+        certain = true;
+        return 0.0;
+    }
+    if (e > 308)
+    {
+        certain = true;
+        return double.infinity;
+    }
+    if (e < -360)
+    {
+        certain = true;
+        return 0.0;
+    }
+
+    double hi = m;
+    DD acc = DD(hi, cast(double)cast(long)(m - cast(ulong)hi));
+    uint ae = e < 0 ? cast(uint)-e : cast(uint)e;
+    foreach (k; 0 .. 9)
+    {
+        if (ae & (1u << k))
+            acc = dd_mul(acc, e < 0 ? dd_pow10_neg[k] : dd_pow10_pos[k]);
+    }
+
+    double mag = acc.hi < 0 ? -acc.hi : acc.hi;
+    if (acc.lo != acc.lo || !(mag < double.infinity) || mag < 0x1p-1000)
+    {
+        certain = false;
+        return acc.hi + (acc.lo == acc.lo ? acc.lo : 0.0);
+    }
+
+    double err = 0x1p-90 * mag;
+    certain = !truncated && (acc.hi + (acc.lo - err)) == (acc.hi + (acc.lo + err));
+    return acc.hi + acc.lo;
+}
 
 // valid result is 0 .. 35; result is garbage outside that bound
 uint get_digit(char c) pure

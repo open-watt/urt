@@ -792,6 +792,84 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
     return len;
 }
 
+// shortest text which parses back to the exact same value
+ptrdiff_t format_float_shortest(F)(F value, char[] buffer) pure
+    if (is(F == double) || is(F == float))
+    => format_shortest_impl(value, buffer, is(F == float) ? 9 : 17, is(F == float));
+
+private ptrdiff_t format_shortest_impl(double value, char[] buffer, uint max_digits, bool as_float) pure
+{
+    if (value != value)
+        return copy_shortest("nan", buffer);
+    if (value == double.infinity)
+        return copy_shortest("inf", buffer);
+    if (value == -double.infinity)
+        return copy_shortest("-inf", buffer);
+
+    char[4] spec = void;
+    char[64] tmp = void;
+    foreach (uint digits; 1 .. max_digits + 1)
+    {
+        spec[0] = '.';
+        ptrdiff_t sl = 1 + format_uint(digits, spec[1 .. $]);
+        ptrdiff_t n = format_float(value, tmp, spec[0 .. sl]);
+        if (n <= 0)
+            return n;
+
+        size_t taken;
+        double r = parse_float(tmp[0 .. n], &taken);
+        if (taken == n && (as_float ? cast(float)r == cast(float)value : r == value))
+            return copy_shortest(tmp[0 .. n], buffer);
+
+        // a parser without correct rounding at this magnitude (Tiny) can't verify any
+        // candidate; emit full precision rather than fail
+        if (digits == max_digits)
+            return copy_shortest(tmp[0 .. n], buffer);
+    }
+    return -2;
+}
+
+private ptrdiff_t copy_shortest(const(char)[] text, char[] buffer) pure
+{
+    if (text.length > buffer.length)
+        return -1;
+    buffer[0 .. text.length] = text[];
+    return text.length;
+}
+
+unittest
+{
+    char[64] t;
+
+    static void check_shortest(F)(F v, const(char)[] expect = null)
+    {
+        char[64] b;
+        ptrdiff_t n = format_float_shortest(v, b);
+        assert(n > 0);
+        if (expect)
+            assert(b[0 .. n] == expect);
+        size_t taken;
+        double r = parse_float(b[0 .. n], &taken);
+        assert(taken == n);
+        assert(cast(F)r == v || (r != r && v != v));
+    }
+    check_shortest(0.0, "0");
+    check_shortest(1.5, "1.5");
+    check_shortest(0.1, "0.1");
+    check_shortest(1.0 / 3.0);
+    check_shortest(3.14159265358979);
+    check_shortest(1e30);
+    check_shortest(-2.5e-10);
+    check_shortest(double.max);
+    check_shortest(0.1f, "0.1");
+    check_shortest(float.max);
+    check_shortest(double.nan);
+    check_shortest(-double.infinity);
+
+    // -0.0 deliberately normalises to "0" (format_float policy)
+    assert(format_float_shortest(-0.0, t) == 1 && t[0] == '0');
+}
+
 unittest
 {
     import urt.io;

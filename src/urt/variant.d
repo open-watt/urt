@@ -1235,7 +1235,11 @@ nothrow @nogc:
                     return asQuantity().toString(buffer, format, formatArgs);
 
                 if (isDouble())
-                    return asDouble().format_float(buffer);
+                {
+                    if (format)
+                        return asDouble().format_float(buffer, format);
+                    return asDouble().format_float_shortest(buffer);
+                }
 
                 // TODO: parse args?
                 assert(!format, "TODO");

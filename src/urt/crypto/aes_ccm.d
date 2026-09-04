@@ -55,7 +55,7 @@ Result aes_ccm_decrypt(const(ubyte)[] key, const(ubyte)[] nonce, const(ubyte)[] 
     if (diff != 0)
     {
         plaintext[] = 0;
-        return InternalResult.invalid_data;
+        return InternalResult.data_error;
     }
     return Result.success;
 }

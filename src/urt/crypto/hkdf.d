@@ -1,0 +1,99 @@
+module urt.crypto.hkdf;
+
+import urt.digest.hmac;
+import urt.digest.sha;
+
+nothrow @nogc:
+
+
+ubyte[Context.DigestLen] hkdf_extract(Context)(const(ubyte)[] salt, const(ubyte)[] ikm)
+{
+    ubyte[Context.DigestLen] zero_salt = 0;
+    if (salt.length == 0)
+        salt = zero_salt[];
+    return hmac!Context(salt, ikm);
+}
+
+bool hkdf_expand(Context)(const(ubyte)[] prk, const(void)[] info, ubyte[] okm)
+{
+    enum len = Context.DigestLen;
+    if (okm.length > 255 * len)
+        return false;
+
+    ubyte[len] t = void;
+    size_t pos = 0;
+    ubyte counter = 0;
+    while (pos < okm.length)
+    {
+        ++counter;
+        HMACContext!Context h;
+        hmac_init(h, prk);
+        if (counter > 1)
+            hmac_update(h, t[]);
+        hmac_update(h, info);
+        hmac_update(h, (&counter)[0 .. 1]);
+        t = hmac_finalise(h);
+
+        size_t n = okm.length - pos;
+        if (n > len)
+            n = len;
+        okm[pos .. pos + n] = t[0 .. n];
+        pos += n;
+    }
+    return true;
+}
+
+bool hkdf(Context)(const(ubyte)[] salt, const(ubyte)[] ikm, const(void)[] info, ubyte[] okm)
+{
+    auto prk = hkdf_extract!Context(salt, ikm);
+    return hkdf_expand!Context(prk[], info, okm);
+}
+
+alias hkdf_sha256 = hkdf!SHA256Context;
+alias hkdf_sha256_extract = hkdf_extract!SHA256Context;
+alias hkdf_sha256_expand = hkdf_expand!SHA256Context;
+
+
+unittest
+{
+    // RFC 5869 test case 1
+    static immutable ubyte[22] ikm = 0x0b;
+    static immutable ubyte[13] salt = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c];
+    static immutable ubyte[10] info = [0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9];
+    static immutable ubyte[32] prk_expected = [
+        0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf, 0x0d, 0xdc, 0x3f, 0x0d, 0xc4, 0x7b, 0xba, 0x63,
+        0x90, 0xb6, 0xc7, 0x3b, 0xb5, 0x0f, 0x9c, 0x31, 0x22, 0xec, 0x84, 0x4a, 0xd7, 0xc2, 0xb3, 0xe5,
+    ];
+    static immutable ubyte[42] okm_expected = [
+        0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a, 0x90, 0x43, 0x4f, 0x64, 0xd0, 0x36, 0x2f, 0x2a,
+        0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c, 0x5d, 0xb0, 0x2d, 0x56, 0xec, 0xc4, 0xc5, 0xbf,
+        0x34, 0x00, 0x72, 0x08, 0xd5, 0xb8, 0x87, 0x18, 0x58, 0x65,
+    ];
+
+    auto prk = hkdf_sha256_extract(salt[], ikm[]);
+    assert(prk == prk_expected);
+
+    ubyte[42] okm;
+    assert(hkdf_sha256_expand(prk[], info[], okm[]));
+    assert(okm == okm_expected);
+
+    ubyte[42] okm2;
+    assert(hkdf_sha256(salt[], ikm[], info[], okm2[]));
+    assert(okm2 == okm_expected);
+
+    // RFC 5869 test case 3: empty salt and info
+    static immutable ubyte[32] prk3_expected = [
+        0x19, 0xef, 0x24, 0xa3, 0x2c, 0x71, 0x7b, 0x16, 0x7f, 0x33, 0xa9, 0x1d, 0x6f, 0x64, 0x8b, 0xdf,
+        0x96, 0x59, 0x67, 0x76, 0xaf, 0xdb, 0x63, 0x77, 0xac, 0x43, 0x4c, 0x1c, 0x29, 0x3c, 0xcb, 0x04,
+    ];
+    static immutable ubyte[42] okm3_expected = [
+        0x8d, 0xa4, 0xe7, 0x75, 0xa5, 0x63, 0xc1, 0x8f, 0x71, 0x5f, 0x80, 0x2a, 0x06, 0x3c, 0x5a, 0x31,
+        0xb8, 0xa1, 0x1f, 0x5c, 0x5e, 0xe1, 0x87, 0x9e, 0xc3, 0x45, 0x4e, 0x5f, 0x3c, 0x73, 0x8d, 0x2d,
+        0x9d, 0x20, 0x13, 0x95, 0xfa, 0xa4, 0xb6, 0x1a, 0x96, 0xc8,
+    ];
+    auto prk3 = hkdf_sha256_extract(null, ikm[]);
+    assert(prk3 == prk3_expected);
+    ubyte[42] okm3;
+    assert(hkdf_sha256_expand(prk3[], null, okm3[]));
+    assert(okm3 == okm3_expected);
+}

@@ -10,3 +10,5 @@ noreturn exit(int status);
 pure char* gcvt(double value, int ndigit, char* buf);
 version (Windows)
     pure int _gcvt_s(const char* buffer, size_t size_in_bytes, double value, int digits);
+
+pure double strtod(const char* str, char** endptr);

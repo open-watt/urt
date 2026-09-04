@@ -74,29 +74,32 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
     }
     else
     {
+        import urt.io : write_to, WriteTarget;
+        import urt.internal.exception : capture_trace, print_trace;
+
         debug
         {
-            import urt.io : write_to, WriteTarget;
-            import urt.dbg;
-            import urt.internal.exception : capture_trace, print_trace;
-
             version (Windows)
                 write_to!(WriteTarget.debugstring, true)(file, '(', line, "): ", msg);
+        }
 
-            // an assert fired from the print/resolve machinery below must not recurse.
-            __gshared bool in_assert;
-            if (!in_assert)
-            {
-                in_assert = true;
-                write_to!(WriteTarget.stderr, true)("*** ASSERT: ", file, '(', line, "): ", msg);
+        // an assert fired from the print/resolve machinery below must not recurse.
+        __gshared bool in_assert;
+        if (!in_assert)
+        {
+            in_assert = true;
+            write_to!(WriteTarget.stderr, true)("*** ASSERT: ", file, '(', line, "): ", msg);
 
-                void*[32] addrs = void;
-                const n = capture_trace(addrs[]);
-                if (n > 1)
-                    print_trace(addrs[1 .. n]);
-                in_assert = false;
-            }
+            void*[32] addrs = void;
+            const n = capture_trace(addrs[]);
+            if (n > 1)
+                print_trace(addrs[1 .. n]);
+            in_assert = false;
+        }
 
+        debug
+        {
+            import urt.dbg;
             breakpoint();
         }
         else

@@ -231,16 +231,116 @@ P256Point point_neg(ref const P256Point p) pure
 
 P256Point point_mul(ref const U256 k, ref const P256Point p) pure
 {
-    P256Point r;
+    if (p.infinity)
+        return p;
+    Jacobian r;
+    Jacobian q = Jacobian.from_affine(p);
     foreach_reverse (i; 0 .. 256)
     {
-        r = point_double(r);
+        r = jacobian_double(r);
         if (k.bit(i))
-            r = point_add(r, p);
+            r = jacobian_add(r, q);
     }
-    return r;
+    return r.to_affine();
 }
 
+
+private:
+
+// Jacobian (X, Y, Z) with x = X/Z^2, y = Y/Z^3; Z = 0 is the point at infinity.
+struct Jacobian
+{
+    U256 x;
+    U256 y;
+    U256 z;
+
+nothrow @nogc:
+    static Jacobian from_affine(ref const P256Point p) pure
+    {
+        Jacobian j;
+        j.x = p.x;
+        j.y = p.y;
+        j.z.limb[0] = 1;
+        return j;
+    }
+
+    bool infinity() const pure
+        => z.is_zero;
+
+    P256Point to_affine() const pure
+    {
+        if (infinity)
+            return P256Point.init;
+        U256 zi = mod_inv(z, p256_p);
+        U256 zi2 = mod_mul(zi, zi, p256_p);
+        U256 zi3 = mod_mul(zi2, zi, p256_p);
+        return P256Point(mod_mul(x, zi2, p256_p), mod_mul(y, zi3, p256_p), false);
+    }
+}
+
+// dbl-2001-b (a = -3): 3M + 5S.
+Jacobian jacobian_double(ref const Jacobian p) pure
+{
+    if (p.infinity || p.y.is_zero)
+        return Jacobian.init;
+    U256 z2 = mod_mul(p.z, p.z, p256_p);
+    U256 xm = mod_sub(p.x, z2, p256_p);
+    U256 xp = mod_add(p.x, z2, p256_p);
+    U256 m = mod_mul(xm, xp, p256_p);
+    U256 m3 = mod_add(m, m, p256_p);
+    m = mod_add(m3, m, p256_p);
+    U256 y2 = mod_mul(p.y, p.y, p256_p);
+    U256 s = mod_mul(p.x, y2, p256_p);
+    s = mod_add(s, s, p256_p);
+    s = mod_add(s, s, p256_p);
+    U256 x3 = mod_mul(m, m, p256_p);
+    x3 = mod_sub(x3, s, p256_p);
+    x3 = mod_sub(x3, s, p256_p);
+    U256 y4 = mod_mul(y2, y2, p256_p);
+    U256 t = mod_add(y4, y4, p256_p);
+    t = mod_add(t, t, p256_p);
+    t = mod_add(t, t, p256_p);
+    U256 y3 = mod_sub(s, x3, p256_p);
+    y3 = mod_mul(m, y3, p256_p);
+    y3 = mod_sub(y3, t, p256_p);
+    U256 z3 = mod_mul(p.y, p.z, p256_p);
+    z3 = mod_add(z3, z3, p256_p);
+    return Jacobian(x3, y3, z3);
+}
+
+// add-2007-bl with Z2 = 1: 8M + 3S.
+Jacobian jacobian_add(ref const Jacobian p, ref const Jacobian q) pure
+{
+    if (p.infinity)
+        return q;
+    if (q.infinity)
+        return p;
+    U256 z1z1 = mod_mul(p.z, p.z, p256_p);
+    U256 u2 = mod_mul(q.x, z1z1, p256_p);
+    U256 z1z1z1 = mod_mul(z1z1, p.z, p256_p);
+    U256 s2 = mod_mul(q.y, z1z1z1, p256_p);
+    U256 h = mod_sub(u2, p.x, p256_p);
+    U256 r = mod_sub(s2, p.y, p256_p);
+    if (h.is_zero)
+    {
+        if (r.is_zero)
+            return jacobian_double(p);
+        return Jacobian.init;
+    }
+    U256 hh = mod_mul(h, h, p256_p);
+    U256 hhh = mod_mul(hh, h, p256_p);
+    U256 v = mod_mul(p.x, hh, p256_p);
+    U256 x3 = mod_mul(r, r, p256_p);
+    x3 = mod_sub(x3, hhh, p256_p);
+    x3 = mod_sub(x3, v, p256_p);
+    x3 = mod_sub(x3, v, p256_p);
+    U256 y3 = mod_sub(v, x3, p256_p);
+    y3 = mod_mul(r, y3, p256_p);
+    U256 t = mod_mul(p.y, hhh, p256_p);
+    y3 = mod_sub(y3, t, p256_p);
+    U256 z3 = mod_mul(p.z, h, p256_p);
+    return Jacobian(x3, y3, z3);
+}
 
 private:
 

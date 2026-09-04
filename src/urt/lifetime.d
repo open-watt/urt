@@ -244,6 +244,11 @@ private enum bool hasContextPointers(T) = {
 } ();
 
 
+private struct Blob(T)
+{
+    align(T.alignof) ubyte[T.sizeof] bytes;
+}
+
 private void moveEmplaceImpl(T)(scope ref T target, return scope ref T source) @nogc
 {
     // TODO: this assert pulls in half of phobos. we need to work out an alternative assert strategy.
@@ -263,10 +268,7 @@ private void moveEmplaceImpl(T)(scope ref T target, return scope ref T source) @
         assert((() @trusted => &source !is &target)(), "source and target must not be identical");
 
         static if (hasElaborateAssign!T || !isAssignable!T)
-        {
-            import urt.mem : memcpy;
-            () @trusted { memcpy(&target, &source, T.sizeof); }();
-        }
+            () @trusted { *cast(Blob!T*)&target = *cast(Blob!T*)&source; }();
         else
             target = source;
 

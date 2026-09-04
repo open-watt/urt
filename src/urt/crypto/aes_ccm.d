@@ -83,7 +83,7 @@ Result cbc_mac(const(ubyte)[] key, const(ubyte)[] nonce, const(ubyte)[] aad, con
     b[0] = cast(ubyte)((aad.length ? 0x40 : 0) | ((tag_len - 2) / 2) << 3 | (l - 1));
     b[1 .. 1 + nonce.length] = nonce[];
     size_t len = msg.length;
-    foreach_reverse (i; 0 .. l)
+    foreach (i; 0 .. l)
     {
         b[15 - i] = cast(ubyte)len;
         len >>= 8;
@@ -169,7 +169,7 @@ Result ctr_crypt(const(ubyte)[] key, const(ubyte)[] nonce, const(ubyte)[] input,
     {
         ++counter;
         size_t c = counter;
-        foreach_reverse (i; 0 .. l)
+        foreach (i; 0 .. l)
         {
             a[15 - i] = cast(ubyte)c;
             c >>= 8;

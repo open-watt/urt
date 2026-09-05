@@ -310,7 +310,21 @@ void IRAM_ATTR ow_counter_reload(unsigned port)
     portEXIT_CRITICAL_SAFE(&counter->lock);
 }
 
-uint64_t ow_counter_read(unsigned port)
+void IRAM_ATTR ow_counter_rearm(unsigned port, uint64_t ticks)
+{
+    if (port >= OW_COUNTERS || !ticks)
+        return;
+    ow_counter_t *counter = &counters[port];
+    portENTER_CRITICAL_SAFE(&counter->lock);
+    if (counter->started) {
+        counter->alarm.alarm_count = ticks;
+        gptimer_set_raw_count(counter->timer, 0);
+        gptimer_set_alarm_action(counter->timer, &counter->alarm);
+    }
+    portEXIT_CRITICAL_SAFE(&counter->lock);
+}
+
+uint64_t IRAM_ATTR ow_counter_read(unsigned port)
 {
     uint64_t value = 0;
     if (port < OW_COUNTERS && counters[port].open)
@@ -370,6 +384,12 @@ int ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 void ow_counter_reload(unsigned port)
 {
     (void)port;
+}
+
+void ow_counter_rearm(unsigned port, uint64_t ticks)
+{
+    (void)port;
+    (void)ticks;
 }
 
 uint64_t ow_counter_read(unsigned port)

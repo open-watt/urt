@@ -32,7 +32,12 @@ Result counter_hw_arm(uint port, ulong ticks, bool periodic)
     ow_counter_reload(port);
 }
 
-ulong counter_hw_read(uint port)
+@critical void counter_hw_rearm(uint port, ulong ticks)
+{
+    ow_counter_rearm(port, ticks);
+}
+
+@critical ulong counter_hw_read(uint port)
 {
     return ow_counter_read(port);
 }
@@ -50,6 +55,7 @@ extern(C) nothrow @nogc
     int ow_counter_open(uint port, uint resolution_hz);
     int ow_counter_arm(uint port, ulong ticks, bool periodic);
     void ow_counter_reload(uint port);
+    void ow_counter_rearm(uint port, ulong ticks);
     ulong ow_counter_read(uint port);
     void ow_counter_close(uint port);
 }

@@ -4,6 +4,8 @@ import urt.result : Result, InternalResult;
 
 version (Espressif)
     public import urt.driver.esp32.wifi;
+else version (Beken)
+    public import urt.driver.bk7231.wifi;
 else version (BL808_M0)
     public import urt.driver.bl808_m0.wifi;
 else
@@ -114,6 +116,7 @@ enum WifiEvent : ubyte
     scan_done,
     sta_started,
     sta_stopped,
+    sta_start_failed,
 }
 
 static assert(WifiEvent.sta_connected == 0);

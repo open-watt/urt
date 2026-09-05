@@ -1,12 +1,12 @@
 module urt.driver.bk7231.pbuf;
 
+import urt.inet : IPAddr;
 import urt.mem : memcpy;
 import urt.mem.pagepool : Page, page_alloc, page_free;
 import urt.sync.critical : Critical;
 import urt.util : byte_reverse;
 
 nothrow @nogc:
-
 
 alias BekenEthernetInputHandler = void function(uint vif, Page* pages) nothrow @nogc;
 
@@ -126,6 +126,24 @@ extern(C) Pbuf* pbuf_coalesce(Pbuf* p, int layer)
 extern(C) uint lwip_htonl(uint value)
     => byte_reverse(value);
 
+extern(C) int ip4addr_aton(const(char)* string, uint* address)
+{
+    if (!string)
+        return 0;
+
+    size_t length;
+    while (string[length])
+        ++length;
+
+    IPAddr result;
+    ptrdiff_t parsed = result.fromString(string[0 .. length]);
+    if (parsed < 0 || cast(size_t)parsed != length)
+        return 0;
+    if (address)
+        *address = result.address;
+    return 1;
+}
+
 extern(C) void ethernetif_input(int vif, Pbuf* p)
 {
     if (!p)
@@ -154,7 +172,6 @@ extern(C) void ethernetif_input(int vif, Pbuf* p)
 }
 
 private:
-
 enum ushort pbuf_offset = 8;
 enum size_t pbuf_headroom = ushort.sizeof + Pbuf.sizeof;
 enum ubyte[5] protocol_headrooms = [74, 54, 14, 0, 0];
@@ -199,4 +216,14 @@ void set_next(Pbuf* p, Pbuf* next)
 {
     p.next = next;
     page_from_pbuf(p).next = next ? page_from_pbuf(next) : null;
+}
+
+unittest
+{
+    uint address;
+    assert(ip4addr_aton("192.168.4.1".ptr, &address));
+    assert((cast(ubyte*)&address)[0 .. 4] == [192, 168, 4, 1]);
+    assert(!ip4addr_aton("192.168.4.256".ptr, &address));
+    assert(!ip4addr_aton("192.168.4.1x".ptr, &address));
+    assert(!ip4addr_aton(null, &address));
 }

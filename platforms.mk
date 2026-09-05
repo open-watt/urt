@@ -407,6 +407,7 @@ ifeq ($(PLATFORM),rp2350)
 endif
 ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bk7231" -type f -name '*.d' 2>/dev/null)
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
 endif
 ifneq ($(filter esp%,$(PLATFORM)),)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/esp32" -type f -name '*.d')
@@ -504,6 +505,11 @@ ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     else
         DFLAGS := $(DFLAGS) -d-version=BK7231T
     endif
+    DFLAGS := $(DFLAGS) -L--wrap=app_set_sema -L--wrap=bk_printf
+    DFLAGS := $(DFLAGS) -L--wrap=bmsg_ioctl_sender -L--wrap=bmsg_is_empty
+    DFLAGS := $(DFLAGS) -L--wrap=bmsg_null_sender -L--wrap=bmsg_rx_sender
+    DFLAGS := $(DFLAGS) -L--wrap=printf -L--wrap=rwm_upload_data
+    DFLAGS := $(DFLAGS) -L--wrap=rwnx_handle_recv_msg -L--wrap=txu_cntrl_push
 endif
 
 # Chip-specific versions

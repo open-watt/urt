@@ -151,6 +151,15 @@ CI_PLATFORMS := \
     esp32 esp32-s2 esp32-s3 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2 esp32-p4 \
     bl618 bk7231n bk7231t rp2350 stm4xx stm7xx bl808-d0 bl808-m0
 
+.PHONY: check-no-rtti-casts
+check-no-rtti-casts:
+ifeq ($(COMPILER),ldc)
+	mkdir -p $(OBJDIR)
+	"$(DC)" $(DFLAGS) -unittest --fno-rtti --fno-moduleinfo -c -of$(OBJDIR)/nullable-no-rtti.o src/urt/meta/nullable.d
+else
+	$(error check-no-rtti-casts requires COMPILER=ldc)
+endif
+
 .PHONY: ci-build
 ci-build:
 	@set -e; for p in $(CI_PLATFORMS); do \

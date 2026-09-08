@@ -341,7 +341,8 @@ bool _resolve_batch(const(void*)[] addrs, Resolved[] results) @trusted
 //  Exception-handling runtime (compiler-specific)
 // ======================================================================
 
-version (GDC)
+version (NoExceptions) {}
+else version (GDC)
 {
     static assert(false, "GDC exception runtime not ported");
 }

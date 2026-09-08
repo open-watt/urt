@@ -290,6 +290,9 @@ template Nullable(T)
 
 unittest
 {
+    import urt.mem : alloc, free;
+    import urt.string.format : format;
+
     static struct S { int x; }
 
     Nullable!S s;
@@ -299,4 +302,102 @@ unittest
     assert(s.value.x == 42);
     s = null;
     assert(!s);
+
+    static class Base
+    {
+        override ptrdiff_t toString(char[] buffer) const nothrow @nogc
+            => formatValue("base", buffer);
+    }
+
+    static class Derived : Base
+    {
+        override ptrdiff_t toString(char[] buffer) const nothrow @nogc
+            => formatValue("derived", buffer);
+    }
+
+    static class Inherited : Base {}
+
+    static class WrongContract
+    {
+        static int dyn_cast(T)(WrongContract source) nothrow @nogc
+            => 0;
+    }
+    static class WrongDerived : WrongContract {}
+
+    static assert(!__traits(compiles, _d_cast!(Derived, Base)(cast(Base)null)));
+    static assert(!__traits(compiles, _d_cast!(Error, Throwable)(cast(Throwable)null)));
+    static assert(!__traits(compiles, _d_cast!(WrongDerived, WrongContract)(cast(WrongContract)null)));
+
+    Derived value = alloc!Derived();
+    assert(value);
+    scope(exit) free(value);
+
+    assert(_d_cast!(Derived, Derived)(value) is cast(void*)value);
+    assert(_d_cast!(Base, Derived)(value) is cast(void*)value);
+    assert(_d_cast!(const(Base), const(Derived))(value) is cast(void*)value);
+    assert(_d_cast!(Base, Derived)(null) is null);
+
+    char[32] buffer;
+    Nullable!Base nullable;
+    assert(format(buffer, "{0}", nullable) == "null");
+    nullable = value;
+    assert(format(buffer, "{0}", nullable) == "derived");
+    assert(format(buffer, "{0}", value) == "derived");
+    nullable = null;
+    assert(format(buffer, "{0}", nullable) == "null");
+
+    Inherited inherited = alloc!Inherited();
+    assert(inherited);
+    scope(exit) free(inherited);
+    assert(format(buffer, "{0}", inherited) == "base");
+
+    static class Root
+    {
+        alias dyn_cast = checked_cast;
+
+        static T checked_cast(T)(Root source) nothrow @nogc
+            if (is(typeof(T.cast_key) == uint))
+        {
+            return cast(T)source.query(T.cast_key);
+        }
+
+        static const(T) checked_cast(T)(const(Root) source) nothrow @nogc
+            if (is(typeof(T.cast_key) == uint))
+        {
+            return cast(const(T))source.query(T.cast_key);
+        }
+
+        protected inout(void)* query(uint key) inout nothrow @nogc
+            => null;
+    }
+
+    static class Leaf : Root
+    {
+        enum uint cast_key = 1;
+
+        protected override inout(void)* query(uint key) inout nothrow @nogc
+            => key == cast_key ? cast(inout(void)*)this : null;
+    }
+
+    static class Sibling : Root {}
+
+    Leaf leaf = alloc!Leaf();
+    assert(leaf);
+    scope(exit) free(leaf);
+    Root root = leaf;
+    assert(Root.dyn_cast!Leaf(root) is leaf);
+    assert(cast(Leaf)root is leaf);
+    assert(_d_cast!(Root, Leaf)(leaf) is cast(void*)leaf);
+    const(Root) const_root = root;
+    assert(cast(const(Leaf))const_root is leaf);
+    static assert(is(typeof(Root.dyn_cast!Leaf(const_root)) == const(Leaf)));
+
+    Sibling sibling = alloc!Sibling();
+    assert(sibling);
+    scope(exit) free(sibling);
+    root = sibling;
+    assert(cast(Leaf)root is null);
+    root = null;
+    assert(cast(Leaf)root is null);
+    static assert(!__traits(compiles, _d_cast!(Sibling, Root)(root)));
 }

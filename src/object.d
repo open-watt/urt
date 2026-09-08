@@ -1226,23 +1226,16 @@ private enum _scalar_exp(Args...) = () {
     return stack[0];
 }();
 
-// ----------------------------------------------------------------------
-// _d_cast - dynamic class cast, walks TypeInfo_Class.base chain
-// ----------------------------------------------------------------------
-
-void* _d_cast(To, From)(From o) @trusted
+void* _d_cast(To, From)(From o) @trusted nothrow @nogc
     if (is(From == class) && is(To == class))
 {
-    if (o is null) return null;
-    auto ci = typeid(o);
-    auto target = typeid(To);
-    do
+    static if (is(From : To))
+        return cast(void*)o;
+    else
     {
-        if (ci is target) return cast(void*) o;
-        ci = ci.base;
+        static assert(is(typeof(From.dyn_cast!To(o)) : To), "Dynamic cast from " ~ From.stringof ~ " to " ~ To.stringof ~ " requires a dyn_cast!(" ~ To.stringof ~ ")(source) contract returning the target type");
+        return o is null ? null : cast(void*)From.dyn_cast!To(o);
     }
-    while (ci !is null);
-    return null;
 }
 
 void* _d_cast(To, From)(From o) @trusted

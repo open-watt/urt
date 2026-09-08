@@ -1,9 +1,12 @@
 module urt.driver.wifi;
 
 import urt.result : Result, InternalResult;
+import urt.time : MonoTime;
 
 version (Espressif)
     public import urt.driver.esp32.wifi;
+else version (Beken)
+    public import urt.driver.bk7231.wifi;
 else version (BL808_M0)
     public import urt.driver.bl808_m0.wifi;
 else
@@ -114,6 +117,7 @@ enum WifiEvent : ubyte
     scan_done,
     sta_started,
     sta_stopped,
+    sta_start_failed,
 }
 
 static assert(WifiEvent.sta_connected == 0);
@@ -645,6 +649,15 @@ bool wifi_service(ref Wifi wifi, size_t budget = 32)
         assert(false, "no WiFi on this platform");
     else
         return wifi_hw_service(wifi.port, budget);
+}
+
+// Schedule service at this deadline even without a ready callback; zero means no deadline.
+MonoTime wifi_service_deadline(ref Wifi wifi)
+{
+    static if (__traits(compiles, wifi_hw_service_deadline(wifi.port)))
+        return wifi_hw_service_deadline(wifi.port);
+    else
+        return MonoTime.init;
 }
 
 

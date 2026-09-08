@@ -35,7 +35,8 @@ extern(C) void sys_init()
     page_pool_init();
     bk_misc_init_start_type();
     driver_init();
-    bk_misc_check_start_type();
+    version (BK7231N)
+        bk_misc_check_start_type();
     func_init_basic();
 
     timer_hw_init();
@@ -47,7 +48,7 @@ private:
 extern(C) extern __gshared ubyte _tdata_load, _tdata_start, _data_end, _flash_end;
 extern(C) extern const ubyte __eh_frame_start;
 
-ubyte[48] __eh_frame_object;
+align((void*).alignof) ubyte[48] __eh_frame_object;
 
 extern(C)
 {
@@ -61,7 +62,8 @@ extern(C)
     void do_reserved();
     void set_printf_port(ubyte port);
     void bk_misc_init_start_type();
-    void bk_misc_check_start_type();
+    version (BK7231N)
+        void bk_misc_check_start_type();
     uint driver_init();
     uint func_init_basic();
 }

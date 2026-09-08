@@ -36,20 +36,48 @@ nothrow @nogc:
 
 T debug_alloc(T = void)() pure @trusted
     if (is(T == class))
-{
-    static T gc_alloc(size_t size) pure nothrow => new T;
-    return (cast(T function(size_t) pure nothrow @nogc)&gc_alloc)(size);
-}
+    => alloc!T();
+
 T* debug_alloc(T = void)() pure @trusted
     if (!is(T == class))
-{
-    static T* gc_alloc(size_t size) pure nothrow => new T;
-    return (cast(T* function(size_t) pure nothrow @nogc)&gc_alloc)(size);
-}
+    => alloc!T();
+
 T[] debug_alloc(T = void)(size_t size) pure @trusted
+    => alloc_array!T(size);
+
+unittest
 {
-    static T[] gc_alloc(size_t size) pure nothrow => new T[size];
-    return (cast(T[] function(size_t) pure nothrow @nogc)&gc_alloc)(size);
+    static struct Value
+    {
+        uint number = 42;
+    }
+
+    static class Instance
+    {
+        uint number;
+
+        this() pure nothrow @nogc
+        {
+            number = 73;
+        }
+    }
+
+    auto value = debug_alloc!Value();
+    assert(value && value.number == 42);
+    free(value);
+
+    auto instance = debug_alloc!Instance();
+    assert(instance && instance.number == 73);
+    free(instance);
+
+    auto values = debug_alloc!Value(2);
+    assert(values.length == 2 && values[0].number == 42 && values[1].number == 42);
+    free(values);
+
+    auto instances = debug_alloc!Instance(2);
+    assert(instances.length == 2 && instances[0] is null && instances[1] is null);
+    free(instances);
+    assert(debug_alloc!char(0) is null);
 }
 
 

@@ -423,14 +423,31 @@ void FD_ZERO(fd_set* set) pure @nogc
 
 
 /// Creates a new $(D fd_set) with the specified capacity.
-fd_set* FD_CREATE(uint capacity) pure
+fd_set* FD_CREATE(uint capacity) pure @nogc
 {
-    // Take into account alignment (SOCKET may be 64-bit and require 64-bit alignment on 64-bit systems)
+    import urt.mem : alloc;
+
     size_t size = (fd_set_custom!1).sizeof - SOCKET.sizeof + (SOCKET.sizeof * capacity);
-    auto data = new ubyte[size];
+    auto data = alloc(size, fd_set.alignof);
     auto set = cast(fd_set*)data.ptr;
-    FD_ZERO(set);
+    if (set)
+        FD_ZERO(set);
     return set;
+}
+
+unittest
+{
+    import urt.mem : free;
+
+    enum capacity = FD_SETSIZE + 1;
+    auto set = FD_CREATE(capacity);
+    assert(set && set.fd_count == 0);
+    foreach (i; 0 .. capacity)
+        FD_SET(cast(SOCKET)i, set);
+    assert(set.fd_count == capacity && FD_ISSET(capacity - 1, set));
+    FD_CLR(0, set);
+    assert(set.fd_count == capacity - 1 && !FD_ISSET(0, set));
+    free((cast(void*)set)[0 .. fd_set_custom!capacity.sizeof]);
 }
 
 struct linger

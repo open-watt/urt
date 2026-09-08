@@ -815,16 +815,8 @@ else
     $(error "Unknown D compiler: $(COMPILER)")
 endif
 
-# Masks the throw runtime and drops the unwind tables. Defaults on for
-# bare-metal and Tiny, whose crash driver walks the frame-pointer chain.
-# Override with NOEXCEPTIONS=1/0.
-ifdef BAREMETAL_DIR
-    NOEXCEPTIONS ?= 1
-endif
-ifeq ($(TINY),1)
-    NOEXCEPTIONS ?= 1
-endif
-NOEXCEPTIONS ?= 0
+# uRT class hierarchies do not provide an exception downcast contract.
+NOEXCEPTIONS ?= 1
 
 ifeq ($(NOEXCEPTIONS),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)NoExceptions

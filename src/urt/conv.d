@@ -111,125 +111,8 @@ ulong parse_uint_with_base(const(char)[] str, size_t* bytes_taken = null) pure
 
 ulong parse_uint_with_exponent(const(char)[] str, out int exponent, size_t* bytes_taken = null, uint base = 10) pure
 {
-    debug assert(base > 1 && base <= 36, "Invalid base");
-
-    const(char)* s = str.ptr;
-    const(char)* e = s + str.length;
-
-    ulong value = 0;
-    int exp = 0;
-    uint digits = 0;
-    uint zero_seq = 0;
-    char c = void;
-
-    for (; s < e; ++s)
-    {
-        c = *s;
-
-        if (c == '.')
-        {
-            if (s == str.ptr)
-                goto done;
-            ++s;
-            exp = zero_seq;
-            goto parse_decimal;
-        }
-        else if (c == '0')
-        {
-            ++zero_seq;
-            continue;
-        }
-
-        uint digit = get_digit(c);
-        if (digit >= base)
-            break;
-
-        if (digits)
-        {
-            for (uint i = 0; i <= zero_seq; ++i)
-                value = value * base;
-            digits += zero_seq;
-        }
-        value += digit;
-        digits += 1;
-        zero_seq = 0;
-    }
-
-    // number has no decimal point, tail zeroes are positive exp
-    if (!digits)
-        goto nothing;
-
-    exp = zero_seq;
-    goto check_exp;
-
-parse_decimal:
-    for (; s < e; ++s)
-    {
-        c = *s;
-
-        if (c == '0')
-        {
-            ++zero_seq;
-            continue;
-        }
-
-        uint digit = get_digit(c);
-        if (digit >= base)
-            break;
-
-        if (digits)
-        {
-            for (uint i = 0; i <= zero_seq; ++i)
-                value = value * base;
-            digits += zero_seq;
-        }
-        value += digit;
-        digits += 1;
-        exp -= 1 + zero_seq;
-        zero_seq = 0;
-    }
-    if (!digits)
-        goto nothing;
-
-check_exp:
-    // check for exponent part
-    if (s + 1 < e && ((*s | 0x20) == 'e'))
-    {
-        c = s[1];
-        bool exp_neg = c == '-';
-        if (exp_neg || c == '+')
-        {
-            if (s + 2 >= e || !s[2].is_numeric)
-                goto done;
-            s += 2;
-        }
-        else
-        {
-            if (!c.is_numeric)
-                goto done;
-            ++s;
-        }
-
-        int exp_value = 0;
-        for (; s < e; ++s)
-        {
-            uint digit = *s - '0';
-            if (digit > 9)
-                break;
-            exp_value = exp_value * 10 + digit;
-        }
-        exp += exp_neg ? -exp_value : exp_value;
-    }
-
-done:
-    exponent = exp;
-    if (bytes_taken)
-        *bytes_taken = s - str.ptr;
-    return value;
-
-nothing:
-    exp = 0;
-    goto done;
+    bool truncated;
+    return parse_scaled_uint(str, exponent, bytes_taken, base, ulong.max, truncated);
 }
 
 ulong parse_uint_with_exponent_and_base(const(char)[] str, out int exponent, out uint base, size_t* bytes_taken = null) pure
@@ -270,6 +153,32 @@ unittest
     assert("0.01Ex".parse_uint_with_exponent(e, &taken, 10) == 1 && e == -2 && taken == 4);
     assert("0.01E-".parse_uint_with_exponent(e, &taken, 10) == 1 && e == -2 && taken == 4);
     assert("0.01E-x".parse_uint_with_exponent(e, &taken, 10) == 1 && e == -2 && taken == 4);
+    assert("18446744073709551615".parse_uint_with_exponent(e, &taken) == ulong.max && e == 0 && taken == 20);
+    assert("FFFFFFFFFFFFFFFF".parse_uint_with_exponent(e, &taken, 16) == ulong.max && e == 0 && taken == 16);
+    assert("100000000000000000000001".parse_uint_with_exponent(e, &taken) == 10_000_000_000_000_000_000UL && e == 4 && taken == 24);
+    assert("18446744073709551616".parse_uint_with_exponent(e, &taken) == 1844674407370955161UL && e == 1 && taken == 20);
+    assert("18446744073709551616.25.3".parse_uint_with_exponent(e, &taken) == 1844674407370955161UL && e == 1 && taken == 23);
+    assert("18446744073709551615.9e-2".parse_uint_with_exponent(e, &taken) == ulong.max && e == -2 && taken == 25);
+    assert("1.8446744073709551616".parse_uint_with_exponent(e, &taken) == 1844674407370955161UL && e == -18 && taken == 21);
+    assert("1.8446744073709551616.3".parse_uint_with_exponent(e, &taken) == 1844674407370955161UL && e == -18 && taken == 21);
+    assert("1e10".parse_uint_with_exponent(e, &taken, 16) == 481 && e == 1 && taken == 4);
+    assert("1e+10".parse_uint_with_exponent(e, &taken, 16) == 1 && e == 10 && taken == 5);
+    assert("1E-10".parse_uint_with_exponent(e, &taken, 16) == 1 && e == -10 && taken == 5);
+    assert("1.e+2".parse_uint_with_exponent(e, &taken, 16) == 1 && e == 2 && taken == 5);
+    assert("1e+".parse_uint_with_exponent(e, &taken, 16) == 30 && e == 0 && taken == 2);
+    assert("1e-x".parse_uint_with_exponent(e, &taken, 16) == 30 && e == 0 && taken == 2);
+    assert("1e10".parse_uint_with_exponent(e, &taken, 2) == 1 && e == 10 && taken == 4);
+    foreach (base; 15 .. 37)
+    {
+        assert("1e1".parse_uint_with_exponent(e, &taken, base) == base * base + 14 * base + 1 && e == 0 && taken == 3);
+        assert("1e+10".parse_uint_with_exponent(e, &taken, base) == 1 && e == 10 && taken == 5);
+        assert("1e-10".parse_uint_with_exponent(e, &taken, base) == 1 && e == -10 && taken == 5);
+    }
+    assert(parse_float("1e+2", null, 16) == 256);
+    assert(parse_float("1e-2", null, 16) == 1.0 / 256);
+    static assert(parse_float("123.5") == 123.5);
+    static assert(parse_float("1e400") == double.infinity);
+
 }
 
 int parse_int_fast(ref const(char)[] text, out bool success) pure
@@ -333,26 +242,62 @@ unittest
 }
 
 
-// on error or not-a-number, result will be nan and bytes_taken will contain 0
 double parse_float(const(char)[] str, size_t* bytes_taken = null, uint base = 10) pure
 {
-    import urt.math : pow;
+    import urt.array : beginsWith;
 
-    int e;
+    bool negative = str.length && str[0] == '-';
+    size_t sign = negative || (str.length && str[0] == '+');
+    const(char)[] text = str[sign .. $];
+    if (base == 10 && (text.beginsWith("nan") || text.beginsWith("inf")))
+    {
+        if (bytes_taken)
+            *bytes_taken = sign + 3;
+        return text[0] == 'n' ? double.nan : negative ? -double.infinity : double.infinity;
+    }
+
+    version (Tiny) enum ulong decimal_limit = 9_999_999_999_999_999;
+    else enum ulong decimal_limit = ulong.max;
+
+    int exponent;
     size_t taken;
-    long mantissa = str.parse_int_with_exponent(e, &taken, base);
+    bool truncated;
+    ulong mantissa = parse_scaled_uint(text, exponent, &taken, base, base == 10 ? decimal_limit : ulong.max, truncated);
     if (bytes_taken)
-        *bytes_taken = taken;
-    if (taken == 0)
+        *bytes_taken = taken ? taken + sign : 0;
+    if (!taken)
         return double.nan;
 
-    // TODO: the real work needs to happen here!
-    //       we want all the bits of precision!
+    double value = mantissa;
+    if (base == 10)
+    {
+        version (X86) enum bool fast = false;
+        else enum bool fast = true;
+        if (fast && !truncated && mantissa < (1uL << 53) && exponent >= -22 && exponent <= 22)
+            value = exponent < 0 ? value / decimal_powers[-exponent] : value * decimal_powers[exponent];
+        else
+        {
+            version (Tiny) {} else
+            {
+                if (!__ctfe)
+                {
+                    import urt.internal.stdc.stdlib : strtod;
 
-    if (__ctfe)
-        return mantissa * double(base)^^e;
+                    char[32] buffer = void;
+                    size_t length = format_uint(mantissa, buffer);
+                    buffer[length++] = 'e';
+                    length += format_int(exponent, buffer[length .. $]);
+                    buffer[length] = 0;
+                    value = strtod(buffer.ptr, null);
+                    return negative ? -value : value;
+                }
+            }
+            value = scale_float(value, exponent, base);
+        }
+    }
     else
-        return mantissa * pow(double(base), e);
+        value = scale_float(value, exponent, base);
+    return negative ? -value : value;
 }
 
 unittest
@@ -370,6 +315,80 @@ unittest
     assert(fcmp(parse_float("-123.456e10"), -1.23456e+12));
     assert(fcmp(parse_float("1101.11", &taken, 2), 13.75) && taken == 7);
     assert(parse_float("xyz", &taken) is double.nan && taken == 0);
+
+    assert(parse_float("123.456") == 123.456);
+    version (Tiny)
+    {
+        assert(parse_float("0.3333333333333333") > 0.33333333333332);
+        assert(parse_float("3.141592653589793") > 3.14159265358978);
+        double maximum = parse_float("1.7976931348623157e308");
+        assert(maximum <= double.max && maximum > 1.79769313486230e308);
+    }
+    else
+    {
+        assert(parse_float("0.3333333333333333") is 0.3333333333333333);
+        assert(parse_float("3.141592653589793") is 3.141592653589793);
+        assert(parse_float("1.7976931348623157e308") is 1.7976931348623157e308);
+        assert(parse_float("1e308") is 1e308);
+        assert(parse_float("2.5e-100") is 2.5e-100);
+    }
+    assert(parse_float("1e309") == double.infinity);
+    assert(parse_float("-1e400") == -double.infinity);
+    assert(parse_float("1e-400") == 0);
+    assert(parse_float("1.0000000000000000011") == 1);
+    assert(parse_float("10000000000000000011") == 1e19);
+    assert(parse_float("1111111111111111111", null, 2) == 524287);
+    assert(parse_float("9e308") == double.infinity);
+    assert(parse_float("123456789012345678e300") == double.infinity);
+    assert(parse_float("1e4294967296") == double.infinity);
+    assert(parse_float("1e-4294967296") == 0);
+    assert(parse_float("0e400", &taken) == 0 && taken == 5);
+    assert(parse_float("-0") is -0.0);
+    assert(parse_float("000000000000000000000000000000000000000000000000000000000000000000000000000001.25") == 1.25);
+    assert(parse_float("10000000000000000000000000000000000000000000000000000000000000000000000000000000e-79") == 1);
+    assert(parse_float("nan") is double.nan);
+    assert(parse_float("-inf") == -double.infinity);
+
+    version (Tiny)
+    {
+        ulong seed = 123456789;
+        char[32] buffer;
+        foreach (i; 0 .. 1000)
+        {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ulong bits = seed & 0x7fff_ffff_ffff_ffff;
+            if (bits >= 0x7ff0_0000_0000_0000)
+                continue;
+            double value = *cast(double*)&bits;
+            ptrdiff_t n = format_float(value, buffer, ".17");
+            assert(n > 0);
+            double parsed = parse_float(buffer[0 .. n]);
+            ulong got = *cast(ulong*)&parsed;
+            assert((got > bits ? got - bits : bits - got) <= 32);
+        }
+    }
+    else
+    {
+        assert(parse_float("2.2250738585072011e-308") == double.min_normal * (1 - double.epsilon));
+        assert(parse_float("4.9406564584124654e-324") == double.min_normal * double.epsilon);
+        assert(parse_float("123456789012345678901234567890") == 123456789012345678901234567890.0);
+
+        import urt.rand : rand;
+        char[32] fbuf;
+        foreach (i; 0 .. 10_000)
+        {
+            ulong bits = (ulong(rand()) << 32) | rand();
+            double v = *cast(double*)&bits;
+            if (v != v || v == double.infinity || v == -double.infinity)
+                continue;
+            ptrdiff_t n = format_float(v, fbuf, ".17");
+            assert(n > 0);
+            double r = parse_float(fbuf[0 .. n]);
+            assert(*cast(ulong*)&r == bits || (v == 0 && r == 0));
+        }
+    }
 }
 
 
@@ -672,6 +691,53 @@ ptrdiff_t format_float(double value, char[] buffer, const(char)[] format = null)
     return len;
 }
 
+ptrdiff_t format_float_shortest(F)(F value, char[] buffer) pure
+    if (is(F == double) || is(F == float))
+    => format_shortest_impl(value, buffer, is(F == float) ? 9 : 17, is(F == float));
+
+
+unittest
+{
+    char[64] t;
+
+    static void check_shortest(F)(F v, const(char)[] expect = null)
+    {
+        char[64] b;
+        ptrdiff_t n = format_float_shortest(v, b);
+        assert(n > 0);
+        if (expect)
+            assert(b[0 .. n] == expect);
+        size_t taken;
+        double r = parse_float(b[0 .. n], &taken);
+        assert(taken == n);
+        version (Tiny)
+        {
+            import urt.math : fabs;
+            double tolerance = is(F == float) ? 1e-6 : 1e-13;
+            assert(r == v || (r != r && v != v) || fabs(r / v - 1) < tolerance);
+        }
+        else
+            assert(cast(F)r is v || (r != r && v != v));
+    }
+    check_shortest(0.0, "0");
+    check_shortest(1.5, "1.5");
+    check_shortest(0.1, "0.1");
+    check_shortest(1.0 / 3.0);
+    check_shortest(3.14159265358979);
+    check_shortest(1e30);
+    check_shortest(-2.5e-10);
+    check_shortest(double.max);
+    check_shortest(0.1f, "0.1");
+    check_shortest(float.max);
+    check_shortest(double.nan);
+    check_shortest(-double.infinity);
+
+    assert(format_float_shortest(1.5, null) == 3);
+    assert(format_float_shortest(double.nan, null) == 3);
+    assert(format_float_shortest(1.5, t[0 .. 2]) == -1);
+    assert(format_float_shortest(-0.0, t) == 1 && t[0] == '0');
+}
+
 unittest
 {
     import urt.io;
@@ -759,6 +825,248 @@ template to(T)
 
 
 private:
+
+ptrdiff_t format_shortest_impl(double value, char[] buffer, uint max_digits, bool as_float) pure
+{
+    if (value != value)
+        return copy_shortest("nan", buffer);
+    if (value == double.infinity)
+        return copy_shortest("inf", buffer);
+    if (value == -double.infinity)
+        return copy_shortest("-inf", buffer);
+
+    version (Tiny)
+    {
+        const(char)[] precision = as_float ? ".8" : ".16";
+        if (value > 1e308 || value < -1e308)
+            precision = ".17";
+        return format_float(value, buffer, precision);
+    }
+    else
+    {
+        char[4] spec = void;
+        char[64] tmp = void;
+        foreach (uint digits; 1 .. max_digits + 1)
+        {
+            spec[0] = '.';
+            ptrdiff_t sl = 1 + format_uint(digits, spec[1 .. $]);
+            ptrdiff_t n = format_float(value, tmp, spec[0 .. sl]);
+            if (n <= 0)
+                return n;
+
+            size_t taken;
+            double r = parse_float(tmp[0 .. n], &taken);
+            if (taken == n && (as_float ? cast(float)r is cast(float)value : r is value))
+                return copy_shortest(tmp[0 .. n], buffer);
+
+            if (digits == max_digits)
+                return copy_shortest(tmp[0 .. n], buffer);
+        }
+        return -2;
+    }
+}
+
+ptrdiff_t copy_shortest(const(char)[] text, char[] buffer) pure
+{
+    if (buffer.ptr)
+    {
+        if (text.length > buffer.length)
+            return -1;
+        buffer[0 .. text.length] = text[];
+    }
+    return text.length;
+}
+
+immutable double[23] decimal_powers = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+];
+
+ulong parse_scaled_uint(const(char)[] str, out int exponent, size_t* bytes_taken, uint base, ulong limit, out bool truncated) pure
+{
+    debug assert(base > 1 && base <= 36, "Invalid base");
+
+    const(char)* s = str.ptr;
+    const(char)* e = s + str.length;
+
+    ulong value = 0;
+    int exp = 0;
+    uint digits = 0;
+    uint zero_seq = 0;
+    char c = void;
+    ulong cutoff = limit / base;
+    uint last_digit = cast(uint)(limit % base);
+    bool fractional = void;
+
+    for (; s < e; ++s)
+    {
+        c = *s;
+
+        if (c == '.')
+        {
+            if (s == str.ptr)
+                goto done;
+            ++s;
+            exp = zero_seq;
+            goto parse_decimal;
+        }
+        else if (c == '0')
+        {
+            ++zero_seq;
+            continue;
+        }
+
+        uint digit = get_digit(c);
+        if (digit >= base || (digit == 14 && e - s > 2 && (s[1] == '+' || s[1] == '-') && s[2].is_numeric))
+            break;
+
+        if (digits)
+        {
+            for (uint i = 0; i <= zero_seq; ++i)
+            {
+                if (value > cutoff || (value == cutoff && i == zero_seq && digit > last_digit))
+                {
+                    exp = cast(int)(zero_seq - i + 1);
+                    fractional = false;
+                    goto discard_digits;
+                }
+                value = value * base;
+            }
+            digits += zero_seq;
+        }
+        value += digit;
+        digits += 1;
+        zero_seq = 0;
+    }
+
+    if (!digits)
+        goto nothing;
+
+    exp = zero_seq;
+    goto check_exp;
+
+parse_decimal:
+    for (; s < e; ++s)
+    {
+        c = *s;
+
+        if (c == '0')
+        {
+            ++zero_seq;
+            continue;
+        }
+
+        uint digit = get_digit(c);
+        if (digit >= base || (digit == 14 && e - s > 2 && (s[1] == '+' || s[1] == '-') && s[2].is_numeric))
+            break;
+
+        if (digits)
+        {
+            for (uint i = 0; i <= zero_seq; ++i)
+            {
+                if (value > cutoff || (value == cutoff && i == zero_seq && digit > last_digit))
+                {
+                    exp -= i;
+                    fractional = true;
+                    goto discard_digits;
+                }
+                value = value * base;
+            }
+            digits += zero_seq;
+        }
+        value += digit;
+        digits += 1;
+        exp -= 1 + zero_seq;
+        zero_seq = 0;
+    }
+    if (!digits)
+        goto nothing;
+
+check_exp:
+    if (s > str.ptr && e - s > 1 && ((*s | 0x20) == 'e'))
+    {
+        c = s[1];
+        bool exp_neg = c == '-';
+        if (exp_neg || c == '+')
+        {
+            if (e - s <= 2 || !s[2].is_numeric)
+                goto done;
+            s += 2;
+        }
+        else
+        {
+            if (!c.is_numeric)
+                goto done;
+            ++s;
+        }
+
+        int exp_value = 0;
+        for (; s < e; ++s)
+        {
+            uint digit = *s - '0';
+            if (digit > 9)
+                break;
+            if (exp_value < 1_000_000)
+                exp_value = exp_value * 10 + digit;
+        }
+        exp += exp_neg ? -exp_value : exp_value;
+    }
+
+done:
+    exponent = value ? exp : 0;
+    if (bytes_taken)
+        *bytes_taken = s - str.ptr;
+    return value;
+
+nothing:
+    exp = 0;
+    goto check_exp;
+
+discard_digits:
+    truncated = true;
+    for (++s; s < e; ++s)
+    {
+        c = *s;
+        if (c == '.' && !fractional)
+        {
+            fractional = true;
+            continue;
+        }
+        uint digit = get_digit(c);
+        if (digit >= base || (digit == 14 && e - s > 2 && (s[1] == '+' || s[1] == '-') && s[2].is_numeric))
+            break;
+        if (!fractional)
+            ++exp;
+    }
+    goto check_exp;
+}
+
+double scale_float(double value, int exponent, uint base) pure
+{
+    if (value == 0)
+        return value;
+    if (exponent > (base == 10 ? 308 : 1100))
+        return double.infinity;
+    if (exponent < (base == 10 ? -350 : -1200))
+        return 0;
+    uint step = base == 10 ? 22 : 1;
+    double factor = base == 10 ? decimal_powers[22] : base;
+    while (exponent >= cast(int)step)
+    {
+        value *= factor;
+        exponent -= step;
+    }
+    while (exponent <= -cast(int)step)
+    {
+        value /= factor;
+        exponent += step;
+    }
+    if (exponent > 0)
+        value *= decimal_powers[exponent];
+    else if (exponent < 0)
+        value /= decimal_powers[-exponent];
+    return value > double.max ? double.infinity : value;
+}
 
 // valid result is 0 .. 35; result is garbage outside that bound
 uint get_digit(char c) pure

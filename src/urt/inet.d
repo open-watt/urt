@@ -654,22 +654,21 @@ ptrdiff_t inet_scope_parse(const(char)[] s, out uint scope_id)
         ++len;
     if (len == 0)
         return -1;
-    size_t digits;
-    ulong native = s[0 .. len].parse_uint(&digits);
-    if (digits == len)
+    const(char)[] number = s[0 .. len];
+    bool success;
+    int native = parse_int_fast(number, success);
+    if (success && number.length == 0)
     {
-        if (native == 0 || native > int.max)
+        if (native <= 0)
             return -1;
         scope_id = inet_scope_from_native(AddressFamily.ipv6, cast(uint)native);
+        return len;
     }
-    else
-    {
-        if (!_scope_provider)
-            return -1;
-        scope_id = _scope_provider.parse(s[0 .. len]);
-        if (scope_id == 0)
-            return -1;
-    }
+    if (!_scope_provider)
+        return -1;
+    scope_id = _scope_provider.parse(s[0 .. len]);
+    if (scope_id == 0)
+        return -1;
     return len;
 }
 
@@ -1243,7 +1242,7 @@ unittest
         static const(char)[] name(uint scope_id, char[] buffer)
             => scope_id == 7 ? "eth0" : null;
         static uint parse(const(char)[] zone)
-            => zone[] == "eth0" ? 7 : 0;
+            => zone[] == "eth0" || zone[] == "18446744073709551617eth0" ? 7 : 0;
     }
     static immutable InetScopeProvider test_provider = InetScopeProvider(&TestScopes.to_native, &TestScopes.from_native, &TestScopes.name, &TestScopes.parse);
 
@@ -1256,7 +1255,26 @@ unittest
     assert(a.fromString("[fe80::1%eth0]:80") == -1);
     assert(inet_scope_to_native(AddressFamily.ipv6, 3, native) && native == 3);
 
+    foreach (zone; ["1", "0000000000000000000000000000000000000001"])
+    {
+        uint scope_id;
+        assert(inet_scope_parse(zone, scope_id) == zone.length && scope_id == 1);
+    }
+    foreach (zone; ["2147483647", "0002147483647"])
+    {
+        uint scope_id;
+        assert(inet_scope_parse(zone, scope_id) == zone.length && scope_id == int.max);
+    }
+    foreach (zone; ["0", "000", "-1", "-2147483648", "2147483648", "4294967295", "18446744073709551615", "18446744073709551616", "18446744073709551617", "999999999999999999999999999999999999999"])
+    {
+        uint scope_id;
+        assert(inet_scope_parse(zone, scope_id) == -1);
+    }
+    assert(a.fromString("[fe80::1%18446744073709551617]:80") == -1);
+
     register_inet_scope_provider(&test_provider);
+    assert(a.fromString("fe80::1%18446744073709551617") == -1);
+    assert(a.fromString("fe80::1%18446744073709551617eth0") == "fe80::1%18446744073709551617eth0".length && a._a.ipv6.scope_id == 7);
     assert(a.fromString("fe80::1%eth0") == 12 && a._a.ipv6.scope_id == 7 && a.port == 0);
     assert(buf[0 .. a.toString(buf, null, null)] == "[fe80::1%eth0]:0");
     assert(a.fromString("[fe80::1%3]:5") == 13 && a._a.ipv6.scope_id == 7 && a.port == 5);

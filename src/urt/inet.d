@@ -206,6 +206,8 @@ nothrow @nogc:
         => (s[0] & 0xFF00) == 0xFF00;
     bool is_unique_local() const pure
         => (s[0] & 0xFE00) == 0xFC00;
+    bool is_link_scoped() const pure
+        => is_link_local || (is_multicast && ((s[0] & 0xF) == 1 || (s[0] & 0xF) == 2));
 
     bool opCast(T : bool)() const pure
         => (s[0] | s[1] | s[2] | s[3] | s[4] | s[5] | s[6] | s[7]) != 0;
@@ -577,6 +579,101 @@ struct MulticastGroup
     IPAddr iface;
 }
 
+struct MulticastGroup6
+{
+    IPv6Addr address;
+    uint scope_id;
+}
+
+
+// zone ids are the application's; without a provider they are the host stack's interface indices
+struct InetScopeProvider
+{
+nothrow @nogc:
+    bool function(AddressFamily family, uint scope_id, out uint native) to_native;
+    uint function(AddressFamily family, uint native) from_native;
+    const(char)[] function(uint scope_id, char[] buffer) name;
+    uint function(const(char)[] zone) parse;
+}
+
+void register_inet_scope_provider(const(InetScopeProvider)* provider)
+{
+    _scope_provider = provider;
+}
+
+bool inet_scope_to_native(AddressFamily family, uint scope_id, out uint native)
+{
+    if (scope_id == 0)
+        return true;
+    if (!_scope_provider)
+    {
+        native = scope_id;
+        return true;
+    }
+    return _scope_provider.to_native(family, scope_id, native);
+}
+
+// a provider must give every host index an identity; zero would erase a zone that was on the wire
+uint inet_scope_from_native(AddressFamily family, uint native)
+{
+    if (native == 0 || !_scope_provider)
+        return native;
+    uint scope_id = _scope_provider.from_native(family, native);
+    assert(scope_id != 0, "scope provider dropped a host interface index");
+    return scope_id;
+}
+
+ptrdiff_t inet_scope_name(uint scope_id, char[] buffer)
+{
+    if (_scope_provider)
+    {
+        const(char)[] name = _scope_provider.name(scope_id, buffer);
+        if (name.length)
+        {
+            if (name.ptr !is buffer.ptr)
+            {
+                if (buffer.length < name.length)
+                    return -1;
+                buffer[0 .. name.length] = name[];
+            }
+            return name.length;
+        }
+    }
+    uint native;
+    if (!inet_scope_to_native(AddressFamily.ipv6, scope_id, native))
+        return -1;
+    return native.format_uint(buffer);
+}
+
+ptrdiff_t inet_scope_parse(const(char)[] s, out uint scope_id)
+{
+    import urt.string.ascii : is_alpha_numeric;
+
+    size_t len = 0;
+    while (len < s.length && (is_alpha_numeric(s[len]) || s[len] == '-' || s[len] == '.' || s[len] == '_' || s[len] == '~'))
+        ++len;
+    if (len == 0)
+        return -1;
+    size_t digits;
+    ulong native = s[0 .. len].parse_uint(&digits);
+    if (digits == len)
+    {
+        if (native == 0 || native > uint.max)
+            return -1;
+        scope_id = inet_scope_from_native(AddressFamily.ipv6, cast(uint)native);
+    }
+    else
+    {
+        if (!_scope_provider)
+            return -1;
+        scope_id = _scope_provider.parse(s[0 .. len]);
+        if (scope_id == 0)
+            return -1;
+    }
+    return len;
+}
+
+
 struct InetAddress
 {
 nothrow @nogc:
@@ -593,13 +690,13 @@ nothrow @nogc:
         IPv6Addr addr;
         ushort port;
         uint flow_info;
-        uint scopeId;
+        uint scope_id;
     }
     struct Ether
     {
         ubyte[6] addr;
         ushort port;
-        uint scope_id;      // disambiguates the link when the address alone does not; 0 = unscoped
+        uint scope_id;
     }
     union Addr
     {
@@ -618,13 +715,13 @@ nothrow @nogc:
         this._a.ipv4.port = port;
     }
 
-    this(IPv6Addr addr, ushort port, int flow_info = 0, uint scopeId = 0)
+    this(IPv6Addr addr, ushort port, int flow_info = 0, uint scope_id = 0)
     {
         family = AddressFamily.ipv6;
         this._a.ipv6.addr = addr;
         this._a.ipv6.port = port;
         this._a.ipv6.flow_info = flow_info;
-        this._a.ipv6.scopeId = scopeId;
+        this._a.ipv6.scope_id = scope_id;
     }
 
     this(const ubyte[6] mac, ushort port, uint scope_id = 0)
@@ -733,7 +830,7 @@ nothrow @nogc:
                 if (_a.ipv6.port == rhs._a.ipv6.port)
                 {
                     if (_a.ipv6.flow_info == rhs._a.ipv6.flow_info)
-                        return _a.ipv6.scopeId - rhs._a.ipv6.scopeId;
+                        return (_a.ipv6.scope_id > rhs._a.ipv6.scope_id) - (_a.ipv6.scope_id < rhs._a.ipv6.scope_id);
                     return _a.ipv6.flow_info - rhs._a.ipv6.flow_info;
                 }
                 return _a.ipv6.port - rhs._a.ipv6.port;
@@ -745,7 +842,7 @@ nothrow @nogc:
                         return c;
                 }
                 if (_a.ether.port == rhs._a.ether.port)
-                    return _a.ether.scope_id - rhs._a.ether.scope_id;
+                    return (_a.ether.scope_id > rhs._a.ether.scope_id) - (_a.ether.scope_id < rhs._a.ether.scope_id);
                 return _a.ether.port - rhs._a.ether.port;
             default:
                 return 0;
@@ -762,14 +859,14 @@ nothrow @nogc:
             ulong a = 0;
             foreach (i, x; _a.ether.addr)
                 a |= ulong(x) << (i * 8);
-            return cast(size_t)(a * 0x9E3779B97F4A7C15) ^ _a.ether.port;
+            return cast(size_t)(a * 0x9E3779B97F4A7C15) ^ _a.ether.port ^ (size_t(_a.ether.scope_id) << 16);
         }
-        return _a.ipv6.addr.toHash() ^ _a.ipv6.port;
+        return _a.ipv6.addr.toHash() ^ _a.ipv6.port ^ (size_t(_a.ipv6.scope_id) << 16);
     }
 
-    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const pure
+    ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] format_args) const
     {
-        char[47] stack_buffer = void;
+        char[112] stack_buffer = void;
         char[] tmp = buffer.length < stack_buffer.sizeof ? stack_buffer : buffer;
 
         size_t offset = void;
@@ -799,6 +896,14 @@ nothrow @nogc:
         {
             tmp[0] = '[';
             offset = 1 + _a.ipv6.addr.toString(tmp[1 .. $], null, null);
+            if (_a.ipv6.scope_id)
+            {
+                tmp[offset++] = '%';
+                ptrdiff_t zone = inet_scope_name(_a.ipv6.scope_id, tmp[offset .. $ - 7]);
+                if (zone < 0)
+                    return -1;
+                offset += zone;
+            }
             tmp[offset++] = ']';
             tmp[offset++] = ':';
             offset += _a.ipv6.port.format_uint(tmp[offset..$]);
@@ -820,6 +925,7 @@ nothrow @nogc:
         IPv6Addr a6 = void;
         ubyte[6] eth_a = void;
         ushort port = 0;
+        uint scope_id = 0;
         size_t taken = 0;
 
         // take address
@@ -844,6 +950,13 @@ nothrow @nogc:
                 if (t < 0)
                     return -1;
                 af = AddressFamily.ether;
+            }
+            else if (taken + t < s.length && s[taken + t] == '%')
+            {
+                ptrdiff_t zone = inet_scope_parse(s[taken + t + 1 .. $], scope_id);
+                if (zone < 0)
+                    return -1;
+                t += 1 + zone;
             }
             if (s[0] == '[' && (s.length < t + 2 || s[t + taken++] != ']'))
                 return -1;
@@ -879,7 +992,7 @@ nothrow @nogc:
             _a.ipv6.addr = a6;
             _a.ipv6.port = port;
             _a.ipv6.flow_info = 0;
-            _a.ipv6.scopeId = 0;
+            _a.ipv6.scope_id = scope_id;
         }
         return taken;
     }
@@ -889,7 +1002,7 @@ nothrow @nogc:
         auto __debugOverview()
         {
             import urt.mem;
-            char[] buffer = debug_alloc!char(47);
+            char[] buffer = debug_alloc!char(112);
             ptrdiff_t len = toString(buffer, null, null);
             return buffer[0 .. len];
         }
@@ -1114,4 +1227,70 @@ unittest
             assert(expected[i+1].opCmp(expected[i]) > 0, "InetAddress sorting is incorrect");
         }
     }
+
+    static struct TestScopes
+    {
+    nothrow @nogc:
+        static bool to_native(AddressFamily, uint scope_id, out uint native)
+        {
+            if (scope_id != 7 && scope_id != 8)
+                return false;
+            native = scope_id - 4;
+            return true;
+        }
+        static uint from_native(AddressFamily, uint native)
+            => native == 3 || native == 4 ? native + 4 : 0x8000_0000 | native;
+        static const(char)[] name(uint scope_id, char[] buffer)
+            => scope_id == 7 ? "eth0" : null;
+        static uint parse(const(char)[] zone)
+            => zone[] == "eth0" ? 7 : 0;
+    }
+    static immutable InetScopeProvider test_provider = InetScopeProvider(&TestScopes.to_native, &TestScopes.from_native, &TestScopes.name, &TestScopes.parse);
+
+    char[64] buf;
+    InetAddress a;
+    uint native;
+
+    assert(a.fromString("[fe80::1%3]:80") == 14 && a._a.ipv6.scope_id == 3 && a.port == 80);
+    assert(buf[0 .. a.toString(buf, null, null)] == "[fe80::1%3]:80");
+    assert(a.fromString("[fe80::1%eth0]:80") == -1);
+    assert(inet_scope_to_native(AddressFamily.ipv6, 3, native) && native == 3);
+
+    register_inet_scope_provider(&test_provider);
+    assert(a.fromString("fe80::1%eth0") == 12 && a._a.ipv6.scope_id == 7 && a.port == 0);
+    assert(buf[0 .. a.toString(buf, null, null)] == "[fe80::1%eth0]:0");
+    assert(a.fromString("[fe80::1%3]:5") == 13 && a._a.ipv6.scope_id == 7 && a.port == 5);
+    assert(a.fromString("fe80::1%9") == 9 && a._a.ipv6.scope_id == (0x8000_0000 | 9));
+    assert(a.fromString("fe80::1%wlan") == -1);
+    a._a.ipv6.scope_id = 8;
+    assert(buf[0 .. a.toString(buf, null, null)] == "[fe80::1%4]:0");
+    assert(a.fromString("fe80::1%4") == 9 && a._a.ipv6.scope_id == 8);
+    a._a.ipv6.scope_id = 9;
+    assert(a.toString(buf, null, null) == -1);
+    assert(a.fromString("fe80::1%") == -1);
+    assert(a.fromString("[fe80::1%eth0:80") == -1);
+    assert(inet_scope_to_native(AddressFamily.ipv6, 0, native) && native == 0);
+    assert(inet_scope_to_native(AddressFamily.ipv6, 7, native) && native == 3);
+    assert(!inet_scope_to_native(AddressFamily.ipv6, 5, native));
+    assert(inet_scope_from_native(AddressFamily.ipv6, 0) == 0);
+    assert(inet_scope_from_native(AddressFamily.ipv6, 3) == 7);
+    register_inet_scope_provider(null);
+
+    InetAddress b = InetAddress(IPv6Addr(0xfe80, 0, 0, 0, 0, 0, 0, 1), 80, 0, 1);
+    InetAddress c = InetAddress(IPv6Addr(0xfe80, 0, 0, 0, 0, 0, 0, 1), 80, 0, 2);
+    assert(b != c && b.same_addr(c) && b.opCmp(c) < 0 && c.opCmp(b) > 0);
+    c._a.ipv6.scope_id = 0x8000_0001;
+    assert(b.opCmp(c) < 0 && c.opCmp(b) > 0);
+
+    assert(IPv6Addr(0xfe80, 0, 0, 0, 0, 0, 0, 1).is_link_scoped);
+    assert(IPv6Addr(0xff02, 0, 0, 0, 0, 0, 0, 1).is_link_scoped);
+    assert(IPv6Addr(0xff01, 0, 0, 0, 0, 0, 0, 1).is_link_scoped);
+    assert(!IPv6Addr(0xff05, 0, 0, 0, 0, 0, 0, 1).is_link_scoped);
+    assert(!IPv6Addr(0xff0e, 0, 0, 0, 0, 0, 0, 1).is_link_scoped);
+    assert(!IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1).is_link_scoped);
 }
+
+
+private:
+
+__gshared const(InetScopeProvider)* _scope_provider;

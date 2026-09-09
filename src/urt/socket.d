@@ -93,6 +93,8 @@ else version (Posix)
     enum AF_IPX = 4;    // Novell IPX
     enum AF_BRIDGE = 7;     // Multiprotocol bridge
     enum AF_INET6 = 10;     // IP version 6
+
+    enum IPV6_ADD_MEMBERSHIP = IPV6_JOIN_GROUP;
 }
 else version (lwIP)
 {
@@ -147,6 +149,8 @@ else version (lwIP)
     enum IP_ADD_MEMBERSHIP = 3;
     enum IP_MULTICAST_TTL  = 5;
     enum IP_MULTICAST_LOOP = 7;
+    enum IPV6_ADD_MEMBERSHIP = 12;
+    struct ipv6_mreq { in6_addr ipv6mr_multiaddr; uint ipv6mr_interface; }
 
     alias socklen_t = uint;
     struct in_addr { uint s_addr; }
@@ -316,6 +320,8 @@ enum SocketOption : ubyte
     // IPv6 options
     first_ipv6_option,
     ipv6_pktinfo = first_ipv6_option,
+    multicast6,             // MulticastGroup6
+    multicast_interface6,   // scope id
 
     // ICMP options
     first_icmp_option,
@@ -458,7 +464,8 @@ Result bind(Socket socket, ref const InetAddress address)
         ubyte[512] buffer = void;
         size_t addr_len;
         sockaddr* sock_addr = make_sockaddr(address, buffer, addr_len);
-        assert(sock_addr, "Invalid socket address");
+        if (!sock_addr)
+            return InternalResult.invalid_parameter;
 
         if (_bind(socket.handle, sock_addr, cast(int)addr_len) < 0)
             return socket_getlasterror();
@@ -487,7 +494,8 @@ Result connect(Socket socket, ref const InetAddress address)
         ubyte[512] buffer = void;
         size_t addr_len;
         sockaddr* sock_addr = make_sockaddr(address, buffer, addr_len);
-        assert(sock_addr, "Invalid socket address");
+        if (!sock_addr)
+            return InternalResult.invalid_parameter;
 
         if (_connect(socket.handle, sock_addr, cast(int)addr_len) < 0)
             return socket_getlasterror();
@@ -593,7 +601,8 @@ Result sendto(Socket socket, const InetAddress* address, size_t* bytes_sent, con
         if (address)
         {
             sock_addr = make_sockaddr(*address, tmp, addr_len);
-            assert(sock_addr, "Invalid socket address");
+            if (!sock_addr)
+                return InternalResult.invalid_parameter;
         }
 
         uint sent;
@@ -635,7 +644,8 @@ Result sendmsg(Socket socket, const InetAddress* address, MsgFlags flags, const(
         if (address)
         {
             sock_addr = make_sockaddr(*address, tmp, addr_len);
-            assert(sock_addr, "Invalid socket address");
+            if (!sock_addr)
+                return InternalResult.invalid_parameter;
         }
 
         version (WinSock)
@@ -779,11 +789,11 @@ Result recv(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, size_t
     }
 }
 
-Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, InetAddress* sender_address = null, size_t* bytes_received, InetAddress* destination_address = null, uint* interface_index = null)
+Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, InetAddress* sender_address = null, size_t* bytes_received, InetAddress* destination_address = null, uint* scope_id = null)
 {
     version (SocketCallbacks)
     {
-        assert(destination_address is null && interface_index is null, "receive context not supported on callback backend");
+        assert(destination_address is null && scope_id is null, "receive context not supported on callback backend");
         return Result(_socket_backend.recvfrom(socket, buffer, flags, sender_address, bytes_received));
     }
     else
@@ -791,7 +801,7 @@ Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, In
         align(size_t.sizeof) ubyte[sockaddr_storage.sizeof] addr_buffer = void;
         sockaddr* addr = cast(sockaddr*)addr_buffer.ptr;
 
-        if (destination_address || interface_index)
+        if (destination_address || scope_id)
         {
             version (WinSock)
             {
@@ -823,25 +833,19 @@ Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, In
 
                 if (destination_address)
                     *destination_address = InetAddress();
-                if (interface_index)
-                    *interface_index = 0;
+                if (scope_id)
+                    *scope_id = 0;
                 for (WSACMSGHDR* c = WSA_CMSG_FIRSTHDR(&msg); c != null; c = WSA_CMSG_NXTHDR(&msg, c))
                 {
                     if (c.cmsg_level == IPPROTO_IP && c.cmsg_type == IP_PKTINFO)
                     {
                         IN_PKTINFO* pk = cast(IN_PKTINFO*)WSA_CMSG_DATA(c);
-                        if (destination_address)
-                            *destination_address = InetAddress(make_IPAddr(pk.ipi_addr), 0);
-                        if (interface_index)
-                            *interface_index = pk.ipi_ifindex;
+                        receive_context(destination_address, scope_id, make_IPAddr(pk.ipi_addr), pk.ipi_ifindex);
                     }
                     if (c.cmsg_level == IPPROTO_IPV6 && c.cmsg_type == IPV6_PKTINFO)
                     {
                         IN6_PKTINFO* pk6 = cast(IN6_PKTINFO*)WSA_CMSG_DATA(c);
-                        if (destination_address)
-                            *destination_address = InetAddress(make_IPv6Addr(pk6.ipi6_addr), 0);
-                        if (interface_index)
-                            *interface_index = pk6.ipi6_ifindex;
+                        receive_context(destination_address, scope_id, make_IPv6Addr(pk6.ipi6_addr), pk6.ipi6_ifindex);
                     }
                 }
             }
@@ -868,25 +872,19 @@ Result recvfrom(Socket socket, void[] buffer, MsgFlags flags = MsgFlags.none, In
 
                 if (destination_address)
                     *destination_address = InetAddress();
-                if (interface_index)
-                    *interface_index = 0;
+                if (scope_id)
+                    *scope_id = 0;
                 for (UrtCmsghdr* c = first_cmsg(msg); c; c = next_cmsg(msg, c))
                 {
                     if (c.level == IPPROTO_IP && c.type == IP_PKTINFO)
                     {
                         UrtInPktinfo* info = cast(UrtInPktinfo*)cmsg_data(c);
-                        if (destination_address)
-                            *destination_address = InetAddress(make_IPAddr(info.address), 0);
-                        if (interface_index)
-                            *interface_index = info.interface_index;
+                        receive_context(destination_address, scope_id, make_IPAddr(info.address), info.interface_index);
                     }
                     else if (c.level == IPPROTO_IPV6 && c.type == IPV6_PKTINFO)
                     {
                         UrtIn6Pktinfo* info = cast(UrtIn6Pktinfo*)cmsg_data(c);
-                        if (destination_address)
-                            *destination_address = InetAddress(make_IPv6Addr(info.address), 0);
-                        if (interface_index)
-                            *interface_index = info.interface_index;
+                        receive_context(destination_address, scope_id, make_IPv6Addr(info.address), info.interface_index);
                     }
                 }
             }
@@ -982,6 +980,7 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
         const(void)* arg = optval;
         int itmp = void;
         linger ling = void;
+        ipv6_mreq mreq6 = void;
         if (opt_info.rt_type != opt_info.platform_type)
         {
             switch (opt_info.rt_type)
@@ -1022,6 +1021,24 @@ Result set_socket_option(Socket socket, SocketOption option, const(void)* optval
                     }
                     break;
                 }
+                case OptType.scope_id:
+                {
+                    uint native;
+                    if (!inet_scope_to_native(AddressFamily.ipv6, *cast(const(uint)*)optval, native))
+                        return InternalResult.invalid_parameter;
+                    itmp = cast(int)native;
+                    arg = &itmp;
+                    break;
+                }
+                case OptType.multicast_group6:
+                {
+                    const MulticastGroup6* value = cast(const(MulticastGroup6)*)optval;
+                    if (!inet_scope_to_native(AddressFamily.ipv6, value.scope_id, mreq6.ipv6mr_interface))
+                        return InternalResult.invalid_parameter;
+                    mreq6.ipv6mr_multiaddr = make_in6_addr(value.address);
+                    arg = &mreq6;
+                    break;
+                }
                 default:
                     assert(false, "Unexpected!");
             }
@@ -1057,7 +1074,7 @@ Result set_socket_option(Socket socket, SocketOption option, int value)
         const OptInfo* opt_info = &s_socketOptions[option];
         if (opt_info.rt_type == OptType.unsupported)
             return InternalResult.unsupported;
-        assert(opt_info.rt_type == OptType.int_, "Incorrect value type for option");
+        assert(opt_info.rt_type == OptType.int_ || opt_info.rt_type == OptType.scope_id, "Incorrect value type for option");
         return set_socket_option(socket, option, &value, int.sizeof);
     }
 }
@@ -1104,6 +1121,20 @@ Result set_socket_option(Socket socket, SocketOption option, ref MulticastGroup 
     }
 }
 
+Result set_socket_option(Socket socket, SocketOption option, ref MulticastGroup6 value)
+{
+    version (SocketCallbacks)
+        return set_socket_option(socket, option, &value, MulticastGroup6.sizeof);
+    else
+    {
+        const OptInfo* opt_info = &s_socketOptions[option];
+        if (opt_info.rt_type == OptType.unsupported)
+            return InternalResult.unsupported;
+        assert(opt_info.rt_type == OptType.multicast_group6, "Incorrect value type for option");
+        return set_socket_option(socket, option, &value, MulticastGroup6.sizeof);
+    }
+}
+
 Result get_socket_option(Socket socket, SocketOption option, void* output, size_t outputlen)
 {
     version (SocketCallbacks)
@@ -1133,6 +1164,7 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
             switch (opt_info.platform_type)
             {
                 case OptType.int_:
+                case OptType.scope_id:
                 case OptType.seconds:
                 case OptType.milliseconds:
                 {
@@ -1188,6 +1220,9 @@ Result get_socket_option(Socket socket, SocketOption option, void* output, size_
                     }
                     break;
                 }
+                case OptType.scope_id:
+                    *cast(uint*)output = inet_scope_from_native(AddressFamily.ipv6, cast(uint)itmp);
+                    break;
                 default:
                     assert(false, "Unexpected!");
             }
@@ -1235,7 +1270,7 @@ Result get_socket_option(Socket socket, SocketOption option, out int output)
         const OptInfo* opt_info = &s_socketOptions[option];
         if (opt_info.rt_type == OptType.unsupported)
             return InternalResult.unsupported;
-        assert(opt_info.rt_type == OptType.int_, "Incorrect value type for option");
+        assert(opt_info.rt_type == OptType.int_ || opt_info.rt_type == OptType.scope_id, "Incorrect value type for option");
         return get_socket_option(socket, option, &output, int.sizeof);
     }
 }
@@ -1718,18 +1753,9 @@ sockaddr* make_sockaddr(ref const InetAddress address, ubyte[] buffer, out size_
                 ain6.sin6_family = s_addressFamily[AddressFamily.ipv6];
                 storeBigEndian(&ain6.sin6_port, cast(ushort)address._a.ipv6.port);
                 storeBigEndian(cast(uint*)&ain6.sin6_flowinfo, address._a.ipv6.flow_info);
-                storeBigEndian(cast(uint*)&ain6.sin6_scope_id, address._a.ipv6.scopeId);
-                for (int a = 0; a < 8; ++a)
-                {
-                    version (WinSock)
-                        storeBigEndian(&ain6.sin6_addr.in6_u.u6_addr16[a], address._a.ipv6.addr.s[a]);
-                    else version (Posix)
-                        storeBigEndian(&ain6.sin6_addr.__in6_u.__u6_addr16[a], address._a.ipv6.addr.s[a]);
-                    else version (BSDSockets)
-                        storeBigEndian(cast(ushort*)&ain6.sin6_addr.s6_addr[a * 2], address._a.ipv6.addr.s[a]);
-                    else
-                        assert(false, "Not implemented!");
-                }
+                if (!inet_scope_to_native(AddressFamily.ipv6, address._a.ipv6.scope_id, ain6.sin6_scope_id))
+                    return null;
+                ain6.sin6_addr = make_in6_addr(address._a.ipv6.addr);
             }
             else
                 assert(false, "Platform does not support IPv6!");
@@ -1788,7 +1814,7 @@ InetAddress make_InetAddress(const(sockaddr)* sock_address)
 
                 addr._a.ipv6.port = loadBigEndian(&ain6.sin6_port);
                 addr._a.ipv6.flow_info = loadBigEndian(cast(const(uint)*)&ain6.sin6_flowinfo);
-                addr._a.ipv6.scopeId = loadBigEndian(cast(const(uint)*)&ain6.sin6_scope_id);
+                addr._a.ipv6.scope_id = inet_scope_from_native(AddressFamily.ipv6, ain6.sin6_scope_id);
                 addr._a.ipv6.addr = make_IPv6Addr(ain6.sin6_addr);
             }
             else
@@ -1851,6 +1877,40 @@ IPv6Addr make_IPv6Addr(ref const in6_addr in6)
     return addr;
 }
 
+in6_addr make_in6_addr(ref const IPv6Addr addr)
+{
+    in6_addr in6 = void;
+    for (int a = 0; a < 8; ++a)
+    {
+        version (WinSock)
+            storeBigEndian(&in6.in6_u.u6_addr16[a], addr.s[a]);
+        else version (Posix)
+            storeBigEndian(&in6.__in6_u.__u6_addr16[a], addr.s[a]);
+        else version (BSDSockets)
+            storeBigEndian(cast(ushort*)&in6.s6_addr[a * 2], addr.s[a]);
+        else
+            assert(false, "Not implemented!");
+    }
+    return in6;
+}
+
+void receive_context(InetAddress* destination, uint* scope_id, IPAddr address, uint native)
+{
+    if (destination)
+        *destination = InetAddress(address, 0);
+    if (scope_id)
+        *scope_id = inet_scope_from_native(AddressFamily.ipv4, native);
+}
+
+void receive_context(InetAddress* destination, uint* scope_id, IPv6Addr address, uint native)
+{
+    uint id = inet_scope_from_native(AddressFamily.ipv6, native);
+    if (destination)
+        *destination = InetAddress(address, 0, 0, address.is_link_scoped ? id : 0);
+    if (scope_id)
+        *scope_id = id;
+}
+
 enum OptLevel : ubyte
 {
     socket,
@@ -1873,14 +1933,15 @@ enum OptType : ubyte
     inet_addr, // IPAddr + in_addr
     //inet6_addr, // IPv6Addr + in6_addr
     multicast_group, // MulticastGroup + ip_mreq
-    //multicast_group_ipv6, // MulticastGroupIPv6? + ipv6_mreq
     linger,
-    // etc...
+    multicast_group6, // MulticastGroup6; platform ipv6_mreq
+    scope_id, // uint scope id; platform int_ native index
+    ipv6_mreq_,
 }
 
 
-__gshared immutable ubyte[] s_optTypeRtSize = [ 0, bool.sizeof, int.sizeof, int.sizeof, int.sizeof, Duration.sizeof, IPAddr.sizeof, MulticastGroup.sizeof, 0 ];
-__gshared immutable ubyte[] s_optTypePlatformSize = [ 0, 0, int.sizeof, int.sizeof, int.sizeof, 0, in_addr.sizeof, ip_mreq.sizeof, linger.sizeof ];
+__gshared immutable ubyte[] s_optTypeRtSize = [ 0, bool.sizeof, int.sizeof, int.sizeof, int.sizeof, Duration.sizeof, IPAddr.sizeof, MulticastGroup.sizeof, 0, MulticastGroup6.sizeof, uint.sizeof, 0 ];
+__gshared immutable ubyte[] s_optTypePlatformSize = [ 0, 0, int.sizeof, int.sizeof, int.sizeof, 0, in_addr.sizeof, ip_mreq.sizeof, linger.sizeof, 0, 0, ipv6_mreq.sizeof ];
 
 
 struct OptInfo
@@ -1998,6 +2059,8 @@ version (WinSock) // BS_NETWORK_WINDOWS_VERSION >= _WIN32_WINNT_VISTA
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
         OptInfo( IP_PKTINFO, OptType.bool_, OptType.int_ ),
         OptInfo( IPV6_RECVPKTINFO, OptType.bool_, OptType.int_ ),
+        OptInfo( IPV6_ADD_MEMBERSHIP, OptType.multicast_group6, OptType.ipv6_mreq_ ),
+        OptInfo( IPV6_MULTICAST_IF, OptType.scope_id, OptType.int_ ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
@@ -2022,6 +2085,8 @@ else version (linux) // BS_NETWORK_WINDOWS_VERSION >= _WIN32_WINNT_VISTA
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
         OptInfo( IP_PKTINFO, OptType.bool_, OptType.int_ ),
         OptInfo( IPV6_RECVPKTINFO, OptType.bool_, OptType.int_ ),
+        OptInfo( IPV6_ADD_MEMBERSHIP, OptType.multicast_group6, OptType.ipv6_mreq_ ),
+        OptInfo( IPV6_MULTICAST_IF, OptType.scope_id, OptType.int_ ),
         OptInfo( TCP_KEEPIDLE, OptType.duration, OptType.seconds ),
         OptInfo( TCP_KEEPINTVL, OptType.duration, OptType.seconds ),
         OptInfo( TCP_KEEPCNT, OptType.int_, OptType.int_ ),
@@ -2046,6 +2111,8 @@ else version (Darwin)
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
         OptInfo( IP_PKTINFO, OptType.bool_, OptType.int_ ),
         OptInfo( IPV6_RECVPKTINFO, OptType.bool_, OptType.int_ ),
+        OptInfo( IPV6_ADD_MEMBERSHIP, OptType.multicast_group6, OptType.ipv6_mreq_ ),
+        OptInfo( IPV6_MULTICAST_IF, OptType.scope_id, OptType.int_ ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ),
@@ -2070,6 +2137,8 @@ else version (lwIP)
         OptInfo( IP_MULTICAST_TTL, OptType.int_, OptType.int_ ),
         OptInfo( -1, OptType.unsupported, OptType.unsupported ), // IP_PKTINFO
         OptInfo( -1, OptType.unsupported, OptType.unsupported ), // IPV6_PKTINFO
+        OptInfo( IPV6_ADD_MEMBERSHIP, OptType.multicast_group6, OptType.ipv6_mreq_ ),
+        OptInfo( -1, OptType.unsupported, OptType.unsupported ), // IPV6_MULTICAST_IF
         OptInfo( TCP_KEEPIDLE, OptType.duration, OptType.seconds ),
         OptInfo( TCP_KEEPINTVL, OptType.duration, OptType.seconds ),
         OptInfo( TCP_KEEPCNT, OptType.int_, OptType.int_ ),
@@ -2184,6 +2253,7 @@ version (WinSock)
         AI_FQDN = 0x4000,
     }
 
+    struct ipv6_mreq { in6_addr ipv6mr_multiaddr; uint ipv6mr_interface; }
     struct ip_mreq
     {
         in_addr imr_multiaddr;
@@ -2341,4 +2411,51 @@ version (TestReceiveContext) unittest
     assert(source.family == AddressFamily.ipv4 && source.port != 0);
     assert(destination == InetAddress(IPAddr.loopback, 0));
     assert(interface_index != 0);
+}
+
+version (SocketCallbacks) {} else
+unittest
+{
+    static bool to_native(AddressFamily family, uint scope_id, out uint native)
+    {
+        if (family != AddressFamily.ipv6 || scope_id != 42)
+            return false;
+        native = 5;
+        return true;
+    }
+    static uint from_native(AddressFamily, uint native)
+        => native == 5 ? 42 : 0x8000_0000 | native;
+    static const(char)[] name(uint, char[])
+        => null;
+    static uint parse(const(char)[])
+        => 0;
+    static immutable InetScopeProvider provider = InetScopeProvider(&to_native, &from_native, &name, &parse);
+    register_inet_scope_provider(&provider);
+    scope(exit) register_inet_scope_provider(null);
+
+    align(size_t.sizeof) ubyte[sockaddr_storage.sizeof] buffer = void;
+    size_t len;
+    InetAddress a = InetAddress(IPv6Addr(0xfe80, 0, 0, 0, 0, 0, 0, 1), 5353, 0, 42);
+    sockaddr* sa = make_sockaddr(a, buffer, len);
+    assert(sa && len == sockaddr_in6.sizeof);
+    assert((cast(sockaddr_in6*)sa).sin6_scope_id == 5);
+    assert(make_InetAddress(sa) == a);
+
+    (cast(sockaddr_in6*)sa).sin6_scope_id = 9;
+    assert(make_InetAddress(sa)._a.ipv6.scope_id == (0x8000_0000 | 9));
+
+    InetAddress dst;
+    uint scope_id;
+    receive_context(&dst, &scope_id, IPv6Addr(0xfe80, 0, 0, 0, 0, 0, 0, 1), 5);
+    assert(scope_id == 42 && dst._a.ipv6.scope_id == 42);
+    receive_context(&dst, &scope_id, IPv6Addr(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 5);
+    assert(scope_id == 42 && dst._a.ipv6.scope_id == 0);
+
+    a._a.ipv6.scope_id = 1;
+    assert(make_sockaddr(a, buffer, len) is null);
+    Socket s;
+    assert(create_socket(AddressFamily.ipv6, SocketType.datagram, Protocol.udp, s).succeeded);
+    scope(exit) s.close();
+    assert(s.bind(a).failed);
+    assert(s.set_socket_option(SocketOption.multicast_interface6, 1).failed);
 }

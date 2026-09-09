@@ -1681,6 +1681,18 @@ void ow_wifi_free_rx_buffer(void *eb)
         esp_wifi_internal_free_rx_buffer(eb);
 }
 
+// lwIP netif index (1-based) of the vif, 0 when no host stack owns it
+int ow_wifi_netif_index(int ap)
+{
+#ifdef OW_USE_LWIP
+    int index = esp_netif_get_netif_impl_index(ap ? ow_wifi_netif_ap : ow_wifi_netif_sta);
+    return index > 0 ? index : 0;
+#else
+    (void)ap;
+    return 0;
+#endif
+}
+
 int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb)
 {
     ow_wifi_rx_callback = cb;

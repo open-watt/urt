@@ -543,6 +543,17 @@ Result wifi_get_mac(ref Wifi wifi, WifiVif vif, ref ubyte[6] mac)
     }
 }
 
+// The host IP stack's interface index for the vif's netif; 0 where no host stack owns one.
+int wifi_native_ifindex(ref const Wifi wifi, WifiVif vif)
+{
+    static if (num_wifi == 0)
+        assert(false, "no WiFi on this platform");
+    else static if (__traits(compiles, wifi_hw_native_ifindex(wifi.port, vif)))
+        return wifi_hw_native_ifindex(wifi.port, vif);
+    else
+        return 0;
+}
+
 // Reprogramming may restart the affected interface, so callers must expect its link to drop.
 Result wifi_set_mac(ref Wifi wifi, WifiVif vif, ref const ubyte[6] mac)
 {

@@ -325,6 +325,13 @@ bool wifi_hw_get_mac(uint port, WifiVif vif, ref ubyte[6] mac)
     return esp_read_mac(mac.ptr, cast(int)vif) == ESP_OK;
 }
 
+int wifi_hw_native_ifindex(uint port, WifiVif vif)
+{
+    if (port >= num_wifi || !_opened)
+        return 0;
+    return ow_wifi_netif_index(vif == WifiVif.ap);
+}
+
 bool wifi_hw_set_mac(uint port, WifiVif vif, ref const ubyte[6] mac)
 {
     if (port >= num_wifi || !_opened)
@@ -1025,6 +1032,7 @@ extern(C) nothrow @nogc
     int ow_wifi_set_rx_callback(
         int function(const(ubyte)*, int, int, void*) nothrow @nogc cb);
     void ow_wifi_free_rx_buffer(void* eb);
+    int ow_wifi_netif_index(int ap);
     void ow_wifi_set_sta_callback(void function(int, void*, int) nothrow @nogc);
     void ow_wifi_set_ap_callback(void function(int, void*, int) nothrow @nogc);
     int ow_wifi_set_promiscuous(int enable, uint filter_mask);

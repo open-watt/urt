@@ -658,7 +658,7 @@ ptrdiff_t inet_scope_parse(const(char)[] s, out uint scope_id)
     ulong native = s[0 .. len].parse_uint(&digits);
     if (digits == len)
     {
-        if (native == 0 || native > uint.max)
+        if (native == 0 || native > int.max)
             return -1;
         scope_id = inet_scope_from_native(AddressFamily.ipv6, cast(uint)native);
     }
@@ -1262,6 +1262,7 @@ unittest
     assert(a.fromString("[fe80::1%3]:5") == 13 && a._a.ipv6.scope_id == 7 && a.port == 5);
     assert(a.fromString("fe80::1%9") == 9 && a._a.ipv6.scope_id == (0x8000_0000 | 9));
     assert(a.fromString("fe80::1%wlan") == -1);
+    assert(a.fromString("fe80::1%2147483648") == -1);
     a._a.ipv6.scope_id = 8;
     assert(buf[0 .. a.toString(buf, null, null)] == "[fe80::1%4]:0");
     assert(a.fromString("fe80::1%4") == 9 && a._a.ipv6.scope_id == 8);

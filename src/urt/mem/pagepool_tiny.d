@@ -11,8 +11,15 @@ nothrow @nogc:
 
 
 enum ubyte page_category_heap = 0xFF;
+
+// tag word: [heap block size >> 3 : rest][refcount : 8][category : 7][heap : 1]
 enum size_t page_tag_heap = 0x01;
-enum size_t page_tag_mask = 0x07;
+enum size_t page_tag_category_shift = 1;
+enum size_t page_tag_category_mask = 0x7F;
+enum size_t page_tag_refcount_shift = 8;
+enum size_t page_tag_refcount_mask = 0xFF;
+enum size_t page_tag_size_shift = 16;
+enum size_t page_tag_one_ref = size_t(1) << page_tag_refcount_shift;
 
 version (PagePoolDiagnostics)
 {
@@ -84,7 +91,7 @@ template PagePool(
 
     void[] alloc_heap_page(size_t bytes)
     {
-        if (bytes > size_t.max - allocation_header_size - 7)
+        if (bytes > max_heap_block - allocation_header_size - 7)
         {
             record_jumbo_failure();
             return null;
@@ -98,7 +105,7 @@ template PagePool(
         }
 
         AllocationHeader* header = cast(AllocationHeader*)mem.ptr;
-        header.tag = block_size | page_tag_heap;
+        header.tag = heap_tag(block_size);
         header.next = null;
         record_jumbo_alloc();
         return (mem.ptr + allocation_header_size)[0 .. bytes];
@@ -110,8 +117,8 @@ template PagePool(
         assert(_initialised, "Page pool not initialised!");
         if (block.length <= allocation_header_size || (cast(size_t)block.ptr & 7) != 0)
             return null;
-        if ((block.length & page_tag_mask) != 0)
-            return null;    // the size shares its low bits with the tag
+        if ((block.length & 7) != 0 || block.length > max_heap_block)
+            return null;
 
         size_t storage_capacity = block.length - allocation_header_size;
         Page* page = cast(Page*)(block.ptr + allocation_header_size);
@@ -119,16 +126,46 @@ template PagePool(
             return null;
 
         AllocationHeader* header = cast(AllocationHeader*)block.ptr;
-        header.tag = block.length | page_tag_heap;
+        header.tag = heap_tag(block.length);
         header.next = null;
         record_jumbo_alloc();
         return page;
     }
 
+    // A page starts with one reference; page_free releases it and asserts it was the last.
     void page_free(Page* page)
     {
-        assert(page);
+        debug assert(page_unique(page), "page_free on a shared page");
+        page_release(page);
+    }
+
+    Page* page_share(Page* page)
+    {
+        AllocationHeader* header = header_of(page);
+        auto guard = _lock.acquire();
+        size_t refs = tag_refcount(header.tag);
+        assert(refs != 0 && refs < page_tag_refcount_mask);
+        header.tag += page_tag_one_ref;
+        return page;
+    }
+
+    void page_release(Page* page)
+    {
+        AllocationHeader* header = header_of(page);
+        {
+            auto guard = _lock.acquire();
+            assert(tag_refcount(header.tag) != 0, "page_release on a free page");
+            header.tag -= page_tag_one_ref;
+            if (tag_refcount(header.tag) != 0)
+                return;
+        }
         free_payload(page);
+    }
+
+    bool page_unique(const Page* page)
+    {
+        auto guard = _lock.acquire();
+        return tag_refcount(header_of(page).tag) == 1;
     }
 
     void free_payload(void* payload)
@@ -138,12 +175,11 @@ template PagePool(
         if (tag & page_tag_heap)
         {
             record_jumbo_free();
-            size_t block_size = tag & ~page_tag_mask;
-            urt.mem.alloc.free((cast(void*)header)[0 .. block_size]);
+            urt.mem.alloc.free((cast(void*)header)[0 .. heap_block_size(tag)]);
             return;
         }
 
-        ubyte category = cast(ubyte)(tag >> 1);
+        ubyte category = tag_category(tag);
         assert(category < 2);
         cache_page(category, header);
     }
@@ -153,7 +189,7 @@ template PagePool(
         size_t tag = header_of(page).tag;
         if (tag & page_tag_heap)
             return page_category_heap;
-        return cast(ubyte)(tag >> 1);
+        return tag_category(tag);
     }
 
     size_t page_payload_size(ubyte category)
@@ -258,6 +294,19 @@ template PagePool(
     }
     enum allocation_header_size = (AllocationHeader.sizeof + 7) & ~cast(size_t)7;
     static assert(AllocationHeader.next.offsetof + (void*).sizeof == allocation_header_size);
+    enum size_t max_heap_block = (size_t.max >> page_tag_size_shift) << 3;
+
+    size_t heap_tag(size_t block_size)
+        => (block_size >> 3) << page_tag_size_shift | page_tag_one_ref | page_tag_heap;
+
+    size_t heap_block_size(size_t tag)
+        => (tag >> page_tag_size_shift) << 3;
+
+    size_t tag_refcount(size_t tag)
+        => (tag >> page_tag_refcount_shift) & page_tag_refcount_mask;
+
+    ubyte tag_category(size_t tag)
+        => cast(ubyte)((tag >> page_tag_category_shift) & page_tag_category_mask);
 
     version (PagePoolDiagnostics)
     {
@@ -360,7 +409,7 @@ template PagePool(
             return alloc_heap_page(required);
         }
 
-        page.tag = cast(size_t)category << 1;
+        page.tag = cast(size_t)category << page_tag_category_shift | page_tag_one_ref;
         page.next = null;
         record_alloc(category);
         return (cast(void*)page + allocation_header_size)[0 .. page_payload_size(category)];
@@ -466,6 +515,19 @@ void page_pool_tiny_test()()
     Page* reserved = TestPool.page_alloc(1000, size_t.sizeof, 3, 64);
     assert(reserved.headroom >= 3 && reserved.tailroom >= 64);
     TestPool.page_free(reserved);
+
+    foreach (bytes; [32, 1000])
+    {
+        Page* shared_page = TestPool.page_alloc(bytes);
+        ubyte category = TestPool.page_category(shared_page);
+        assert(TestPool.page_unique(shared_page));
+        assert(TestPool.page_share(shared_page) is shared_page);
+        assert(!TestPool.page_unique(shared_page));
+        TestPool.page_release(shared_page);
+        assert(TestPool.page_unique(shared_page) && TestPool.page_category(shared_page) == category);
+        TestPool.page_release(shared_page);
+    }
+    assert(TestPool._free_pages[0] == TestPool._allocated_pages[0]);
 
     version (PagePoolDiagnostics)
     {

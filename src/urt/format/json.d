@@ -13,9 +13,12 @@ public import urt.variant;
 nothrow @nogc:
 
 
+enum max_json_depth = 64;
+
 Variant parse_json(const(char)[] text)
 {
-    return parse_node(text);
+    Variant node;
+    return parse_node(text, node, 0) ? node.move : Variant();
 }
 
 ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, uint level = 0, uint indent = 2)
@@ -326,30 +329,32 @@ ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
     return true;
 }
 
-Variant parse_node(ref const(char)[] text)
+// malformed input fails the parse; it is never a crash, and never goes deeper than max_json_depth
+bool parse_node(ref const(char)[] text, out Variant node, int depth)
 {
     text = text.trimFront();
 
     if (text.empty)
-        return Variant();
-    else if (text.startsWith("null"))
+        return false;
+    if (text.startsWith("null"))
     {
         text = text[4 .. $];
-        return Variant();
+        return true;
     }
-    else if (text.startsWith("true"))
+    if (text.startsWith("true"))
     {
         text = text[4 .. $];
-        return Variant(true);
+        node = Variant(true);
+        return true;
     }
-    else if (text.startsWith("false"))
+    if (text.startsWith("false"))
     {
         text = text[5 .. $];
-        return Variant(false);
+        node = Variant(false);
+        return true;
     }
-    else if (text[0] == '"')
+    if (text[0] == '"')
     {
-        assert(text.length > 1);
         size_t i = 1;
         Array!(char, 0) tmp; // TODO: needs a generous stack buffer!
         while (i < text.length && text[i] != '"')
@@ -399,15 +404,18 @@ Variant parse_node(ref const(char)[] text)
             else
                 ++i;
         }
-        assert(i < text.length);
-        Variant node = Variant(tmp.empty ? text[1 .. i] : tmp[]);
+        if (i >= text.length)
+            return false;
+        node = Variant(tmp.empty ? text[1 .. i] : tmp[]);
         text = text[i + 1 .. $];
-        return node;
+        return true;
     }
-    else if (text[0] == '{' || text[0] == '[')
+    if (text[0] == '{' || text[0] == '[')
     {
-        Array!Variant tmp;
+        if (depth >= max_json_depth)
+            return false;
 
+        Array!Variant tmp;
         bool isArray = text[0] == '[';
         text = text[1 .. $];
 
@@ -415,41 +423,51 @@ Variant parse_node(ref const(char)[] text)
         while (true)
         {
             text = text.trimFront;
-            if (text.length == 0 || text[0] == (isArray ? ']' : '}'))
+            if (text.length == 0)
+                return false;
+            if (text[0] == (isArray ? ']' : '}'))
                 break;
-            else if (expectComma)
+            if (expectComma)
             {
-                if (text[0] == ',')
-                    text = text[1 .. $].trimFront;
+                if (text[0] != ',')
+                    return false;
+                text = text[1 .. $].trimFront;
             }
             else
                 expectComma = true;
 
-            tmp ~= parse_node(text);
+            Variant item;
+            if (!parse_node(text, item, depth + 1))
+                return false;
+            tmp ~= item.move;
             if (!isArray)
             {
-                assert(tmp.back().isString());
-
+                if (!tmp.back().isString())
+                    return false;
                 text = text.trimFront;
-                assert(text.length > 0 && text[0] == ':');
+                if (text.length == 0 || text[0] != ':')
+                    return false;
                 text = text[1 .. $].trimFront;
-                tmp ~= parse_node(text);
+                Variant value;
+                if (!parse_node(text, value, depth + 1))
+                    return false;
+                tmp ~= value.move;
             }
         }
-        assert(text.length > 0);
         text = text[1 .. $];
 
-        Variant r = Variant(tmp.move);
+        node = Variant(tmp.move);
         if (!isArray)
-            r.flags = Variant.Flags.Map;
-        return r;
+            node.flags = Variant.Flags.Map;
+        return true;
     }
-    else if (text[0].is_numeric || (text[0] == '-' && text.length > 1 && text[1].is_numeric))
+    if (text[0].is_numeric || (text[0] == '-' && text.length > 1 && text[1].is_numeric))
     {
         size_t taken = void;
         int e = void;
         long value = text.parse_int_with_exponent(e, &taken, 10);
-        assert(taken > 0);
+        if (taken == 0)
+            return false;
         text = text[taken .. $];
 
         // let's work out if value*10^^e is an integer?
@@ -464,13 +482,10 @@ Variant parse_node(ref const(char)[] text)
             value *= 10;
         }
 
-        if (is_integer)
-            return Variant(value);
-        else
-            return Variant(value * 10.0^^e);
+        node = is_integer ? Variant(value) : Variant(value * 10.0^^e);
+        return true;
     }
-    else
-        assert(false, "Invalid JSON!");
+    return false;
 }
 
 

@@ -2,6 +2,7 @@ module urt.driver.bk7231.alloc;
 
 version (BK7231N) import urt.attribute : fast_data;
 import urt.mem.alloc : MemFlags;
+version (BK7231N) import urt.mem.pressure : note_pool_usage;
 import urt.sync.critical : Critical;
 version (BK7231N) import urt.util : align_down;
 
@@ -16,6 +17,8 @@ enum has_retain = false;
 version (BK7231N) enum has_memflags = true;
 else enum has_memflags = false;
 version (BK7231N) enum account_usable_size = true;
+version (BK7231N) enum has_pool_usage = true;
+else enum has_pool_usage = false;
 
 void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
 {
@@ -328,6 +331,7 @@ version (BK7231N)
             pool.used += tlsf_block_size(ptr);
             if (pool.used > pool.peak_used)
                 pool.peak_used = pool.used;
+            note_pool_usage(pool_index(pool), pool.used);
         }
         return ptr;
     }
@@ -341,6 +345,7 @@ version (BK7231N)
             pool.used = pool.used - old_size + tlsf_block_size(result);
             if (pool.used > pool.peak_used)
                 pool.peak_used = pool.used;
+            note_pool_usage(pool_index(pool), pool.used);
         }
         return result;
     }
@@ -349,7 +354,12 @@ version (BK7231N)
     {
         pool.used -= tlsf_block_size(ptr);
         tlsf_free(pool.tlsf, ptr);
+        note_pool_usage(pool_index(pool), pool.used);
     }
+
+    // must match the pool order get_sysinfo() reports for Beken
+    size_t pool_index(ref Pool pool)
+        => &pool is &_fast ? 1 : 0;
 
     void initialise()
     {

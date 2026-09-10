@@ -10,6 +10,7 @@ enum has_memsize  = false;
 enum has_exec     = false;
 enum has_retain   = false; // TODO: backup SRAM
 enum has_memflags = false; // TODO: TCM vs SRAM
+enum has_pool_usage = false;
 
 void[] _alloc(size_t size, size_t alignment, MemFlags) pure
 {

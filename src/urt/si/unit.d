@@ -1,6 +1,8 @@
 module urt.si.unit;
 
 import urt.array;
+import urt.bimap;
+import urt.kvp;
 import urt.string;
 
 nothrow @nogc:
@@ -408,10 +410,9 @@ nothrow:
             if (p == 0)
                 return -1; // invalid power
 
-            size_t spelling_index = find_scaled_unit_spelling(unit);
-            if (spelling_index == g_unit_spellings.length)
+            ScaledUnit scaled;
+            if (!find_scaled_unit_spelling(unit, scaled))
                 return -1;
-            ScaledUnit scaled = scaled_unit_from_spelling(spelling_index);
             if (scaled != scaled.unit)
                 return -1;
             r *= scaled.unit ^^ (invert ? -p : p);
@@ -906,6 +907,9 @@ nothrow:
     bool opEquals(ScaledUnit rh) const pure
         => pack == rh.pack;
 
+    int opCmp(ScaledUnit rh) const pure
+        => pack < rh.pack ? -1 : pack > rh.pack ? 1 : 0;
+
     bool opEquals(Unit rh) const pure
         => (pack & 0xFF000000) ? false : unit == rh;
 
@@ -931,10 +935,10 @@ nothrow:
             s = s[1 .. $];
         }
 
-        size_t spelling_index = find_scaled_unit_spelling(s);
-        if (spelling_index < g_unit_spellings.length)
+        ScaledUnit spelling_unit;
+        if (find_scaled_unit_spelling(s, spelling_unit))
         {
-            this = scaled_unit_from_spelling(spelling_index);
+            this = spelling_unit;
             return len;
         }
 
@@ -988,9 +992,9 @@ nothrow:
                 if (!combine(ScaledUnit(Unit(), e), 1))
                     return -1;
             }
-            else if ((spelling_index = find_scaled_unit_spelling(term[offset .. $])) < g_unit_spellings.length)
+            else if (find_scaled_unit_spelling(term[offset .. $], spelling_unit))
             {
-                ScaledUnit scaled = scaled_unit_from_spelling(spelling_index);
+                ScaledUnit scaled = spelling_unit;
                 if (scaled == scaled.unit)
                 {
                     if (!valid_si_exp(e) || !combine(ScaledUnit(scaled.unit, e), invert ? -p : p))
@@ -1055,9 +1059,9 @@ nothrow:
                     return -1;
 
                 term = term[offset .. $];
-                if ((spelling_index = find_scaled_unit_spelling(term, true)) < g_unit_spellings.length)
+                if (find_scaled_unit_spelling(term, spelling_unit, true))
                 {
-                    ScaledUnit su = scaled_unit_from_spelling(spelling_index);
+                    ScaledUnit su = spelling_unit;
                     if (su.siScale())
                     {
                         if (!combine(ScaledUnit(su.unit, su.exp + e), invert ? -p : p))
@@ -1421,25 +1425,29 @@ unittest
     assert((Hour^^-1).format_unit(fmt_buf[], pre) == 3 && fmt_buf[0..3] == "/hr" && pre == 1);
     assert((ScaledUnit(Second)^^-1).format_unit(fmt_buf[], pre) == 2 && fmt_buf[0..2] == "/s");
 
-    foreach (i, entry; g_unit_spellings)
+    foreach (spec; scaled_unit_spelling_specs)
     {
-        const(char)[] spelling = scaled_unit_spelling_text(entry);
-        assert(find_scaled_unit_spelling(spelling) == i);
-        if (i)
-            assert(uni_compare(scaled_unit_spelling_text(g_unit_spellings[i - 1]), spelling) < 0);
+        ScaledUnit found;
+        assert(find_scaled_unit_spelling(spec.spelling, found) && found == spec.unit);
+        if (spec.is_prefixable)
+            assert(find_scaled_unit_spelling(spec.spelling, found, true));
+        else
+            assert(!find_scaled_unit_spelling(spec.spelling, found, true));
     }
-    foreach (i, unit; g_units)
+    foreach (i, spec; scaled_unit_spelling_specs)
     {
-        size_t spelling_index = g_canonical_string[i];
-        assert(scaled_unit_from_spelling(spelling_index) == unit);
-        assert(scaled_unit_spelling(unit) == scaled_unit_spelling_text(g_unit_spellings[spelling_index]));
+        bool canonical = true;
+        foreach (j; 0 .. i)
+            if (scaled_unit_spelling_specs[j].unit == spec.unit)
+                canonical = false;
+        if (canonical)
+            assert(scaled_unit_spelling(spec.unit) == spec.spelling);
     }
 }
 
 
 private:
 
-import urt.algorithm : binary_search, qsort;
 import urt.math : PI, fabs;
 import urt.string.uni : uni_compare;
 
@@ -1520,31 +1528,11 @@ immutable double[8] biasedOffsets = [
     double.nan,
 ];
 
-struct ScaledUnitSpelling
-{
-    ushort spelling_offset;
-    ubyte unit_offset;
-    bool is_prefixable;
-}
-
-static assert(ScaledUnitSpelling.sizeof == 4);
-
-align(2) immutable char[packed_scaled_unit_spelling_strings.cache.length] g_spelling_strings = packed_scaled_unit_spelling_strings.cache;
-immutable ScaledUnit[sorted_scaled_units.length] g_units = sorted_scaled_units;
-immutable ScaledUnitSpelling[sorted_scaled_unit_spelling_specs.length] g_unit_spellings = scaled_unit_lookup_tables.spellings;
-immutable ubyte[sorted_scaled_units.length] g_canonical_string = scaled_unit_lookup_tables.canonical;
-
-enum ScaledUnitSpellingFlags : ubyte
-{
-    canonical = 1,
-    si_prefixable = 2,
-}
-
 struct ScaledUnitSpellingSpec
 {
     ScaledUnit unit;
     string spelling;
-    ubyte flags;
+    bool is_prefixable;
 }
 
 enum scaled_unit_spelling_count = () {
@@ -1559,7 +1547,7 @@ enum scaled_unit_spelling_count = () {
     return count;
 }();
 
-enum sorted_scaled_unit_spelling_specs = () {
+enum scaled_unit_spelling_specs = () {
     ScaledUnitSpellingSpec[scaled_unit_spelling_count] specs;
     size_t index;
     static foreach (name; __traits(allMembers, ScaledUnits))
@@ -1570,126 +1558,68 @@ enum sorted_scaled_unit_spelling_specs = () {
             static if (__traits(isSame, attribute, SiPrefixable))
                 si_prefixable = true;
 
-        bool canonical = true;
         static foreach (attribute; __traits(getAttributes, member))
-        {
             static if (is(typeof(attribute) == string))
-            {
-                specs[index++] = ScaledUnitSpellingSpec(member, attribute, (canonical ? ScaledUnitSpellingFlags.canonical : 0) | (si_prefixable ? ScaledUnitSpellingFlags.si_prefixable : 0));
-                canonical = false;
-            }
-        }
+                specs[index++] = ScaledUnitSpellingSpec(member, attribute, si_prefixable);
     }}
-    specs.qsort!((ref a, ref b) => uni_compare(a.spelling, b.spelling));
-    foreach (i; 1 .. specs.length)
-        assert(specs[i - 1].spelling != specs[i].spelling, "Duplicate scaled unit spelling");
     return specs;
 }();
 
-enum scaled_unit_spelling_texts = () {
-    string[sorted_scaled_unit_spelling_specs.length] spellings;
-    foreach (i, spec; sorted_scaled_unit_spelling_specs)
-        spellings[i] = spec.spelling;
-    return spellings;
+static assert(scaled_unit_spelling_specs.length <= ubyte.max);
+
+enum scaled_unit_bimap_entries = () {
+    KVP!(string, ScaledUnit)[scaled_unit_spelling_count] entries;
+    foreach (i, spec; scaled_unit_spelling_specs)
+        entries[i] = KVP!(string, ScaledUnit)(spec.spelling, spec.unit);
+    return entries;
 }();
 
-enum sorted_scaled_units = () {
-    ScaledUnit[__traits(allMembers, ScaledUnits).length] units;
-    static foreach (i, name; __traits(allMembers, ScaledUnits))
-        units[i] = __traits(getMember, ScaledUnits, name);
-    units.qsort!((ref a, ref b) => a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : 0);
-    foreach (i; 1 .. units.length)
-        assert(units[i - 1] != units[i], "Duplicate scaled unit value");
-    return units;
-}();
+alias ScaledUnitBiMap = StaticBiMap!scaled_unit_bimap_entries;
+alias g_scaled_unit_map = ScaledUnitBiMap.map;
+static assert(g_scaled_unit_map.key_count == scaled_unit_spelling_count, "Duplicate scaled unit spelling");
 
-static assert(sorted_scaled_unit_spelling_specs.length <= ubyte.max);
-static assert(sorted_scaled_units.length <= ubyte.max);
-
-enum packed_scaled_unit_spelling_strings = make_table!(scaled_unit_spelling_texts, false);
-
-struct ScaledUnitLookupTables
-{
-    ScaledUnitSpelling[sorted_scaled_unit_spelling_specs.length] spellings;
-    ubyte[sorted_scaled_units.length] canonical;
-}
-
-enum scaled_unit_lookup_tables = () {
-    ScaledUnitLookupTables tables;
-    tables.canonical[] = ubyte.max;
-    foreach (i, spec; sorted_scaled_unit_spelling_specs)
-    {
-        size_t spelling_offset = cast(size_t)packed_scaled_unit_spelling_strings.offsets[i] << packed_scaled_unit_spelling_strings.offset_shift;
-        assert(spelling_offset <= ushort.max);
-
-        size_t unit_offset = size_t.max;
-        foreach (j, unit; sorted_scaled_units)
-            if (unit == spec.unit)
-            {
-                unit_offset = j;
-                break;
-            }
-        assert(unit_offset != size_t.max);
-
-        tables.spellings[i] = ScaledUnitSpelling(cast(ushort)spelling_offset, cast(ubyte)unit_offset, (spec.flags & ScaledUnitSpellingFlags.si_prefixable) != 0);
-        if (spec.flags & ScaledUnitSpellingFlags.canonical)
-        {
-            assert(tables.canonical[unit_offset] == ubyte.max);
-            tables.canonical[unit_offset] = cast(ubyte)i;
-        }
-    }
-    foreach (index; tables.canonical)
-        assert(index != ubyte.max);
-    return tables;
+immutable ubyte[(scaled_unit_spelling_count + 7) / 8] g_scaled_unit_prefixable = () {
+    ubyte[(scaled_unit_spelling_count + 7) / 8] prefixable;
+    foreach (key_index, source_index; ScaledUnitBiMap.k2decl)
+        if (scaled_unit_spelling_specs[source_index].is_prefixable)
+            prefixable[key_index >> 3] |= 1 << (key_index & 7);
+    return prefixable;
 }();
 
 bool valid_si_exp(long e) pure
     => e >= -31 && e <= 31;
 
-size_t find_scaled_unit_spelling(const(char)[] spelling, bool require_si_prefix = false) pure nothrow @nogc
+bool find_scaled_unit_spelling(const(char)[] spelling, out ScaledUnit unit, bool require_si_prefix = false) pure nothrow @nogc
 {
-    size_t index = binary_search!scaled_unit_spelling_compare(g_unit_spellings[], spelling);
-    if (index == g_unit_spellings.length || (require_si_prefix && !g_unit_spellings[index].is_prefixable))
-        return g_unit_spellings.length;
-    return index;
-}
-
-int scaled_unit_spelling_compare(const ScaledUnitSpelling entry, const(char)[] spelling) pure nothrow @nogc
-{
-    return uni_compare(scaled_unit_spelling_text(entry), spelling);
-}
-
-int scaled_unit_compare(const ScaledUnit a, const ScaledUnit b) pure nothrow @nogc
-{
-    return a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : 0;
-}
-
-ScaledUnit scaled_unit_from_spelling(size_t index) pure nothrow @nogc
-{
-    return g_units[g_unit_spellings[index].unit_offset];
-}
-
-const(char)[] scaled_unit_spelling_text(const ScaledUnitSpelling entry) pure nothrow @nogc
-{
-    // CTFE cannot follow a pointer into a global, so read the length prefix by index
     if (__ctfe)
     {
-        size_t o = entry.spelling_offset;
-        version (LittleEndian)
-            size_t len = (g_spelling_strings[o - 2] | (g_spelling_strings[o - 1] << 8)) & 0x7FFF;
-        else
-            size_t len = (g_spelling_strings[o - 1] | (g_spelling_strings[o - 2] << 8)) & 0x7FFF;
-        return g_spelling_strings[o .. o + len];
+        foreach (spec; scaled_unit_spelling_specs)
+            if (spec.spelling == spelling && (!require_si_prefix || spec.is_prefixable))
+            {
+                unit = spec.unit;
+                return true;
+            }
+        return false;
     }
-    return as_string(g_spelling_strings.ptr + entry.spelling_offset)[];
+    ushort spelling_index;
+    if (!g_scaled_unit_map.find(spelling, unit, spelling_index) || (require_si_prefix && !(g_scaled_unit_prefixable[spelling_index >> 3] & (1 << (spelling_index & 7)))))
+        return false;
+    return true;
 }
 
 const(char)[] scaled_unit_spelling(ScaledUnit u) pure nothrow @nogc
 {
-    size_t unit_index = binary_search!scaled_unit_compare(g_units[], u);
-    if (unit_index == g_units.length)
+    if (__ctfe)
+    {
+        foreach (spec; scaled_unit_spelling_specs)
+            if (spec.unit == u)
+                return spec.spelling;
         return null;
-    return scaled_unit_spelling_text(g_unit_spellings[g_canonical_string[unit_index]]);
+    }
+    const(char)[] spelling;
+    if (!g_scaled_unit_map.reverse(u, spelling))
+        return null;
+    return spelling;
 }
 
 ptrdiff_t format_si_scale(int e, char[] buffer) pure nothrow @nogc

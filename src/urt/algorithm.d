@@ -165,9 +165,9 @@ void qsort(alias _pred = void, T)(T[] arr) pure
             static int compare(const void* a, const void* b) pure nothrow @nogc
                 => pred(*cast(T*)a, *cast(T*)b);
 
-        qsort(arr[], T.sizeof, &compare, (void* a, void* b) pure nothrow @nogc {
-                  swap(*cast(T*)a, *cast(T*)b);
-              });
+        qsort(arr[], T.sizeof,
+            (const void* a, const void* b) pure nothrow @nogc => compare(a, b),
+            (void* a, void* b) pure nothrow @nogc { swap(*cast(T*)a, *cast(T*)b); });
     }
     else
     {
@@ -213,6 +213,15 @@ void qsort(alias _pred = void, T)(T[] arr) pure
     }
 }
 
+void qsort(alias _pred = void, T)(T[] arr, scope int delegate(ref T a, ref T b) pure nothrow @nogc pred) pure
+{
+    if (arr.length <= 1)
+        return;
+    qsort(arr[], T.sizeof,
+        cast(int delegate(const void*, const void*) pure nothrow @nogc)pred,
+        (void* a, void* b) pure nothrow @nogc { swap(*cast(T*)a, *cast(T*)b); });
+}
+
 unittest
 {
     struct S
@@ -248,6 +257,10 @@ unittest
     assert(binary_search!(s => s.x < 30 ? -1 : s.x > 30 ? 1 : 0)(arr2) == 3);
     assert(binary_search(arr, 0) == arr.length);
 
+    int direction = -1;
+    qsort(arr, (ref int a, ref int b) => direction*compare(a, b));
+    assert(arr == [100, 30, 17, 3, -1]);
+
     int[10] rep = [1, 10, 10, 10, 10, 10, 10, 10, 10, 100];
     assert(binary_search(rep, 10) == 1);
 }
@@ -260,7 +273,7 @@ version (SmallSize)
     // just one generic implementation to minimise the code...
     // kinda slow though... look at all those multiplies!
     // maybe there's some way to make this faster :/
-    void qsort(void[] arr, size_t element_size, int function(const void* a, const void* b) pure nothrow @nogc compare, void function(void* a, void* b) pure nothrow @nogc swap) pure
+    void qsort(void[] arr, size_t element_size, scope int delegate(const void* a, const void* b) pure nothrow @nogc compare, void function(void* a, void* b) pure nothrow @nogc swap) pure
     {
         void* p = arr.ptr;
         size_t length = arr.length / element_size;

@@ -57,7 +57,7 @@ void _alloc_failure(size_t size, size_t, MemFlags) pure
     (cast(ReportFn)&report_oom)(size);
 }
 
-void[] fast_alloc(size_t size, size_t alignment = size_t.sizeof)
+void[] fast_alloc(size_t size, size_t alignment = 8)
 {
     version (BK7231N)
     {

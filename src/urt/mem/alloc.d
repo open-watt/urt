@@ -25,7 +25,7 @@ bool mem_is_dma(MemFlags flags) pure => (flags & MemFlags.dma) != 0;
 
 
 void[] alloc(size_t size, MemFlags flags = MemFlags.none) pure
-    => alloc(size, size_t.sizeof, flags);
+    => alloc(size, 8, flags);
 
 void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
 {

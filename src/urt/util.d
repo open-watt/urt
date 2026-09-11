@@ -109,6 +109,23 @@ bool is_aligned(T)(T value, size_t alignment)
     static assert(T.sizeof <= size_t.sizeof, "TODO");
     return (cast(size_t)value & (alignment - 1)) == 0;
 }
+pragma(inline, true) T* assume_aligned(size_t alignment, T)(T* p)
+{
+    if (__ctfe)
+        return p;
+    debug assert(is_aligned!alignment(p));
+    version (LDC)
+    {
+        import ldc.intrinsics : llvm_assume;
+        llvm_assume(is_aligned!alignment(p));
+    }
+    else version (GNU)
+    {
+        import gcc.builtins : __builtin_assume_aligned;
+        p = cast(T*)__builtin_assume_aligned(p, alignment);
+    }
+    return p;
+}
 
 T rol(T)(const T value, const uint count) pure
     if (__traits(isIntegral, T) && __traits(isUnsigned, T))

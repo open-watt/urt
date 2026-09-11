@@ -35,6 +35,9 @@ endif
 
 # BAREMETAL_SPECS routes a bare cross-gcc to picolibc's hosted headers.
 ifdef TLSF_DIR
+  ifneq ($(BUILDNAME),bl808-d0)
+    TLSF_DEFINES += -DTLSF_ALIGN_SIZE_LOG2=3
+  endif
   TLSF_OBJS    = $(patsubst $(TLSF_DIR)/%.c,$(OBJDIR)/tlsf/%.o,$(TLSF_SRCS))
   TLSF_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
       -ffunction-sections -fdata-sections -DNDEBUG -fcommon $(TLSF_DEFINES) \

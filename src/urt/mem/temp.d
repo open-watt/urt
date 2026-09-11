@@ -218,12 +218,12 @@ private:
 //       this is doomed the moment we light up the esp32's second core!
 version (BareMetal)
 {
-    @fast_data align(size_t.alignof) __gshared void[TempMemSize] tempMem;
+    @fast_data align(8) __gshared void[TempMemSize] tempMem;
     @fast_data __gshared ushort alloc_offset = 0;
 }
 else
 {
-    align(size_t.alignof) static void[TempMemSize] tempMem;
+    align(8) static void[TempMemSize] tempMem;
     static ushort alloc_offset = 0;
 }
 

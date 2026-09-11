@@ -99,7 +99,7 @@ void _alloc_failure(size_t size, size_t alignment, MemFlags flags) pure
 extern(C) void* malloc(size_t size) nothrow @nogc
 {
     import urt.mem.alloc : mem_alloc = alloc;
-    void[] m = mem_alloc(size, size_t.sizeof);
+    void[] m = mem_alloc(size, 8);
     return m.ptr;
 }
 

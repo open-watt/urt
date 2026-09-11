@@ -5,6 +5,7 @@ import urt.traits;
 
 public import urt.processor : LittleEndian;
 public import urt.util : byte_reverse;
+import urt.util : is_aligned;
 
 pure nothrow @nogc:
 
@@ -262,6 +263,8 @@ ubyte[T.sizeof] nativeToLittleEndian(T)(auto ref const T data)
 void storeBigEndian(T)(T* target, const T val)
     if (is_some_int!T || is(T == float) || is(T == double))
 {
+    debug if (!__ctfe)
+        assert(is_aligned!(T.alignof)(target));
     version (BigEndian)
         *target = val;
     else
@@ -270,6 +273,8 @@ void storeBigEndian(T)(T* target, const T val)
 void storeLittleEndian(T)(T* target, const T val)
     if (is_some_int!T || is(T == float) || is(T == double))
 {
+    debug if (!__ctfe)
+        assert(is_aligned!(T.alignof)(target));
     version (LittleEndian)
         *target = val;
     else
@@ -278,6 +283,8 @@ void storeLittleEndian(T)(T* target, const T val)
 T loadBigEndian(T)(const(T)* src)
     if (is_some_int!T || is(T == float) || is(T == double))
 {
+    debug if (!__ctfe)
+        assert(is_aligned!(T.alignof)(src));
     version (BigEndian)
         return *src;
     else
@@ -286,6 +293,8 @@ T loadBigEndian(T)(const(T)* src)
 T loadLittleEndian(T)(const(T)* src)
     if (is_some_int!T || is(T == float) || is(T == double))
 {
+    debug if (!__ctfe)
+        assert(is_aligned!(T.alignof)(src));
     version (LittleEndian)
         return *src;
     else

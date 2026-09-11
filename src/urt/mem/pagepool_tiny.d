@@ -56,7 +56,7 @@ template PagePool(
         return true;
     }
 
-    Page* page_alloc(size_t bytes, size_t alignment = size_t.sizeof, size_t headroom = 0, size_t tailroom = 0)
+    Page* page_alloc(size_t bytes, size_t alignment = 8, size_t headroom = 0, size_t tailroom = 0)
     {
         assert(_initialised, "Page pool not initialised!");
         size_t required = page_required_capacity(bytes, alignment, headroom, tailroom);
@@ -104,8 +104,7 @@ template PagePool(
         return (mem.ptr + allocation_header_size)[0 .. bytes];
     }
 
-    Page* page_adopt(void[] block, size_t bytes, size_t alignment = size_t.sizeof,
-                     size_t headroom = 0, size_t tailroom = 0)
+    Page* page_adopt(void[] block, size_t bytes, size_t alignment = 8, size_t headroom = 0, size_t tailroom = 0)
     {
         assert(_initialised, "Page pool not initialised!");
         if (block.length <= allocation_header_size || (cast(size_t)block.ptr & 7) != 0)

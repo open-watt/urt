@@ -230,11 +230,14 @@ void free(T)(T[] mem) pure
     _free(cast(void*)mem.ptr);
 }
 
-pragma(inline, true) T* alloc(T, Args...)(MemFlags flags, auto ref Args args)
+T* alloc(T, Args...)(MemFlags flags, auto ref Args args)
     if (!is(T == class))
 {
     static if (Args.length == 0 && __traits(isZeroInit, T))
+    {
+        pragma(inline, true);
         return cast(T*)alloc_zeroed(T.sizeof, T.alignof, flags).ptr;
+    }
     else
     {
         T* item = cast(T*)alloc(T.sizeof, T.alignof, flags).ptr;
@@ -244,7 +247,7 @@ pragma(inline, true) T* alloc(T, Args...)(MemFlags flags, auto ref Args args)
     }
 }
 
-T* alloc(T, Args...)(auto ref Args args)
+pragma(inline, true) T* alloc(T, Args...)(auto ref Args args)
     if (!is(T == class) && (Args.length == 0 || !is(Args[0] == MemFlags)))
     => alloc!T(MemFlags.none, forward!args);
 

@@ -1,7 +1,7 @@
 module urt.driver.bk7231.alloc;
 
 version (BK7231N) import urt.attribute : fast_data;
-import urt.mem.alloc : MemFlags;
+import urt.mem.alloc : MemFlags, default_alignment;
 import urt.sync.critical : Critical;
 version (BK7231N) import urt.util : align_down;
 
@@ -57,7 +57,7 @@ void _alloc_failure(size_t size, size_t, MemFlags) pure
     (cast(ReportFn)&report_oom)(size);
 }
 
-void[] fast_alloc(size_t size, size_t alignment = 8)
+void[] fast_alloc(size_t size, size_t alignment = default_alignment)
 {
     version (BK7231N)
     {
@@ -100,7 +100,7 @@ extern(C) void* pvPortMalloc(size_t size)
     if (!size)
         size = uint.sizeof;
     version (BK7231N)
-        return sram_alloc(size, 8);
+        return sram_alloc(size, default_alignment);
     else
     {
         auto guard = _lock.acquire();

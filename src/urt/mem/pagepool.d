@@ -109,7 +109,7 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
     return true;
 }
 
-Page* page_alloc(size_t bytes, size_t alignment = 8, size_t headroom = 0, size_t tailroom = 0)
+Page* page_alloc(size_t bytes, size_t alignment = default_alignment, size_t headroom = 0, size_t tailroom = 0)
 {
     size_t required = page_required_capacity(bytes, alignment, headroom, tailroom);
     if (required > ushort.max)
@@ -126,7 +126,7 @@ Page* page_alloc(size_t bytes, size_t alignment = 8, size_t headroom = 0, size_t
     return page;
 }
 
-Page* page_adopt(void[] block, size_t bytes, size_t alignment = 8, size_t headroom = 0, size_t tailroom = 0)
+Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignment, size_t headroom = 0, size_t tailroom = 0)
 {
     if (block.length <= allocation_header_size || (cast(size_t)block.ptr & 15) != 0)
         return null;

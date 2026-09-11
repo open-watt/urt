@@ -98,8 +98,8 @@ void _alloc_failure(size_t size, size_t alignment, MemFlags flags) pure
 // are defined so picolibc's malloc.c.o stays out of the link.
 extern(C) void* malloc(size_t size) nothrow @nogc
 {
-    import urt.mem.alloc : mem_alloc = alloc;
-    void[] m = mem_alloc(size, 8);
+    import urt.mem.alloc : mem_alloc = alloc, default_alignment;
+    void[] m = mem_alloc(size, default_alignment);
     return m.ptr;
 }
 

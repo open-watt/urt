@@ -1,6 +1,7 @@
 module urt.mem.alloc;
 
 import urt.mem;
+import urt.util : is_power_of_2;
 
 version (Tiny) {} else
     version = MemoryThreats;
@@ -23,9 +24,13 @@ enum MemFlags : ubyte
 MemFlags mem_speed(MemFlags flags) pure => cast(MemFlags)(flags & 3);
 bool mem_is_dma(MemFlags flags) pure => (flags & MemFlags.dma) != 0;
 
+// wide enough for every scalar on 32-bit ABIs, and posix_memalign's floor
+enum default_alignment = 8;
+static assert(is_power_of_2(default_alignment) && default_alignment >= (void*).alignof);
+
 
 void[] alloc(size_t size, MemFlags flags = MemFlags.none) pure
-    => alloc(size, 8, flags);
+    => alloc(size, default_alignment, flags);
 
 void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
 {
@@ -77,7 +82,7 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     return mem;
 }
 
-void[] alloc_zeroed(size_t size, size_t alignment = 8, MemFlags flags = MemFlags.none) pure
+void[] alloc_zeroed(size_t size, size_t alignment = default_alignment, MemFlags flags = MemFlags.none) pure
 {
     void[] mem = alloc(size, alignment, flags);
     if (mem.ptr)
@@ -85,7 +90,7 @@ void[] alloc_zeroed(size_t size, size_t alignment = 8, MemFlags flags = MemFlags
     return mem;
 }
 
-void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags = MemFlags.none) pure
+void[] realloc(void[] mem, size_t new_size, size_t alignment = default_alignment, MemFlags flags = MemFlags.none) pure
 {
     import urt.util : is_aligned, min;
 

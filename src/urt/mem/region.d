@@ -1,5 +1,6 @@
 module urt.mem.region;
 
+import urt.mem.alloc : default_alignment;
 import urt.util;
 
 nothrow @nogc:
@@ -20,7 +21,7 @@ static Region* makeRegion(void[] mem) pure
 
 struct Region
 {
-    void[] alloc(size_t size, size_t alignment = 8) pure nothrow @nogc
+    void[] alloc(size_t size, size_t alignment = default_alignment) pure nothrow @nogc
     {
         size_t ptr = cast(size_t)&this + Region.sizeof + offset;
         size_t alignedPtr = ptr.align_up(alignment);

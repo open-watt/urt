@@ -29,7 +29,7 @@ void[] alloc(size_t size, MemFlags flags = MemFlags.none) pure
 
 void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
 {
-    import urt.util : is_power_of_2;
+    import urt.util : is_aligned, is_power_of_2;
 
     assert(is_power_of_2(alignment), "Alignment must be a power of two!");
 
@@ -41,6 +41,7 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
         alias ReclaimFn = void function(size_t, ReclaimRetry, void*) pure nothrow @nogc;
         (cast(ReclaimFn) &reclaim_memory)(reclaim_size(size, alignment), &retry_realloc, &retry);
     }
+    debug assert(mem.ptr is null || is_aligned(mem.ptr, alignment));
     if (mem.ptr is null)
     {
         static if (__traits(compiles, _alloc_failure(size, alignment, flags)))
@@ -76,9 +77,17 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     return mem;
 }
 
+void[] alloc_zeroed(size_t size, size_t alignment = 8, MemFlags flags = MemFlags.none) pure
+{
+    void[] mem = alloc(size, alignment, flags);
+    if (mem.ptr)
+        (cast(ubyte[])mem)[] = 0;
+    return mem;
+}
+
 void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags = MemFlags.none) pure
 {
-    import urt.util : min;
+    import urt.util : is_aligned, min;
 
     if (new_size == 0)
     {
@@ -102,6 +111,7 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = 8, MemFlags flags
             alias ReclaimFn = void function(size_t, ReclaimRetry, void*) pure nothrow @nogc;
             (cast(ReclaimFn) &reclaim_memory)(reclaim_size(new_size, alignment), &retry_realloc, &retry);
         }
+        debug assert(new_mem.ptr is null || is_aligned(new_mem.ptr, alignment));
         if (new_mem.ptr is null)
         {
             static if (__traits(compiles, _alloc_failure(new_size, alignment, flags)))
@@ -215,13 +225,18 @@ void free(T)(T[] mem) pure
     _free(cast(void*)mem.ptr);
 }
 
-T* alloc(T, Args...)(MemFlags flags, auto ref Args args)
+pragma(inline, true) T* alloc(T, Args...)(MemFlags flags, auto ref Args args)
     if (!is(T == class))
 {
-    T* item = cast(T*)alloc(T.sizeof, T.alignof, flags).ptr;
-    if (item)
-        item.emplace(forward!args);
-    return item;
+    static if (Args.length == 0 && __traits(isZeroInit, T))
+        return cast(T*)alloc_zeroed(T.sizeof, T.alignof, flags).ptr;
+    else
+    {
+        T* item = cast(T*)alloc(T.sizeof, T.alignof, flags).ptr;
+        if (item)
+            item.emplace(forward!args);
+        return item;
+    }
 }
 
 T* alloc(T, Args...)(auto ref Args args)

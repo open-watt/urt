@@ -43,6 +43,12 @@ size_t urt_sizeof_ssl_context(void) { return sizeof(mbedtls_ssl_context); }
 size_t urt_sizeof_ssl_config(void)  { return sizeof(mbedtls_ssl_config); }
 size_t urt_sizeof_pk_context(void)  { return sizeof(mbedtls_pk_context); }
 
+const unsigned char *urt_x509_crt_der(const mbedtls_x509_crt *crt, size_t *len)
+{
+    *len = crt->raw.len;
+    return crt->raw.p;
+}
+
 
 // =====================================================================
 // RNG layer -- unified across 2.x/3.x/4.x

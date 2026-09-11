@@ -77,6 +77,7 @@ void mbedtls_x509_crt_init(mbedtls_x509_crt* crt);
 void mbedtls_x509_crt_free(mbedtls_x509_crt* crt);
 int mbedtls_x509_crt_parse_der(mbedtls_x509_crt* chain, const(ubyte)* buf, size_t buflen);
 int mbedtls_x509_crt_parse(mbedtls_x509_crt* chain, const(ubyte)* buf, size_t buflen);
+const(ubyte)* urt_x509_crt_der(const(mbedtls_x509_crt)* crt, size_t* len);
 
 
 // --- SSL/TLS ---
@@ -102,6 +103,7 @@ int mbedtls_ssl_read(mbedtls_ssl_context* ssl, ubyte* buf, size_t len);
 int mbedtls_ssl_write(mbedtls_ssl_context* ssl, const(ubyte)* buf, size_t len);
 int mbedtls_ssl_close_notify(mbedtls_ssl_context* ssl);
 int mbedtls_ssl_set_hostname(mbedtls_ssl_context* ssl, const(char)* hostname);
+uint mbedtls_ssl_get_verify_result(const(mbedtls_ssl_context)* ssl);
 
 void mbedtls_ssl_config_init(mbedtls_ssl_config* conf);
 void mbedtls_ssl_config_free(mbedtls_ssl_config* conf);

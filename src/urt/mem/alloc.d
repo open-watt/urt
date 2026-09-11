@@ -305,9 +305,16 @@ T[] alloc_array(T, N, Args...)(N count, auto ref Args args)
 void free(T)(T* item)
     if (!is(T == class) && !is(immutable T == immutable void))
 {
-    if (item is null)
-        return;
-    destroy!false(*item);
+    import urt.internal.traits : hasElaborateDestructor;
+
+    static if (hasElaborateDestructor!T)
+    {
+        if (item is null)
+            return;
+        destroy!false(*item);
+    }
+    else
+        pragma(inline, true);
     free((cast(void*)item)[0 .. T.sizeof]);
 }
 
@@ -333,6 +340,8 @@ void free(T)(T[] items)
         foreach (ref i; items)
             destroy!false(i);
     }
+    else
+        pragma(inline, true);
     free(cast(void[])items);
 }
 

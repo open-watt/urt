@@ -166,11 +166,8 @@ struct AVLTree(K, V, alias Pred = DefCmp!K)
 
     ref V replace(_K, _V)(auto ref _K key, auto ref _V val)
     {
-        Node* node = cast(Node*)alloc(Node.sizeof).ptr;
+        Node* node = cast(Node*)new_node(node_traits);
         emplace(&node.kvp, forward!key, forward!val);
-        node._base.left = node._base.right = null;
-        node._base.height = 1;
-        node._base.key_offset = Node.kvp.offsetof + KVP!(K, V).key.offsetof;
         _root = insert(_root, node);
         return node.kvp.value;
     }
@@ -378,16 +375,21 @@ nothrow:
         free(cast(Node*)p);
     }
 
+    enum size_t node_traits = (Node.sizeof << 16) | (Node.kvp.offsetof + KVP!(K, V).key.offsetof);
+
+    pragma(inline, true)
     void destroy(Node* n)
     {
         _num_modes -= destroy_node(n.base, &free_node);
     }
 
+    pragma(inline, true)
     Node* insert(Node* n, Node* newnode)
     {
         return cast(Node*)insert_node(n.base, newnode.base, _num_modes, &compare_keys!(K, K, Pred), &free_node);
     }
 
+    pragma(inline, true)
     Node* delete_node(_K)(Node* _pRoot, ref const _K key)
     {
         return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_keys!(K, _K, Pred), &compare_keys!(K, K, Pred), (void* from, void* to) {
@@ -967,6 +969,15 @@ inout(BaseNode)* find_node(inout(BaseNode)* n, CompFn pred, const void* key) pur
         return find_node(n.left, pred, key);
     if (c < 0)
         return find_node(n.right, pred, key);
+    return n;
+}
+
+void* new_node(size_t traits)
+{
+    BaseNode* n = cast(BaseNode*)alloc(traits >> 16).ptr;
+    n.left = n.right = null;
+    n.height = 1;
+    n.key_offset = cast(ushort)traits;
     return n;
 }
 

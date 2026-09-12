@@ -7,6 +7,16 @@ import urt.traits : is_some_char, is_primitive, is_trivial, Unqual;
 
 nothrow @nogc:
 
+// TODO: remove these, the tree still calls them
+alias beginsWith = begins_with;
+alias endsWith = ends_with;
+alias findFirst = find_first;
+alias findLast = find_last;
+alias popBack = pop_back;
+alias popFront = pop_front;
+alias takeBack = take_back;
+alias takeFront = take_front;
+
 
 enum Alloc_T { Value }
 alias Alloc = Alloc_T.Value;
@@ -16,10 +26,10 @@ enum Reserve_T { Value }
 alias Reserve = Reserve_T.Value;
 
 
-bool beginsWith(T, U)(const(T)[] arr, U[] rh) pure
+bool begins_with(T, U)(const(T)[] arr, U[] rh) pure
     => rh.length <= arr.length && arr[0 .. rh.length] == rh[];
 
-bool endsWith(T, U)(const(T)[] arr, U[] rh) pure
+bool ends_with(T, U)(const(T)[] arr, U[] rh) pure
     => rh.length <= arr.length && arr[$ - rh.length .. $] == rh[];
 
 //Slice<T> take(ptrdiff_t n)
@@ -35,21 +45,21 @@ bool empty(T, K)(ref const T[K] arr) pure
     return arr.length == 0;
 }
 
-ref inout(T) popFront(T)(ref inout(T)[] arr) pure
+ref inout(T) pop_front(T)(ref inout(T)[] arr) pure
 {
     debug assert(arr.length > 0);
     arr = arr.ptr[1..arr.length];
     return arr.ptr[-1];
 }
 
-ref inout(T) popBack(T)(ref inout(T)[] arr) pure
+ref inout(T) pop_back(T)(ref inout(T)[] arr) pure
 {
     debug assert(arr.length > 0);
     arr = arr.ptr[0..arr.length - 1];
     return arr.ptr[arr.length];
 }
 
-inout(T)[] takeFront(T)(ref inout(T)[] arr, size_t count) pure
+inout(T)[] take_front(T)(ref inout(T)[] arr, size_t count) pure
 {
     debug assert(count <= arr.length);
     inout(T)[] t = arr.ptr[0 .. count];
@@ -57,7 +67,7 @@ inout(T)[] takeFront(T)(ref inout(T)[] arr, size_t count) pure
     return t;
 }
 
-ref inout(T)[N] takeFront(size_t N, T)(ref inout(T)[] arr) pure
+ref inout(T)[N] take_front(size_t N, T)(ref inout(T)[] arr) pure
 {
     debug assert(N <= arr.length);
     inout(T)* t = arr.ptr;
@@ -65,7 +75,7 @@ ref inout(T)[N] takeFront(size_t N, T)(ref inout(T)[] arr) pure
     return t[0..N];
 }
 
-inout(T)[] takeBack(T)(ref inout(T)[] arr, size_t count) pure
+inout(T)[] take_back(T)(ref inout(T)[] arr, size_t count) pure
 {
     debug assert(count <= arr.length);
     inout(T)[] t = arr.ptr[arr.length - count .. arr.length];
@@ -73,7 +83,7 @@ inout(T)[] takeBack(T)(ref inout(T)[] arr, size_t count) pure
     return t;
 }
 
-ref inout(T)[N] takeBack(size_t N, T)(ref inout(T)[] arr) pure
+ref inout(T)[N] take_back(size_t N, T)(ref inout(T)[] arr) pure
 {
     debug assert(N <= arr.length);
     inout(T)* t = arr.ptr + arr.length - N;
@@ -82,7 +92,7 @@ ref inout(T)[N] takeBack(size_t N, T)(ref inout(T)[] arr) pure
 }
 
 // TODO: I'd like it if these only had one arg (T) somehow...
-size_t findFirst(T, U)(const(T)[] arr, auto ref const U el)
+size_t find_first(T, U)(const(T)[] arr, auto ref const U el)
     if (!is_some_char!T)
 {
     size_t i = 0;
@@ -92,7 +102,7 @@ size_t findFirst(T, U)(const(T)[] arr, auto ref const U el)
 }
 
 // TODO: I'd like it if these only had one arg (T) somehow...
-size_t findLast(T, U)(const(T)[] arr, auto ref const U el)
+size_t find_last(T, U)(const(T)[] arr, auto ref const U el)
     if (!is_some_char!T)
 {
     ptrdiff_t last = arr.length-1;
@@ -102,7 +112,7 @@ size_t findLast(T, U)(const(T)[] arr, auto ref const U el)
 }
 
 // TODO: I'd like it if these only had one arg (T) somehow...
-size_t findFirst(T, U)(const(T)[] arr, U[] seq)
+size_t find_first(T, U)(const(T)[] arr, U[] seq)
     if (!is_some_char!T)
 {
     if (seq.length == 0)
@@ -119,7 +129,7 @@ size_t findFirst(T, U)(const(T)[] arr, U[] seq)
 }
 
 // TODO: I'd like it if these only had one arg (T) somehow...
-size_t findLast(T, U)(const(T)[] arr, U[] seq)
+size_t find_last(T, U)(const(T)[] arr, U[] seq)
     if (!is_some_char!T)
 {
     if (seq.length == 0)
@@ -135,7 +145,7 @@ size_t findLast(T, U)(const(T)[] arr, U[] seq)
     return arr.length;
 }
 
-size_t findFirst(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pred)
+size_t find_first(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pred)
     if (!is_some_char!T)
 {
     size_t i = 0;
@@ -147,7 +157,7 @@ size_t findFirst(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pre
 bool contains(T, U)(const(T)[] arr, auto ref const U el, size_t *index = null)
     if (!is_some_char!T)
 {
-    size_t i = findFirst(arr, el);
+    size_t i = find_first(arr, el);
     if (i == arr.length)
         return false;
     if (index)
@@ -158,7 +168,7 @@ bool contains(T, U)(const(T)[] arr, auto ref const U el, size_t *index = null)
 bool contains(T, U)(const(T)[] arr, U[] seq, size_t *index = null)
     if (!is_some_char!T)
 {
-    size_t i = findFirst(arr, seq);
+    size_t i = find_first(arr, seq);
     if (i == arr.length)
         return false;
     if (index)
@@ -169,7 +179,7 @@ bool contains(T, U)(const(T)[] arr, U[] seq, size_t *index = null)
 bool contains(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pred, size_t *index = null)
     if (!is_some_char!T)
 {
-    size_t i = findFirst(arr, pred);
+    size_t i = find_first(arr, pred);
     if (i == arr.length)
         return false;
     if (index)
@@ -177,7 +187,7 @@ bool contains(T)(const(T)[] arr, bool delegate(ref const T) nothrow @nogc pred, 
     return true;
 }
 
-ptrdiff_t indexOfElement(T, U)(const(T)[] arr, const(U)* el)
+ptrdiff_t index_of_element(T, U)(const(T)[] arr, const(U)* el)
 {
     if (el < arr.ptr || el >= arr.ptr + arr.length)
         return -1;
@@ -362,6 +372,18 @@ T[] duplicate(T)(const T[] src) nothrow @nogc
 // Array will fail-over to an allocated buffer if the contents exceed the fixed size
 struct Array(T, size_t EmbedCount = 0)
 {
+    // TODO: remove these, the tree still calls them
+    alias emplaceBack = emplace_back;
+    alias insertEmplace = insert_emplace;
+    alias popBack = pop_back;
+    alias popFront = pop_front;
+    alias pushBack = push_back;
+    alias pushFront = push_front;
+    alias removeFirst = remove_first;
+    alias removeFirstSwapLast = remove_first_swap_last;
+    alias removeSwapLast = remove_swap_last;
+    alias takeFront = take_front;
+
     static assert(EmbedCount == 0, "Not without move semantics!");
 
     alias This = typeof(this);
@@ -424,11 +446,19 @@ struct Array(T, size_t EmbedCount = 0)
 
     ~this()
     {
-        clear();
-        if (has_allocation())
+        static if (is_trivial!T && EmbedCount == 0)
         {
-            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
-            array_free(ptr, T.sizeof, prefix);
+            pragma(inline, true);
+            array_release(ptr, element_traits!T);
+        }
+        else
+        {
+            clear();
+            if (has_allocation())
+            {
+                enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+                array_free(ptr, T.sizeof, prefix);
+            }
         }
     }
 
@@ -476,6 +506,7 @@ nothrow @nogc:
 
         ref Array!(T, EmbedCount) append(Things...)(auto ref Things things)
         {
+            pragma(inline, true);
             size_t ext_len = 0;
             static foreach (i; 0 .. things.length)
             {
@@ -581,28 +612,28 @@ nothrow @nogc:
         return ptr[_length - 1];
     }
 
-    ref T pushFront()()
+    ref T push_front()()
     {
         static if (is(T == class) || is(T == interface))
-            return pushFront(null);
+            return push_front(null);
         else
-            return pushFront(T.init);
+            return push_front(T.init);
     }
-    ref T pushFront(U)(auto ref U item)
+    ref T push_front(U)(auto ref U item)
         if (is(U : T))
         => insert(0, forward!item);
-    ref T emplaceFront(Args...)(auto ref Args args)
+    ref T emplace_front(Args...)(auto ref Args args)
         if (!is(T == class) && !is(T == interface))
-        => insertEmplace(0, forward!args);
+        => insert_emplace(0, forward!args);
 
-    ref T pushBack()()
+    ref T push_back()()
     {
         static if (is(T == class) || is(T == interface))
-            return pushBack(null);
+            return push_back(null);
         else
-            return pushBack(T.init);
+            return push_back(T.init);
     }
-    ref T pushBack(U)(auto ref U item)
+    ref T push_back(U)(auto ref U item)
         if (is(U : T))
     {
         reserve(_length + 1);
@@ -611,7 +642,7 @@ nothrow @nogc:
         else
             return *emplace!T(&ptr[_length++], forward!item);
     }
-    ref T emplaceBack(Args...)(auto ref Args args)
+    ref T emplace_back(Args...)(auto ref Args args)
         if (!is(T == class) && !is(T == interface))
     {
         reserve(_length + 1);
@@ -631,7 +662,7 @@ nothrow @nogc:
             return *emplace!T(&ptr[pos], forward!item);
     }
 
-    ref T insertEmplace(Args...)(size_t pos, auto ref Args args)
+    ref T insert_emplace(Args...)(size_t pos, auto ref Args args)
         if (!is(T == class) && !is(T == interface))
     {
         assert(pos <= _length, "Insert position out of range");
@@ -641,7 +672,7 @@ nothrow @nogc:
         return *emplace!T(&ptr[pos], forward!args);
     }
 
-    T popFront()
+    T pop_front()
     {
         debug assert(_length > 0, "Range error");
         T r = ptr[0].move;
@@ -649,7 +680,7 @@ nothrow @nogc:
         return r;
     }
 
-    T popBack()
+    T pop_back()
     {
         debug assert(_length > 0, "Range error");
         T r = ptr[_length - 1].move;
@@ -657,7 +688,7 @@ nothrow @nogc:
         return r;
     }
 
-    Array!T takeFront()(size_t count)
+    Array!T take_front()(size_t count)
     {
         auto r = Array!T(Reserve, count);
         move_emplace_all(ptr[0 .. count], r.ptr[0 .. count]);
@@ -666,7 +697,7 @@ nothrow @nogc:
         return r;
     }
 
-    Array!T takeBack()(size_t count)
+    Array!T take_back()(size_t count)
     {
         auto r = Array!T(Reserve, count);
         move_emplace_all(ptr[_length - count .. _length], r.ptr[0 .. count]);
@@ -678,24 +709,40 @@ nothrow @nogc:
     void remove(size_t i, size_t count = 1)
     {
         debug assert(i + count <= _length, "Range error");
-        if (i < _length - count)
-            move_to!true(ptr[i + count .. _length], ptr[i .. _length - count]);
-        destroy_all!false(ptr[_length - count .. length]);
+        static if (is_trivial!T)
+        {
+            pragma(inline, true);
+            array_shift_down(ptr, _length, i, count, T.sizeof);
+        }
+        else
+        {
+            if (i < _length - count)
+                move_to!true(ptr[i + count .. _length], ptr[i .. _length - count]);
+            destroy_all!false(ptr[_length - count .. length]);
+        }
         _length -= cast(uint)count;
     }
-    void remove(const(T)* pItem)                    { remove(ptr[0 .. _length].indexOfElement(pItem)); }
-    void removeFirst(U)(ref const U item)           { remove(ptr[0 .. _length].findFirst(item)); }
+    void remove(const(T)* pItem)                    { remove(ptr[0 .. _length].index_of_element(pItem)); }
+    void remove_first(U)(ref const U item)           { remove(ptr[0 .. _length].find_first(item)); }
 
-    void removeSwapLast(size_t i, size_t count = 1)
+    void remove_swap_last(size_t i, size_t count = 1)
     {
         debug assert(i + count <= _length, "Range error");
-        if (i < _length - count)
-            move_to!true(ptr[_length - count .. _length], ptr[i .. i + count]);
-        destroy_all!false(ptr[_length - count .. length]);
+        static if (is_trivial!T)
+        {
+            pragma(inline, true);
+            array_swap_last(ptr, _length, i, count, T.sizeof);
+        }
+        else
+        {
+            if (i < _length - count)
+                move_to!true(ptr[_length - count .. _length], ptr[i .. i + count]);
+            destroy_all!false(ptr[_length - count .. length]);
+        }
         _length -= cast(uint)count;
     }
-    void removeSwapLast(const(T)* pItem)            { removeSwapLast(ptr[0 .. _length].indexOfElement(pItem)); }
-    void removeFirstSwapLast(U)(ref const U item)   { removeSwapLast(ptr[0 .. _length].findFirst(item)); }
+    void remove_swap_last(const(T)* pItem)            { remove_swap_last(ptr[0 .. _length].index_of_element(pItem)); }
+    void remove_first_swap_last(U)(ref const U item)   { remove_swap_last(ptr[0 .. _length].find_first(item)); }
 
     void sort(alias pred = void)()
     {
@@ -703,7 +750,7 @@ nothrow @nogc:
         qsort!(pred)(ptr[0.._length]);
     }
 
-    inout(void)[] getBuffer() inout
+    inout(void)[] get_buffer() inout
     {
         static if (EmbedCount > 0)
             return ptr ? ptr[0 .. alloc_count()] : embed[];
@@ -757,22 +804,21 @@ nothrow @nogc:
 
     void reserve(size_t count)
     {
-        static if (is_trivial!T)
-            pragma(inline, true);
-
-        if (count <= alloc_count())
-            return;
-        debug assert(count <= uint.max, "Exceed maximum size");
-
-        static if (is_trivial!T)
+        static if (is_trivial!T && EmbedCount == 0)
         {
-            enum alignment = T.alignof < 4 ? 4 : T.alignof;
-            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
-            bool allocated = has_allocation();
-            ptr = cast(T*)array_reserve_trivial(ptr, _length, cast(uint)count, T.sizeof, alignment, prefix, allocated);
+            pragma(inline, true);
+            ptr = cast(T*)array_reserve(ptr, _length, count, element_traits!T);
+        }
+        else static if (is_trivial!T)
+        {
+            if (count <= alloc_count())
+                return;
+            ptr = cast(T*)array_reserve_trivial(ptr, _length, cast(uint)count, element_traits!T, has_allocation());
         }
         else
         {
+            if (count <= alloc_count())
+                return;
             enum alignment = T.alignof < 4 ? 4 : T.alignof;
             enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
 
@@ -804,7 +850,9 @@ nothrow @nogc:
 
     void clear()
     {
-        destroy_all!false(ptr[0 .. _length]);
+        pragma(inline, true);
+        static if (!is_trivial!T)
+            destroy_all!false(ptr[0 .. _length]);
         _length = 0;
     }
 
@@ -835,11 +883,14 @@ private:
 
     void grow(size_t target)
     {
-        static if (is_trivial!T)
+        static if (is_trivial!T && EmbedCount == 0)
         {
-            enum alignment = T.alignof < 4 ? 4 : T.alignof;
-            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
-            ptr = cast(T*)array_grow_trivial(ptr, _length, alloc_count(), target, T.sizeof, alignment, prefix, has_allocation());
+            pragma(inline, true);
+            ptr = cast(T*)array_grow(ptr, _length, target, element_traits!T);
+        }
+        else static if (is_trivial!T)
+        {
+            ptr = cast(T*)array_grow_trivial(ptr, _length, alloc_count(), target, element_traits!T, has_allocation());
         }
         else
         {
@@ -944,7 +995,7 @@ nothrow @nogc:
         return ptr[_length - 1];
     }
 
-//    inout(void)[] getBuffer() inout
+//    inout(void)[] get_buffer() inout
 //    {
 //        static if (EmbedCount > 0)
 //            return ptr ? ptr[0 .. alloc_count()] : embed[];
@@ -1067,9 +1118,11 @@ void array_free(void* ptr, size_t element_size, size_t prefix) pure
 }
 
 pragma(inline, false)
-void* array_reserve_trivial(void* ptr, uint length, uint count, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
+void* array_reserve_trivial(void* ptr, uint length, uint count, size_t traits, bool allocated) pure
 {
-    void* result = array_allocate(count, element_size, alignment, prefix);
+    size_t element_size = traits >> 2;
+    size_t prefix = element_size < 4 ? 4 : element_size;
+    void* result = array_allocate(count, element_size, 4 << (traits & 3), prefix);
     if (length)
         memcpy(result, ptr, length * element_size);
     if (allocated)
@@ -1091,13 +1144,55 @@ size_t array_growth(size_t capacity, size_t target) pure
     return result;
 }
 
+// alignment code in the low two bits so the mask is an immediate and the size is one shift;
+// the capacity and whether the buffer is heap-allocated are recoverable from the pointer
+enum element_traits(T) = (T.sizeof << 2) | (T.alignof <= 4 ? 0 : T.alignof == 8 ? 1 : 2);
+
+void array_shift_down(void* ptr, uint length, size_t i, size_t count, size_t element_size) pure
+{
+    pragma(inline, false);
+    if (i < length - count)
+        memmove(ptr + i*element_size, ptr + (i + count)*element_size, (length - i - count)*element_size);
+}
+
+void array_swap_last(void* ptr, uint length, size_t i, size_t count, size_t element_size) pure
+{
+    pragma(inline, false);
+    if (i < length - count)
+        memcpy(ptr + i*element_size, ptr + (length - count)*element_size, count*element_size);
+}
+
+void array_release(void* ptr, size_t traits) pure
+{
+    if (!ptr)
+        return;
+    size_t element_size = traits >> 2;
+    array_free(ptr, element_size, element_size < 4 ? 4 : element_size);
+}
+
+void* array_reserve(void* ptr, uint length, size_t count, size_t traits) pure
+{
+    if (ptr && count <= (cast(uint*)ptr)[-1])
+        return ptr;
+    return array_reserve_trivial(ptr, length, cast(uint)count, traits, ptr !is null);
+}
+
+void* array_grow(void* ptr, uint length, size_t target, size_t traits) pure
+{
+    size_t capacity = ptr ? (cast(uint*)ptr)[-1] : 0;
+    size_t count = array_growth(capacity, target);
+    if (count == capacity)
+        return ptr;
+    return array_reserve_trivial(ptr, length, cast(uint)count, traits, ptr !is null);
+}
+
 pragma(inline, false)
-void* array_grow_trivial(void* ptr, uint length, size_t capacity, size_t target, size_t element_size, size_t alignment, size_t prefix, bool allocated) pure
+void* array_grow_trivial(void* ptr, uint length, size_t capacity, size_t target, size_t traits, bool allocated) pure
 {
     size_t count = array_growth(capacity, target);
     if (count == capacity)
         return ptr;
-    return array_reserve_trivial(ptr, length, cast(uint)count, element_size, alignment, prefix, allocated);
+    return array_reserve_trivial(ptr, length, cast(uint)count, traits, allocated);
 }
 
 pragma(inline, true)
@@ -1138,7 +1233,7 @@ unittest
     assert(integers[] == [1, 5, 2, 3, 4]);
     integers.remove(1, 2);
     assert(integers[] == [1, 3, 4]);
-    integers.removeSwapLast(1);
+    integers.remove_swap_last(1);
     assert(integers[] == [1, 4]);
 
     static struct Item
@@ -1149,9 +1244,9 @@ unittest
     }
 
     Array!Item values;
-    values.emplaceBack(1);
-    values.emplaceBack(3);
-    values.insertEmplace(1, 2);
+    values.emplace_back(1);
+    values.emplace_back(3);
+    values.insert_emplace(1, 2);
     assert(values.length == 3 && values[0].value == 1 && values[1].value == 2 && values[2].value == 3);
     values.remove(1);
     assert(values.length == 2 && values[0].value == 1 && values[1].value == 3);

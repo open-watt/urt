@@ -424,6 +424,7 @@ struct Array(T, size_t EmbedCount = 0)
 
     ~this()
     {
+        pragma(inline, true);
         clear();
         if (has_allocation())
         {
@@ -677,6 +678,7 @@ nothrow @nogc:
 
     void remove(size_t i, size_t count = 1)
     {
+        pragma(inline, true);
         debug assert(i + count <= _length, "Range error");
         if (i < _length - count)
             move_to!true(ptr[i + count .. _length], ptr[i .. _length - count]);
@@ -688,6 +690,7 @@ nothrow @nogc:
 
     void removeSwapLast(size_t i, size_t count = 1)
     {
+        pragma(inline, true);
         debug assert(i + count <= _length, "Range error");
         if (i < _length - count)
             move_to!true(ptr[_length - count .. _length], ptr[i .. i + count]);
@@ -757,6 +760,7 @@ nothrow @nogc:
 
     void reserve(size_t count)
     {
+        pragma(inline, true);
         static if (is_trivial!T)
             pragma(inline, true);
 
@@ -787,6 +791,7 @@ nothrow @nogc:
 
     void resize(size_t count)
     {
+        pragma(inline, true);
         if (count == _length)
             return;
         if (count < _length)
@@ -804,6 +809,7 @@ nothrow @nogc:
 
     void clear()
     {
+        pragma(inline, true);
         destroy_all!false(ptr[0 .. _length]);
         _length = 0;
     }
@@ -835,6 +841,7 @@ private:
 
     void grow(size_t target)
     {
+        pragma(inline, true);
         static if (is_trivial!T)
         {
             enum alignment = T.alignof < 4 ? 4 : T.alignof;

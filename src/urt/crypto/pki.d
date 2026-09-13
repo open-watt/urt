@@ -575,6 +575,26 @@ SysTime cert_expiry(ref const CertRef cert)
         return SysTime();
 }
 
+const(ubyte)[] cert_der(ref const CertRef cert)
+{
+    version (MbedTLS)
+    {
+        if (cert.crt is null)
+            return null;
+        size_t len;
+        const(ubyte)* p = urt_x509_crt_der(cert.crt, &len);
+        return p[0 .. len];
+    }
+    else version (Windows)
+    {
+        if (cert.context is null)
+            return null;
+        return cert.context.pbCertEncoded[0 .. cert.context.cbCertEncoded];
+    }
+    else
+        return null;
+}
+
 inout(void)* native_cert_context(ref inout CertRef cert)
 {
     version (MbedTLS)

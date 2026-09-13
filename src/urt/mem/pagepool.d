@@ -15,6 +15,9 @@ version (Tiny)
     alias page_alloc         = Pool.page_alloc;
     alias page_adopt         = Pool.page_adopt;
     alias page_free          = Pool.page_free;
+    alias page_share         = Pool.page_share;
+    alias page_release       = Pool.page_release;
+    alias page_unique        = Pool.page_unique;
     alias page_category      = Pool.page_category;
     alias page_payload_size  = Pool.page_payload_size;
     alias page_pool_trim     = Pool.page_pool_trim;
@@ -139,7 +142,7 @@ Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignmen
     static if (size_t.sizeof == 8)
         h.slab_offset = cast(uint)block.length;
     h.allocation = cast(ushort)storage_capacity;
-    h.refcount = 0;
+    h.refcount = 1;
     h.next = cast(AllocationHeader*)page_flag_heap;
 
     {
@@ -152,10 +155,38 @@ Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignmen
     return page;
 }
 
+// A page starts with one reference; page_free releases it and asserts it was the last.
 void page_free(Page* page)
 {
-    assert(page);
+    debug assert(page_unique(page), "page_free on a shared page");
+    page_release(page);
+}
+
+Page* page_share(Page* page)
+{
+    AllocationHeader* h = header_of(page);
+    auto guard = _lock.acquire();
+    assert(h.refcount != 0 && h.refcount < ushort.max);
+    ++h.refcount;
+    return page;
+}
+
+void page_release(Page* page)
+{
+    AllocationHeader* h = header_of(page);
+    {
+        auto guard = _lock.acquire();
+        assert(h.refcount != 0, "page_release on a free page");
+        if (--h.refcount != 0)
+            return;
+    }
     free_payload(page);
+}
+
+bool page_unique(const Page* page)
+{
+    auto guard = _lock.acquire();
+    return header_of(page).refcount == 1;
 }
 
 ubyte page_category(const Page* page)
@@ -299,7 +330,7 @@ void[] alloc_category(ubyte category)
                 best.free_list = p.next;
                 --best.free_count;
                 p.next = null;
-                p.refcount = 0;
+                p.refcount = 1;
 
                 ++c.stats.alloc_count;
                 --c.stats.pages_free;
@@ -362,7 +393,7 @@ void[] alloc_payload(size_t bytes)
     static if (size_t.sizeof == 8)
         h.slab_offset = cast(uint)block_size;
     h.allocation = cast(ushort)bytes;
-    h.refcount = 0;
+    h.refcount = 1;
     h.next = cast(AllocationHeader*)page_flag_heap;
 
     {
@@ -398,6 +429,7 @@ void free_payload(void* payload)
     SlabHeader* slab = slab_for(h);
 
     auto guard = _lock.acquire();
+    h.refcount = 0;
     h.next = slab.free_list;
     slab.free_list = h;
     ++slab.free_count;
@@ -597,6 +629,20 @@ unittest
     Page* reserved = page_alloc(1000, size_t.sizeof, 0, 64);
     assert(reserved.tailroom >= 64);
     page_free(reserved);
+
+    foreach (bytes; [8, 1000])
+    {
+        Page* shared_page = page_alloc(bytes);
+        ubyte category = page_category(shared_page);
+        uint in_use = page_pool_stats(category).pages_in_use;
+        assert(page_unique(shared_page));
+        assert(page_share(shared_page) is shared_page);
+        assert(!page_unique(shared_page));
+        page_release(shared_page);
+        assert(page_unique(shared_page) && page_pool_stats(category).pages_in_use == in_use);
+        page_release(shared_page);
+        assert(page_pool_stats(category).pages_in_use == in_use - 1);
+    }
 
     import urt.mem.reclaim : reclaim_memory;
     reclaim_memory(1);

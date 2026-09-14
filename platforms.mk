@@ -746,10 +746,13 @@ ifeq ($(COMPILER),ldc)
           BAREMETAL_CFLAGS := -march=$(MARCH) -mabi=$(MABI)
         endif
         BAREMETAL_LIBGCC := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-libgcc-file-name)
-        # picolibc/newlib via --specs=picolibc.specs first, then plain gcc, then multilib fallback
+        # picolibc where the distro keeps it outside the sysroot, then via the specs,
+        # then plain gcc. --print-file-name cannot see the paths the specs add, so on
+        # such a distro it answers with newlib and must not be asked first.
         PICOLIBC_MULTIDIR := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-multi-directory 2>/dev/null)
-        BAREMETAL_LIBC   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libc.a))
-        BAREMETAL_LIBM   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        PICOLIBC_LIBDIR   := /usr/lib/picolibc/$(BAREMETAL_GCC:-gcc=)/lib/$(PICOLIBC_MULTIDIR)
+        BAREMETAL_LIBC   := $(or $(wildcard $(PICOLIBC_LIBDIR)/libc.a),$(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)))
+        BAREMETAL_LIBM   := $(or $(wildcard $(PICOLIBC_LIBDIR)/libm.a),$(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)))
         # Vendor C deps (tlsf, mbedtls shim) include hosted headers (assert.h,
         # string.h). A bare cross-gcc (CI's gcc-<arch>) only finds those via
         # picolibc's specs; a full newlib toolchain has them by default. Add

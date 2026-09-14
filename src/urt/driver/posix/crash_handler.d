@@ -20,6 +20,7 @@ import urt.internal.sys.posix;
 nothrow @nogc:
 
 
+// Call explicitly on the main thread; the alternate signal stack belongs to that thread.
 public void install_crash_handlers() @trusted
 {
     if (_installed)

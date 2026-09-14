@@ -583,3 +583,76 @@ unittest
     assert(buffer[5 .. 7] == "\\n");
     assert(buffer[user_json_length - 1] == '"');
 }
+
+unittest
+{
+    // write_json() is used in two passes: callers size a buffer from the
+    // null-buffer pass, then fill it with the second. If the two ever
+    // disagree the caller ships the tail of its own buffer - char.init,
+    // 0xFF - inside an otherwise valid document, which reads at the far end
+    // as a parse error pointing at bytes nobody emitted. Cover both shapes
+    // the sync encoder puts on the wire.
+    import urt.si.unit : ScaledUnit;
+
+    static void check(ref const Variant v, const(char)[] what, bool dense = false, uint indent = 2)
+    {
+        char[2048] buf = void;
+        ptrdiff_t n = write_json(v, null, dense, 0, indent);
+        if (n < 0)
+            return; // a refusal is fine; callers must substitute a literal
+        assert(n > 0 && n <= buf.length, what);
+        buf[] = char.init;
+        assert(write_json(v, buf[0 .. cast(size_t)n], dense, 0, indent) == n, what);
+        foreach (c; buf[0 .. cast(size_t)n])
+            assert(c != char.init, what);
+    }
+
+    // quantities: the unit spellings the field uses, crossed with the values
+    // that pick different formatting paths
+    static immutable string[] unit_spellings = [
+        "W", "kW", "mW", "V", "mV", "A", "mA", "%", "Wh", "kWh", "s", "ms", "Hz",
+        "C", "K", "VA", "Ah", "m", "m/s", "/s", "/hr", "kg", "g", "", "1", "ppm",
+    ];
+    static immutable double[] values = [
+        0.0, 1.0, -1.5, 0.001, 1e-7, 1234567.0, 1e100, -0.0,
+        double.nan, double.infinity, -double.infinity,
+    ];
+    foreach (spelling; unit_spellings)
+    {
+        ScaledUnit su;
+        float pre_scale;
+        if (su.parse_unit(spelling, pre_scale) <= 0)
+            continue;
+        foreach (d; values)
+        {
+            Variant v = Variant(d);
+            v.set_unit(su);
+            check(v, spelling);
+        }
+        Variant i = Variant(long(-7));
+        i.set_unit(su);
+        check(i, spelling);
+    }
+
+    // composites, at every indent and density a caller can ask for
+    static immutable string[] docs = [
+        `{"a":1,"b":{"c":[1,2,3],"d":"x"},"e":[]}`,
+        `{"nested":{"deep":{"deeper":{"x":1.5,"y":-2}}}}`,
+        `[[1,[2,[3,[4]]]],{"k":"v"}]`,
+        `{"s":"quote\" backslash\ newline
+ tab	","t":true,"n":null}`,
+        `{"big":1e100,"small":1e-100,"u":4294967296,"neg":-9007199254740993}`,
+        `{"empty_obj":{},"empty_arr":[],"empty_str":""}`,
+        `[{"a":{"b":[{"c":1},{"d":[2,3]}]}}]`,
+    ];
+    foreach (doc; docs)
+    {
+        char[512] src = void;
+        src[0 .. doc.length] = doc[];
+        Variant v = parse_json(src[0 .. doc.length]);
+        assert(!v.isNull, doc);
+        foreach (dense; [false, true])
+            foreach (indent; [0, 1, 2, 4])
+                check(v, doc, dense, indent);
+    }
+}

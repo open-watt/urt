@@ -220,7 +220,6 @@ nothrow @nogc:
         return null;
     }
 
-    // Consume the current element through its end tag, returning its raw text content.
     const(char)[] element_text()
     {
         if (_event != XmlEvent.start)
@@ -231,7 +230,14 @@ nothrow @nogc:
         {
             XmlEvent e = next();
             if (e == XmlEvent.text)
+            {
+                if (result.ptr)
+                {
+                    fail();
+                    return null;
+                }
                 result = _content;
+            }
             else if (e == XmlEvent.start)
                 skip();
             else if (e == XmlEvent.end && _depth == target)
@@ -485,7 +491,7 @@ nothrow @nogc:
     }
     void attr(const(char)[] name, ulong value, uint base = 10) pure
     {
-        char[24] tmp = void;
+        char[64] tmp = void;
         attr(name, tmp[0 .. value.format_uint(tmp, base)]);
     }
     void attr(const(char)[] name, bool value) pure
@@ -505,7 +511,7 @@ nothrow @nogc:
     }
     void text(ulong value, uint base = 10) pure
     {
-        char[24] tmp = void;
+        char[64] tmp = void;
         text(tmp[0 .. value.format_uint(tmp, base)]);
     }
     void text(bool value) pure
@@ -693,6 +699,30 @@ unittest
     assert(rt.next() == XmlEvent.start && rt.name == "note");
     n = decode_xml(rt.element_text(), buf);
     assert(buf[0 .. n] == `a<b>&"c"`);
+
+    foreach (split_doc; ["<value>12<!--x-->34</value>", "<value>12<?pi x?>34</value>", "<value>12<![CDATA[34]]></value>"])
+    {
+        auto scalar = XmlReader(split_doc);
+        assert(scalar.next() == XmlEvent.start);
+        assert(scalar.element_int() == 0);
+        assert(scalar.event == XmlEvent.error && scalar.next() == XmlEvent.error);
+    }
+
+    foreach (base; 2 .. 37)
+    {
+        char[64] digits = void;
+        auto count = ulong.max.format_uint(digits, base);
+        auto numbers = XmlWriter(out_buf);
+        numbers.open("n");
+        numbers.attr("v", ulong.max, base);
+        numbers.text(ulong.max, base);
+        numbers.close();
+        assert(!numbers.overflow);
+        auto parsed = XmlReader(numbers.result);
+        assert(parsed.next() == XmlEvent.start);
+        assert(parsed.attribute("v") == digits[0 .. count]);
+        assert(parsed.element_uint(base) == ulong.max);
+    }
 }
 
 version (unittest)

@@ -438,8 +438,7 @@ version (linux)
     enum MINSIGSTKSZ = 2048;
     enum SIGSTKSZ    = 8192;
 
-    // Linux kernel sigset_t is 1024 bits / 128 bytes regardless of arch.
-    struct sigset_t { ulong[16] __val; }
+    struct sigset_t { size_t[128 / size_t.sizeof] __val; }
 
     // siginfo_t is kernel ABI - 128 bytes on every Linux arch. Treat as
     // opaque; the only field we read is the signal number passed
@@ -469,6 +468,10 @@ version (linux)
         int      sa_flags;
         extern(C) void function() nothrow @nogc sa_restorer;
     }
+
+    static assert(sigset_t.sizeof == 128 && sigset_t.alignof == size_t.alignof);
+    static assert(sigaction_t.sa_mask.offsetof == (void*).sizeof);
+    static assert(sigaction_t.sa_flags.offsetof == (void*).sizeof + 128);
 
     int sigaction(int signum, const(sigaction_t)* act, sigaction_t* oldact);
     int sigaltstack(const(stack_t)* ss, stack_t* old_ss);

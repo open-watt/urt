@@ -199,11 +199,6 @@ void ow_pwm_close(unsigned port)
 
 #include "driver/gptimer.h"
 
-// C ABI counterpart of urt.result.Result; ESP32 InternalResult uses libc error codes.
-typedef struct {
-    uint32_t system_code;
-} Result;
-
 #if SOC_GPTIMER_SUPPORTED
 
 #if !CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM || !CONFIG_GPTIMER_ISR_CACHE_SAFE
@@ -244,25 +239,25 @@ static bool IRAM_ATTR counter_alarm(gptimer_handle_t timer, const gptimer_alarm_
 
 void ow_counter_close(unsigned port);
 
-static Result counter_result(esp_err_t result)
+static uint32_t counter_result(esp_err_t result)
 {
     switch (result) {
-    case ESP_OK: return (Result) { 0 };
-    case ESP_ERR_INVALID_ARG: return (Result) { EINVAL };
-    case ESP_ERR_NO_MEM: return (Result) { ENOMEM };
-    case ESP_ERR_NOT_SUPPORTED: return (Result) { ENOTSUP };
-    case ESP_ERR_NOT_FOUND: return (Result) { EEXIST };
-    default: return (Result) { EIO };
+    case ESP_OK: return 0;
+    case ESP_ERR_INVALID_ARG: return EINVAL;
+    case ESP_ERR_NO_MEM: return ENOMEM;
+    case ESP_ERR_NOT_SUPPORTED: return ENOTSUP;
+    case ESP_ERR_NOT_FOUND: return EEXIST;
+    default: return EIO;
     }
 }
 
-Result ow_counter_open(unsigned port, unsigned resolution_hz)
+uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
 {
     if (port >= OW_COUNTERS || !resolution_hz)
-        return (Result) { EINVAL };
+        return EINVAL;
     ow_counter_t *counter = &counters[port];
     if (counter->open)
-        return (Result) { EEXIST };
+        return EEXIST;
 
     gptimer_config_t config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
@@ -284,20 +279,20 @@ Result ow_counter_open(unsigned port, unsigned resolution_hz)
     if (result != ESP_OK)
         goto failed;
     counter->enabled = true;
-    return (Result) { 0 };
+    return 0;
 
 failed:
     ow_counter_close(port);
     return counter_result(result);
 }
 
-Result ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 {
     if (port >= OW_COUNTERS || !ticks)
-        return (Result) { EINVAL };
+        return EINVAL;
     ow_counter_t *counter = &counters[port];
     if (!counter->open)
-        return (Result) { EINVAL };
+        return EINVAL;
 
     portENTER_CRITICAL(&counter->lock);
     counter->alarm = (gptimer_alarm_config_t) {
@@ -316,7 +311,7 @@ Result ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
             return counter_result(result);
         counter->started = true;
     }
-    return (Result) { 0 };
+    return 0;
 }
 
 void IRAM_ATTR ow_counter_reload(unsigned port)
@@ -388,19 +383,18 @@ void ow_counter_close(unsigned port)
 
 #else
 
-Result ow_counter_open(unsigned port, unsigned resolution_hz)
+uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
 {
-    (void)port;
     (void)resolution_hz;
-    return (Result) { ENOTSUP };
+    return ENOTSUP;
 }
 
-Result ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 {
     (void)port;
     (void)ticks;
     (void)periodic;
-    return (Result) { ENOTSUP };
+    return ENOTSUP;
 }
 
 void ow_counter_reload(unsigned port)

@@ -7,10 +7,12 @@ import urt.result : InternalResult, Result;
 nothrow @nogc:
 
 
-version (ESP32)
-    enum uint num_adc = 2;
-else
-    enum uint num_adc = 0;
+version (ESP32)         enum uint num_adc = 2;
+else version (ESP32_S2) enum uint num_adc = 2;
+else version (ESP32_S3) enum uint num_adc = 2;
+else version (ESP32_C3) enum uint num_adc = 2;
+else version (ESP32_P4) enum uint num_adc = 2;
+else                    enum uint num_adc = 1;
 
 Result adc_hw_open(ref Adc adc, ref const AdcConfig config)
 {
@@ -48,10 +50,13 @@ Result adc_hw_raw_to_mv(ref const AdcInput input, uint raw, out uint millivolts)
     return ow_adc_raw_to_mv(input.calibration, raw, &millivolts) == 0 ? Result.success : InternalResult.failed;
 }
 
-// Unit 1 only: unit 2 routes through the IDF oneshot driver, which locks.
+// Classic ESP32 unit 1 only: everything else routes through the IDF oneshot driver, which locks.
 bool adc_hw_can_read_critical(ref const Adc adc)
 {
-    return adc.unit == 0;
+    version (ESP32)
+        return adc.unit == 0;
+    else
+        return false;
 }
 
 @critical Result adc_hw_read_critical(ref Adc adc, ref const AdcInput input, out uint value)

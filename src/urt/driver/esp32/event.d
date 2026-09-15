@@ -15,22 +15,13 @@ import urt.result : InternalResult, Result;
 nothrow @nogc:
 
 
-version (ESP32)
-{
-    enum uint num_links = 8;
-    enum bool has_reflex = true;
-}
-else
-{
-    enum uint num_links = 0;
-    enum bool has_reflex = false;
-}
+enum uint num_links = 8;
+version (ESP32) enum bool has_reflex = true;
+else            enum bool has_reflex = false;
 
 // No trigger matrix on any Xtensa or early RISC-V Espressif part; ETM arrives
 // with C5/C6/H2/P4, whose backend will answer this per event/task pair.
 bool can_route(EventKind, TaskKind) pure => false;
-
-version (ESP32):
 
 import urt.driver.esp32.counter : num_counters;
 

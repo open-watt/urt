@@ -12,10 +12,8 @@ import urt.result : Result;
 nothrow @nogc:
 
 
-version (ESP32)
-    enum uint num_counters = 4;
-else
-    enum uint num_counters = 0;
+// slots; a part with fewer gptimers refuses open() past its count
+enum uint num_counters = 4;
 
 Result counter_hw_open(uint port, ref const CounterConfig config)
 {

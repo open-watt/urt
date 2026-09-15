@@ -171,6 +171,8 @@ enum ScaledUnits : ScaledUnit
     megahertz = ScaledUnit(hertz, SiPrefix.Mega),
     @("GHz")
     gigahertz = ScaledUnit(hertz, SiPrefix.Giga),
+    @("bar")
+    bar = ScaledUnit(Pascal, 5),
     @("psi")
     psi = ScaledUnit(Pascal, ScaleFactor.PSI),
     @("kW")
@@ -1089,6 +1091,28 @@ nothrow:
         }
         this = r;
         return len;
+    }
+
+    ScaledUnit printable_unit() const pure
+    {
+        float pre_scale;
+        if (format_unit(null, pre_scale) > 0)
+            return this;
+        if (!unit.pack)
+            return ScaledUnit();
+        if (siScale())
+        {
+            int e = exp() - ((exp() % 3 + 3) % 3);
+            if (e < -30)
+                e = -30;
+            for (; e >= -30; e -= 3)
+            {
+                ScaledUnit candidate = ScaledUnit(unit, e);
+                if (candidate.format_unit(null, pre_scale) > 0)
+                    return candidate;
+            }
+        }
+        return ScaledUnit(unit);
     }
 
     import urt.string.format : FormatArg;

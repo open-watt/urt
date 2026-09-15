@@ -135,63 +135,75 @@ ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, u
             return write_json_string(buffer, val.asString());
 
         case Variant.Type.Number:
-            import urt.conv;
+            ScaledUnit source_unit = val.isQuantity() ? val.get_unit : ScaledUnit();
+            ScaledUnit unit = source_unit.printable_unit();
+            float pre_scale;
+            ptrdiff_t u_len = unit.pack ? unit.format_unit(null, pre_scale) : 0;
+            if (u_len < 0)
+                return -1;
 
-            char[] number_buffer = buffer;
-            bool is_q = val.isQuantity();
-            size_t u_len = 0;
-            float pre_scale = void;
-            if (is_q)
-            {
-                if (buffer.ptr)
-                {
-                    if (buffer.length < 15) // {"q":x,"u":"x"}
-                        return -1;
-                    number_buffer = buffer[5..$];
-                }
-                u_len = val.get_unit.format_unit(null, pre_scale, true); // TODO: should we give false (force pre-scale) here?
-                if (u_len <= 0)
-                    return u_len;
-
-                // TODO: apply the prescale... (if we change the above bool to false)
-            }
-
-            size_t len = 0;
-            if (val.isDouble())
+            char[80] number = void;
+            ptrdiff_t len;
+            bool convert_scale = source_unit != unit && !source_unit.siScale();
+            if (val.isDouble() || convert_scale)
             {
                 double d = val.asDouble();
-                // HACK: JSON has no nan/inf literal; emit null (should we translate inf->null, or emit float.max?)
+                if (convert_scale)
+                    d = d * source_unit.scale() + source_unit.offset();
                 if (d != d || d == double.infinity || d == -double.infinity)
                 {
-                    if (number_buffer.ptr)
-                    {
-                        if (number_buffer.length < 4)
-                            return -1;
-                        number_buffer[0 .. 4] = "null";
-                    }
+                    number[0 .. 4] = "null";
                     len = 4;
                 }
+                else if (val.isFloat() && !convert_scale)
+                    len = val.asFloat().format_float_shortest(number);
                 else
-                    len += d.format_float(number_buffer);
+                    len = d.format_float_shortest(number);
             }
             else if (val.isUlong())
-                len += val.asUlong().format_uint(number_buffer);
+                len = val.asUlong().format_uint(number);
             else
-                len += val.asLong().format_int(number_buffer);
-            if (len <= 0 || !is_q)
+                len = val.asLong().format_int(number);
+            if (len < 0)
                 return len;
 
-            size_t result_len = 5 + len + 6 + u_len + 2; // {"q":x,"u":"x"}
+            if (source_unit.siScale() && source_unit != unit && number[0 .. len] != "null")
+            {
+                int e = source_unit.exp() - unit.exp();
+                size_t exponent = number[0 .. len].findFirst('e');
+                if (exponent < len)
+                {
+                    e += cast(int)number[exponent + 1 .. len].parse_int();
+                    len = exponent;
+                }
+                if (e != 0)
+                {
+                    number[len] = 'e';
+                    ++len;
+                    ptrdiff_t e_len = e.format_int(number[len .. $]);
+                    if (e_len < 0)
+                        return e_len;
+                    len += e_len;
+                }
+            }
+
+            size_t result_len = u_len ? 13 + len + u_len : len;
             if (!buffer.ptr)
                 return result_len;
             if (buffer.length < result_len)
                 return -1;
-
-            size_t offset = 5 + len;
-            buffer[0..5] = "{\"q\":";
-            buffer[offset..offset + 6] = ",\"u\":\"";
-            val.get_unit.format_unit(buffer[offset + 6..$], pre_scale, true); // TODO: should we give false (force pre-scale) here?
-            buffer[result_len-2..result_len] = "\"}";
+            if (!u_len)
+                buffer[0 .. len] = number[0 .. len];
+            else
+            {
+                buffer[0 .. 5] = "{\"q\":";
+                buffer[5 .. 5 + len] = number[0 .. len];
+                size_t offset = 5 + len;
+                buffer[offset .. offset + 6] = ",\"u\":\"";
+                if (unit.format_unit(buffer[offset + 6 .. result_len - 2], pre_scale) != u_len)
+                    return -1;
+                buffer[result_len - 2 .. result_len] = "\"}";
+            }
             return result_len;
 
         case Variant.Type.User:
@@ -582,4 +594,75 @@ unittest
     assert(buffer[3 .. 5] == "\\\\");
     assert(buffer[5 .. 7] == "\\n");
     assert(buffer[user_json_length - 1] == '"');
+
+    import urt.si.quantity : Quantity;
+
+    static void check(T, ScaledUnit u = ScaledUnit())(T value, const(char)[] expected)
+    {
+        static bool equal_number(ref const Variant actual, ref const Variant wanted)
+        {
+            if (actual == wanted)
+                return true;
+            version (Tiny)
+            {
+                import urt.math : fabs;
+                if (actual.isNumber && wanted.isNumber)
+                    return fabs(actual.asDouble() / wanted.asDouble() - 1) < (is(T == float) ? 1e-6 : 1e-13);
+            }
+            return false;
+        }
+
+        Variant q = Variant(Quantity!(T, u)(value));
+        char[128] output;
+        ptrdiff_t len = q.write_json(null);
+        assert(len == q.write_json(output));
+        foreach (size; 0 .. len)
+        {
+            output[] = '#';
+            assert(q.write_json(output[0 .. size]) == -1);
+            foreach (c; output)
+                assert(c == '#');
+        }
+        assert(q.write_json(output[0 .. len]) == len);
+        static if (is(T == float) || is(T == double))
+        {
+            Variant actual = parse_json(output[0 .. len]);
+            Variant wanted = parse_json(expected);
+            if (wanted.type == Variant.Type.Map)
+            {
+                assert(actual.type == Variant.Type.Map, output[0 .. len]);
+                assert(actual["u"].asString == wanted["u"].asString, output[0 .. len]);
+                assert(equal_number(actual["q"], wanted["q"]), output[0 .. len]);
+            }
+            else
+                assert(equal_number(actual, wanted), output[0 .. len]);
+        }
+        else
+            assert(output[0 .. len] == expected, output[0 .. len]);
+        assert(output[len] == '#');
+        assert(!parse_json(output[0 .. len]).isNull || expected == "null");
+    }
+
+    check!(float, ScaledUnits.bar)(2.95f, `{"q":2.95,"u":"bar"}`);
+    check!(float, ScaledUnit(Watt, 5))(2.95f, `{"q":2.95e2,"u":"kW"}`);
+    check!(float, ScaledUnit(Watt, -4))(2.95f, `{"q":2.95e2,"u":"uW"}`);
+    check!(int, ScaledUnit(Unit(), -1))(23302, "23302e-1");
+    check!(int, ScaledUnit(Unit(), -1))(123456789, "123456789e-1");
+    check!(ulong, ScaledUnit(Watt, 5))(ulong.max, `{"q":18446744073709551615e2,"u":"kW"}`);
+    check!(long, ScaledUnit(Unit(), -1))(long.min, "-9223372036854775808e-1");
+    check!(double, ScaledUnit(Watt, 5))(1e304, `{"q":1e306,"u":"kW"}`);
+    check!(double, ScaledUnit(Watt, -4))(parse_float("1e-320"), `{"q":1e-318,"u":"uW"}`);
+    check!(double, ScaledUnit(Watt, 5))(0.01, `{"q":1,"u":"kW"}`);
+    check!(double, ScaledUnit(Watt, 5))(double.nan, `{"q":null,"u":"kW"}`);
+    check!(double, ScaledUnit(Unit(), -1))(double.infinity, "null");
+    check!(int, ScaledUnits.celsius)(20, `{"q":20,"u":"°C"}`);
+    check!(int, ScaledUnit(Kilogram, 4))(2, `{"q":2e1,"u":"Mg"}`);
+    check!(int, ScaledUnit(Metre ^^ 2, 5))(2, `{"q":2e5,"u":"m²"}`);
+    check!(int, ScaledUnit(Second ^^ -1, 5))(2, `{"q":2e2,"u":"/ms"}`);
+    check!(int, ScaledUnit(Watt, -31))(2, `{"q":2e-1,"u":"qW"}`);
+    check!(int, ScaledUnit(Watt, 31))(2, `{"q":2e1,"u":"QW"}`);
+    check!(int, ScaledUnit(Unit(), -2))(50, `{"q":50,"u":"%"}`);
+    check!(double, Inch ^^ 2)(1, `{"q":6.4516e-4,"u":"m²"}`);
+    check!double(1.2345678901234567, "1.2345678901234567");
+    check!ulong(ulong.max, "18446744073709551615");
 }

@@ -24,8 +24,7 @@ enum bool has_pull_down = true;
 enum bool has_open_drain = false;
 enum bool has_pin_function_muxing = false;
 enum bool has_gpio_sampler = false;   // TODO: RMT capture
-version (ESP32) enum uint num_gpio_interrupts = 2;
-else enum uint num_gpio_interrupts = 0;
+enum uint num_gpio_interrupts = 2;
 
 
 uint gpio_count() => ow_gpio_count();

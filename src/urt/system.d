@@ -2,6 +2,7 @@ module urt.system;
 
 import urt.platform;
 import urt.processor;
+import urt.string.ascii : is_numeric;
 import urt.time;
 
 version (Espressif)
@@ -391,7 +392,7 @@ version (linux)
                     ++j;
                 // Parse number
                 ulong val = 0;
-                while (j < content.length && content[j] >= '0' && content[j] <= '9')
+                while (j < content.length && content[j].is_numeric)
                 {
                     val = val * 10 + (content[j] - '0');
                     ++j;

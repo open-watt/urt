@@ -824,6 +824,32 @@ template to(T)
 }
 
 
+// ASCII digit value; compare with a base in 2 .. 36 to reject invalid digits.
+uint get_digit(char c) pure
+{
+    uint zero_base = c - '0';
+    if (zero_base < 10)
+        return zero_base;
+    return ((uint(c) - 'A') & ~0x20u) + 10;
+}
+
+unittest
+{
+    foreach (i; 0 .. 256)
+    {
+        char c = cast(char)i;
+        uint digit = get_digit(c);
+        assert((digit < 10) == c.is_numeric);
+        assert((digit < 16) == c.is_hex);
+        assert((digit < 36) == c.is_alpha_numeric);
+    }
+    foreach (i, c; "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    {
+        assert(get_digit(c) == i);
+        assert(get_digit(cast(char)(c | 0x20)) == i);
+    }
+}
+
 private:
 
 ptrdiff_t format_shortest_impl(double value, char[] buffer, uint max_digits, bool as_float) pure
@@ -1066,16 +1092,6 @@ double scale_float(double value, int exponent, uint base) pure
     else if (exponent < 0)
         value /= decimal_powers[-exponent];
     return value > double.max ? double.infinity : value;
-}
-
-// valid result is 0 .. 35; result is garbage outside that bound
-uint get_digit(char c) pure
-{
-    uint zero_base = c - '0';
-    if (zero_base < 10)
-        return zero_base;
-    uint a_base = (c | 0x20) - 'a';
-    return 10 + (a_base & 0xFF);
 }
 
 uint parse_base_prefix(ref const(char)* str, const(char)* end) pure

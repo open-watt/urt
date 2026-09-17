@@ -1,5 +1,6 @@
 module urt.string.ansi;
 
+import urt.string.ascii : is_numeric;
 import urt;
 
 enum ANSI_ERASE_LINE = "\x1b[2K";
@@ -169,7 +170,7 @@ char[] strip_decoration(const(char)[] text, char[] buffer) pure
         if (c == '\x1b' && len >= i + 4 && src[i + 1] == '[')
         {
             size_t j = i + 2;
-            while (j < len && ((src[j] >= '0' && src[j] <= '9') || src[j] == ';'))
+            while (j < len && (src[j].is_numeric || src[j] == ';'))
                 ++j;
             if (j < len && src[j] == 'm')
             {

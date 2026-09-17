@@ -36,7 +36,7 @@ bool is_space(char c) pure          => c < 128 && (char_details[c] & 4);
 bool is_newline(char c) pure        => c < 128 && (char_details[c] & 8);
 bool is_whitespace(char c) pure     => c < 128 && (char_details[c] & 0xC);
 bool is_alpha(char c) pure          => c < 128 && (char_details[c] & 1);
-bool is_numeric(char c) pure        => cast(uint)(c - '0') <= 9;
+bool is_numeric(char c) pure @safe  => cast(uint)(c - '0') <= 9;
 bool is_alpha_numeric(char c) pure  => c < 128 && (char_details[c] & 3);
 bool is_hex(char c) pure            => c < 128 && (char_details[c] & 0x80);
 bool is_control_char(char c) pure   => c < 128 && (char_details[c] & 0x10);

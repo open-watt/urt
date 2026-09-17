@@ -1,5 +1,7 @@
 module urt.atomic;
 
+import urt.string.ascii : is_numeric;
+
 enum MemoryOrder
 {
     relaxed = 0,
@@ -841,8 +843,8 @@ static if (_have_dmd_asm)
                     else
                     {
                         int index = 0;
-                        assert(format[i] >= '0' && format[i] <= '9', "Invalid format string");
-                        while (i < format.length && format[i] >= '0' && format[i] <= '9')
+                        assert(format[i].is_numeric, "Invalid format string");
+                        while (i < format.length && format[i].is_numeric)
                             index = index * 10 + (ubyte(format[i++]) - ubyte('0'));
                         if (!isQ)
                             result ~= args[index];

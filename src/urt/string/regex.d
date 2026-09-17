@@ -2,6 +2,7 @@ module urt.string.regex;
 
 import urt.mem;
 import urt.mem.temp;
+import urt.string.ascii : is_numeric;
 
 nothrow @nogc:
 
@@ -107,13 +108,13 @@ nothrow @nogc:
                             goto backtrack;
                         break;
                     case digit:
-                        if (t.pos < text.length && is_digit(text[t.pos]))
+                        if (t.pos < text.length && text[t.pos].is_numeric)
                             ++t.pos, ++t.ipc;
                         else
                             goto backtrack;
                         break;
                     case not_digit:
-                        if (t.pos < text.length && !is_digit(text[t.pos]))
+                        if (t.pos < text.length && !text[t.pos].is_numeric)
                             ++t.pos, ++t.ipc;
                         else
                             goto backtrack;
@@ -268,9 +269,8 @@ private:
         bool negated;
     }
 
-    static bool is_digit(char ch) { return ch >= '0' && ch <= '9'; }
     static bool is_space(char ch) { return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'; }
-    static bool is_word(char ch) { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || is_digit(ch) || ch == '_'; }
+    static bool is_word(char ch) { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch.is_numeric || ch == '_'; }
 
     static bool match_class(const(ClassDef)[] classes, const(ClassRange)[] ranges, ubyte idx, char ch)
     {

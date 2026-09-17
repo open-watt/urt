@@ -18,6 +18,7 @@ import urt.file : File, FileOpenMode, save_file, open, close, read;
 import urt.internal.stdc.errno : EAGAIN, EWOULDBLOCK, EINTR;
 import urt.mem.temp : tconcat;
 import urt.result : Result, errno_result;
+import urt.string.ascii : is_numeric;
 import urt.time : getTime, MonoTime, SysTime, msecs, get_sys_time, unix_time_ns, from_unix_time_ns;
 
 import sys = urt.internal.sys.posix;
@@ -645,7 +646,7 @@ bool read_uint_file(const(char)[] path, out uint value)
     uint v = 0;
     foreach (c; buf[0 .. n])
     {
-        if (c < '0' || c > '9')
+        if (!c.is_numeric)
             break;
         v = v * 10 + (c - '0');
     }

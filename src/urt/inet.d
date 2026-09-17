@@ -650,7 +650,7 @@ ptrdiff_t inet_scope_parse(const(char)[] s, out uint scope_id)
     import urt.string.ascii : is_alpha_numeric;
 
     size_t len = 0;
-    while (len < s.length && (is_alpha_numeric(s[len]) || s[len] == '-' || s[len] == '.' || s[len] == '_' || s[len] == '~'))
+    while (len < s.length && (s[len].is_alpha_numeric || s[len] == '-' || s[len] == '.' || s[len] == '_' || s[len] == '~'))
         ++len;
     if (len == 0)
         return -1;
@@ -1011,10 +1011,8 @@ private:
 
     static ptrdiff_t parse_mac(const(char)[] s, ref ubyte[6] mac) pure
     {
+        import urt.conv : get_digit;
         import urt.string.ascii : is_hex;
-
-        static int hex_val(char c) pure
-            => c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10;
 
         size_t o = 0;
         foreach (i; 0 .. 6)
@@ -1025,11 +1023,15 @@ private:
                     return -1;
                 ++o;
             }
-            if (o + 2 > s.length || !is_hex(s[o]) || !is_hex(s[o + 1]))
+            if (o + 2 > s.length)
                 return -1;
-            if (o + 2 < s.length && is_hex(s[o + 2]))
+            if (o + 2 < s.length && s[o + 2].is_hex)
                 return -1;      // 3+ digit group; not a mac
-            mac[i] = cast(ubyte)(hex_val(s[o]) << 4 | hex_val(s[o + 1]));
+            uint hi = get_digit(s[o]);
+            uint lo = get_digit(s[o + 1]);
+            if (hi >= 16 || lo >= 16)
+                return -1;
+            mac[i] = cast(ubyte)(hi << 4 | lo);
             o += 2;
         }
         return o;

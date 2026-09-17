@@ -313,7 +313,7 @@ size_t hex_decode_length(const char[] data) pure
 
 ptrdiff_t hex_decode(const char[] data, void[] result) pure
 {
-    import urt.string.ascii : is_hex;
+    import urt.conv : get_digit;
 
     if (data.length & 1)
         return -1;
@@ -321,25 +321,14 @@ ptrdiff_t hex_decode(const char[] data, void[] result) pure
         return -1;
 
     auto dest = cast(ubyte[])result;
-
-    for (size_t i = 0, j = 0; i < data.length; i += 2, ++j)
+    foreach (i; 0 .. data.length / 2)
     {
-        ubyte c0 = data[i];
-        ubyte c1 = data[i + 1];
-        if (!c0.is_hex || !c1.is_hex)
+        uint hi = get_digit(data[i*2]);
+        uint lo = get_digit(data[i*2 + 1]);
+        if (hi >= 16 || lo >= 16)
             return -1;
-
-        if ((c0 | 0x20) >= 'a')
-            c0 = cast(ubyte)((c0 | 0x20) - 'a' + 10);
-        else
-            c0 -= '0';
-        if ((c1 | 0x20) >= 'a')
-            c1 = cast(ubyte)((c1 | 0x20) - 'a' + 10);
-        else
-            c1 -= '0';
-        dest[j] = cast(ubyte)(c0 << 4 | c1);
+        dest[i] = cast(ubyte)(hi << 4 | lo);
     }
-
     return data.length / 2;
 }
 
@@ -357,6 +346,11 @@ unittest
     len = hex_decode(encoded, decoded);
     assert(len == 12);
     assert(data == decoded);
+    assert(hex_decode("aBcD", decoded) == 2 && decoded[0 .. 2] == [0xAB, 0xCD]);
+    assert(hex_decode("", decoded) == 0);
+    assert(hex_decode("0011", decoded[0 .. 1]) == -1);
+    foreach (invalid; [ "0", "00F", "@0", "0`", "G0", "0g", " 0", "0:", "\xFF0" ])
+        assert(hex_decode(invalid, decoded) == -1);
 }
 
 
@@ -419,7 +413,7 @@ size_t url_decode_length(const char[] data) pure
 
 ptrdiff_t url_decode(const char[] data, char[] result) pure
 {
-    import urt.string.ascii : is_hex;
+    import urt.conv : get_digit;
 
     size_t j = 0;
     for (size_t i = 0; i < data.length; ++i)
@@ -435,21 +429,12 @@ ptrdiff_t url_decode(const char[] data, char[] result) pure
             if (i + 2 >= data.length)
                 return -1;
 
-            ubyte c0 = data[i + 1];
-            ubyte c1 = data[i + 2];
-            if (!c0.is_hex || !c1.is_hex)
+            uint hi = get_digit(data[i + 1]);
+            uint lo = get_digit(data[i + 2]);
+            if (hi >= 16 || lo >= 16)
                 return -1;
+            c = cast(char)(hi << 4 | lo);
             i += 2;
-
-            if ((c0 | 0x20) >= 'a')
-                c0 = cast(ubyte)((c0 | 0x20) - 'a' + 10);
-            else
-                c0 -= '0';
-            if ((c1 | 0x20) >= 'a')
-                c1 = cast(ubyte)((c1 | 0x20) - 'a' + 10);
-            else
-                c1 -= '0';
-            c = cast(char)(c0 << 4 | c1);
         }
         result[j++] = c;
     }

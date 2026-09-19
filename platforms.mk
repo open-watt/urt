@@ -792,7 +792,7 @@ ifeq ($(COMPILER),ldc)
     ifeq ($(CONFIG),release)
       ifeq ($(TINY),1)
         DFLAGS := $(DFLAGS) -release --enable-asserts -Oz -enable-inlining
-      else ifeq ($(ARCH),xtensa)
+      else ifneq ($(filter freertos baremetal,$(OS)),)
         DFLAGS := $(DFLAGS) -release --enable-asserts -Oz -enable-inlining
       else
         DFLAGS := $(DFLAGS) -release --enable-asserts -O3 -enable-inlining
@@ -800,8 +800,8 @@ ifeq ($(COMPILER),ldc)
     else ifdef BAREMETAL_DIR
         # Embedded debug/unittest: still optimize to fit in firmware partition
         DFLAGS := $(DFLAGS) --enable-asserts -O2 -enable-inlining
-    else ifeq ($(ARCH),xtensa)
-        # Xtensa: -Oz to fit in flash; bitcode emission set above
+    else ifneq ($(filter freertos baremetal,$(OS)),)
+        # Embedded targets are flash-constrained.
         DFLAGS := $(DFLAGS) --enable-asserts -Oz -enable-inlining -d-debug
     else
         # Frame pointers required for x86/x86_64 crash-handler RBP walk;

@@ -57,12 +57,6 @@ nothrow @nogc:
             }
             g._critical = &this;
         }
-        else version (FreeRTOS)
-        {
-            import urt.internal.sys.freertos : vPortEnterCritical;
-            vPortEnterCritical(&_mux);
-            g._critical = &this;
-        }
         else
         {
             // bare-metal: always disable IRQs for same-core ISR protection.
@@ -99,11 +93,6 @@ private:
         shared size_t _owner;   // current thread id, or 0 when unowned
         int _count;             // recursion depth (touched only by owner)
     }
-    else version (FreeRTOS)
-    {
-        import urt.internal.sys.freertos : portMUX_TYPE;
-        portMUX_TYPE _mux;
-    }
     else
     {
         // bare-metal: state only present on SMP targets.
@@ -127,11 +116,6 @@ private:
                 version (Windows)
                     ReleaseSRWLockExclusive(&_srw);
             }
-        }
-        else version (FreeRTOS)
-        {
-            import urt.internal.sys.freertos : vPortExitCritical;
-            vPortExitCritical(&_mux);
         }
         else
         {
@@ -157,7 +141,6 @@ nothrow @nogc:
     ~this()
     {
         version (OwnerTracked)  _critical._leave();
-        else version (FreeRTOS) _critical._leave();
         else
         {
             import urt.driver.irq : irq_global_set, has_smp;
@@ -169,7 +152,6 @@ nothrow @nogc:
 
 private:
     version (OwnerTracked)  Critical* _critical;
-    else version (FreeRTOS) Critical* _critical;
     else
     {
         import urt.driver.irq : has_smp;

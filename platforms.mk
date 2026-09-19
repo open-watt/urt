@@ -474,6 +474,18 @@ endif
 ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) -d-version=Tiny
 endif
+
+# BLE: on for every Espressif chip with a radio unless Tiny; boards override.
+# The Makefile owns this so the D driver and the IDF sdkconfig agree.
+ifneq ($(filter esp32 esp32-s3 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2,$(PLATFORM)),)
+  ifneq ($(TINY),1)
+    USE_BLE ?= 1
+  endif
+endif
+USE_BLE ?= 0
+ifeq ($(USE_BLE),1)
+    DFLAGS := $(DFLAGS) -d-version=UseBLE
+endif
 ifeq ($(USE_MBEDTLS),1)
 ifdef VERSIONS
     VERSIONS := $(VERSIONS),MbedTLS
@@ -568,16 +580,14 @@ endif
 # claim the same 'storage' partition though, so enabling both only makes sense
 # while migrating; USE_LITTLEFS=1 therefore turns SPIFFS off unless asked for.
 ifeq ($(USE_LITTLEFS),)
+  ifneq ($(filter esp%,$(PLATFORM)),)
+    USE_LITTLEFS := 1
+  else
     USE_LITTLEFS := 0
+  endif
 endif
 ifeq ($(USE_SPIFFS),)
-  ifeq ($(USE_LITTLEFS),1)
     USE_SPIFFS := 0
-  else ifneq ($(filter esp%,$(PLATFORM)),)
-    USE_SPIFFS := 1
-  else
-    USE_SPIFFS := 0
-  endif
 endif
 ifeq ($(USE_SPIFFS),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseSpiffs

@@ -83,10 +83,25 @@ int __wrap__fcntl_r(struct _reent *r, int fd, int cmd, int arg)
     return __real__fcntl_r(r, fd, cmd, arg);
 }
 
-// -- WFI shim --
-// Single-instruction inline asm; bound from D as ow_irq_wait. The
-// surrounding portENTER_CRITICAL pair is handled D-side via direct
-// vPortEnterCritical/vPortExitCritical bindings -- no C wrapper needed.
+// -- IRQ shims --
+// portENTER_CRITICAL expands per kernel and core count (unicore RISC-V has no
+// mux form at all), so the pair lives here where the preprocessor can see it.
+// It nests through the kernel's own count; the D side always reports "was
+// enabled" and pairs every disable with an enable.
+
+static portMUX_TYPE ow_irq_mux = portMUX_INITIALIZER_UNLOCKED;
+
+bool ow_irq_disable(void)
+{
+    portENTER_CRITICAL(&ow_irq_mux);
+    return true;
+}
+
+bool ow_irq_enable(void)
+{
+    portEXIT_CRITICAL(&ow_irq_mux);
+    return true;
+}
 
 void ow_irq_wait(void)
 {
@@ -199,7 +214,12 @@ void ow_pwm_close(unsigned port)
 
 #include "driver/gptimer.h"
 
-#if SOC_GPTIMER_SUPPORTED
+// C ABI counterpart of urt.result.Result; ESP32 InternalResult uses libc error codes.
+typedef struct {
+    uint32_t system_code;
+} Result;
+
+#if defined(CONFIG_IDF_TARGET_ESP32)
 
 #if !CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM || !CONFIG_GPTIMER_ISR_CACHE_SAFE
 #error "counter alarms rearm from interrupt context; enable CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM and CONFIG_GPTIMER_ISR_CACHE_SAFE"
@@ -239,25 +259,25 @@ static bool IRAM_ATTR counter_alarm(gptimer_handle_t timer, const gptimer_alarm_
 
 void ow_counter_close(unsigned port);
 
-static uint32_t counter_result(esp_err_t result)
+static Result counter_result(esp_err_t result)
 {
     switch (result) {
-    case ESP_OK: return 0;
-    case ESP_ERR_INVALID_ARG: return EINVAL;
-    case ESP_ERR_NO_MEM: return ENOMEM;
-    case ESP_ERR_NOT_SUPPORTED: return ENOTSUP;
-    case ESP_ERR_NOT_FOUND: return EEXIST;
-    default: return EIO;
+    case ESP_OK: return (Result) { 0 };
+    case ESP_ERR_INVALID_ARG: return (Result) { EINVAL };
+    case ESP_ERR_NO_MEM: return (Result) { ENOMEM };
+    case ESP_ERR_NOT_SUPPORTED: return (Result) { ENOTSUP };
+    case ESP_ERR_NOT_FOUND: return (Result) { EEXIST };
+    default: return (Result) { EIO };
     }
 }
 
-uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
+Result ow_counter_open(unsigned port, unsigned resolution_hz)
 {
     if (port >= OW_COUNTERS || !resolution_hz)
-        return EINVAL;
+        return (Result) { EINVAL };
     ow_counter_t *counter = &counters[port];
     if (counter->open)
-        return EEXIST;
+        return (Result) { EEXIST };
 
     gptimer_config_t config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
@@ -279,20 +299,20 @@ uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
     if (result != ESP_OK)
         goto failed;
     counter->enabled = true;
-    return 0;
+    return (Result) { 0 };
 
 failed:
     ow_counter_close(port);
     return counter_result(result);
 }
 
-uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+Result ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 {
     if (port >= OW_COUNTERS || !ticks)
-        return EINVAL;
+        return (Result) { EINVAL };
     ow_counter_t *counter = &counters[port];
     if (!counter->open)
-        return EINVAL;
+        return (Result) { EINVAL };
 
     portENTER_CRITICAL(&counter->lock);
     counter->alarm = (gptimer_alarm_config_t) {
@@ -311,7 +331,7 @@ uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
             return counter_result(result);
         counter->started = true;
     }
-    return 0;
+    return (Result) { 0 };
 }
 
 void IRAM_ATTR ow_counter_reload(unsigned port)
@@ -383,18 +403,19 @@ void ow_counter_close(unsigned port)
 
 #else
 
-uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
+Result ow_counter_open(unsigned port, unsigned resolution_hz)
 {
+    (void)port;
     (void)resolution_hz;
-    return ENOTSUP;
+    return (Result) { ENOTSUP };
 }
 
-uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+Result ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 {
     (void)port;
     (void)ticks;
     (void)periodic;
-    return ENOTSUP;
+    return (Result) { ENOTSUP };
 }
 
 void ow_counter_reload(unsigned port)
@@ -431,7 +452,11 @@ void ow_counter_close(unsigned port)
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 
-// -- GPIO interrupt service, shared by interrupt ports and link slots --
+#if defined(CONFIG_IDF_TARGET_ESP32)
+
+#include "soc/rtc_io_struct.h"
+#include "soc/sens_reg.h"
+#include "soc/sens_struct.h"
 
 #define OW_GPIO_INTERRUPTS 2
 
@@ -440,6 +465,10 @@ typedef struct {
     bool open;
 } ow_gpio_interrupt_t;
 
+static portMUX_TYPE adc_locks[2] = {
+    portMUX_INITIALIZER_UNLOCKED,
+    portMUX_INITIALIZER_UNLOCKED,
+};
 static ow_gpio_interrupt_t gpio_interrupts[OW_GPIO_INTERRUPTS];
 static volatile uintptr_t gpio_interrupt_callbacks[OW_GPIO_INTERRUPTS];
 static unsigned gpio_isr_users;
@@ -466,6 +495,126 @@ static void gpio_isr_release(void)
         gpio_uninstall_isr_service();
         gpio_isr_service_owned = false;
     }
+}
+
+static adc_atten_t adc_attenuation(unsigned attenuation)
+{
+    switch (attenuation) {
+    case 0: return ADC_ATTEN_DB_0;
+    case 1: return ADC_ATTEN_DB_2_5;
+    case 2: return ADC_ATTEN_DB_6;
+    default: return ADC_ATTEN_DB_12;
+    }
+}
+
+int ow_adc_open(unsigned unit, void **handle)
+{
+    if (!handle || unit > ADC_UNIT_2)
+        return -1;
+
+    adc_oneshot_unit_init_cfg_t config = {
+        .unit_id = (adc_unit_t)unit,
+    };
+    if (adc_oneshot_new_unit(&config, (adc_oneshot_unit_handle_t *)handle) != ESP_OK)
+        return -1;
+    return 0;
+}
+
+int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned attenuation, unsigned bit_width, unsigned default_reference_mv, void **calibration, int *calibration_source)
+{
+    if (!handle || !calibration || !calibration_source || unit > ADC_UNIT_2 || bit_width == 0)
+        return -1;
+
+    adc_atten_t atten = adc_attenuation(attenuation);
+    adc_oneshot_chan_cfg_t input_config = {
+        .atten = atten,
+        .bitwidth = (adc_bitwidth_t)bit_width,
+    };
+    adc_cali_line_fitting_config_t calibration_config = {
+        .unit_id = (adc_unit_t)unit,
+        .atten = atten,
+        .bitwidth = (adc_bitwidth_t)bit_width,
+        .default_vref = default_reference_mv,
+    };
+    if (adc_oneshot_config_channel((adc_oneshot_unit_handle_t)handle, (adc_channel_t)channel, &input_config) != ESP_OK)
+        return -1;
+    if (adc_cali_create_scheme_line_fitting(&calibration_config, (adc_cali_handle_t *)calibration) != ESP_OK)
+        return -1;
+    adc_cali_line_fitting_efuse_val_t source;
+    *calibration_source = adc_cali_scheme_line_fitting_check_efuse(&source) == ESP_OK ? (int)source : -1;
+    return 0;
+}
+
+static uint16_t adc1_read_isr(unsigned channel);
+
+int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
+{
+    int value;
+    if (!handle || !raw || unit > ADC_UNIT_2)
+        return -1;
+    if (unit == ADC_UNIT_1) {
+        portENTER_CRITICAL(&adc_locks[unit]);
+        value = adc1_read_isr(channel);
+        portEXIT_CRITICAL(&adc_locks[unit]);
+    } else if (adc_oneshot_read((adc_oneshot_unit_handle_t)handle, (adc_channel_t)channel, &value) != ESP_OK) {
+        return -1;
+    }
+    *raw = (unsigned)value;
+    return 0;
+}
+
+int IRAM_ATTR ow_adc_read_critical(unsigned channel, unsigned *raw)
+{
+    portENTER_CRITICAL_SAFE(&adc_locks[0]);
+    uint16_t value = adc1_read_isr(channel);
+    portEXIT_CRITICAL_SAFE(&adc_locks[0]);
+    *raw = value;
+    return 0;
+}
+
+int ow_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
+{
+    int value;
+    if (!calibration || !millivolts || adc_cali_raw_to_voltage((adc_cali_handle_t)calibration, raw, &value) != ESP_OK)
+        return -1;
+    *millivolts = (unsigned)value;
+    return 0;
+}
+
+void ow_adc_input_close(void *calibration)
+{
+    if (calibration)
+        adc_cali_delete_scheme_line_fitting((adc_cali_handle_t)calibration);
+}
+
+void ow_adc_close(void *handle)
+{
+    if (handle)
+        adc_oneshot_del_unit((adc_oneshot_unit_handle_t)handle);
+}
+
+static uint16_t IRAM_ATTR adc1_read_isr(unsigned channel)
+{
+    SENS.sar_read_ctrl.sar1_dig_force = 0;
+    SENS.sar_meas_wait2.force_xpd_sar = SENS_FORCE_XPD_SAR_PU;
+    RTCIO.hall_sens.xpd_hall = false;
+    SENS.sar_meas_wait2.force_xpd_amp = SENS_FORCE_XPD_AMP_PD;
+    SENS.sar_meas_ctrl.amp_rst_fb_fsm = 0;
+    SENS.sar_meas_ctrl.amp_short_ref_fsm = 0;
+    SENS.sar_meas_ctrl.amp_short_ref_gnd_fsm = 0;
+    SENS.sar_meas_wait1.sar_amp_wait1 = 1;
+    SENS.sar_meas_wait1.sar_amp_wait2 = 1;
+    SENS.sar_meas_wait2.sar_amp_wait3 = 1;
+    SENS.sar_meas_start1.meas1_start_force = 1;
+    SENS.sar_meas_start1.sar1_en_pad_force = 1;
+    SENS.sar_touch_ctrl1.xpd_hall_force = 1;
+    SENS.sar_touch_ctrl1.hall_phase_force = 1;
+    SENS.sar_meas_start1.sar1_en_pad = 1U << channel;
+    while (SENS.sar_slave_addr1.meas_status != 0) {}
+    SENS.sar_meas_start1.meas1_start_sar = 0;
+    SENS.sar_meas_start1.meas1_start_sar = 1;
+    while (SENS.sar_meas_start1.meas1_done_sar == 0) {}
+    return SENS.sar_meas_start1.meas1_data_sar;
 }
 
 static void IRAM_ATTR gpio_interrupt_handler(void *context)
@@ -567,8 +716,6 @@ void ow_link_gpio_close(unsigned slot, unsigned gpio)
     gpio_isr_release();
 }
 
-#if defined(CONFIG_IDF_TARGET_ESP32)
-
 // -- Reflex NMI routing (the handler itself is synthesized in D: xt_nmi) --
 
 static intr_handle_t reflex_nmi_handle;
@@ -617,6 +764,93 @@ void ow_reflex_close(unsigned gpio)
 
 #else
 
+int ow_adc_open(unsigned unit, void **handle)
+{
+    (void)unit;
+    (void)handle;
+    return -1;
+}
+
+int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned attenuation, unsigned bit_width, unsigned default_reference_mv, void **calibration, int *calibration_source)
+{
+    (void)handle;
+    (void)unit;
+    (void)channel;
+    (void)attenuation;
+    (void)bit_width;
+    (void)default_reference_mv;
+    (void)calibration;
+    (void)calibration_source;
+    return -1;
+}
+
+int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
+{
+    (void)handle;
+    (void)unit;
+    (void)channel;
+    (void)raw;
+    return -1;
+}
+
+int ow_adc_read_critical(unsigned channel, unsigned *raw)
+{
+    (void)channel;
+    (void)raw;
+    return -1;
+}
+
+int ow_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
+{
+    (void)calibration;
+    (void)raw;
+    (void)millivolts;
+    return -1;
+}
+
+void ow_adc_input_close(void *calibration)
+{
+    (void)calibration;
+}
+
+void ow_adc_close(void *handle)
+{
+    (void)handle;
+}
+
+int ow_gpio_interrupt_open(unsigned port, unsigned input_gpio, unsigned trigger)
+{
+    (void)port;
+    (void)input_gpio;
+    (void)trigger;
+    return -1;
+}
+
+void ow_gpio_interrupt_set_callback(unsigned port, bool (*callback)(unsigned port))
+{
+    (void)port;
+    (void)callback;
+}
+
+void ow_gpio_interrupt_close(unsigned port)
+{
+    (void)port;
+}
+
+int ow_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
+{
+    (void)slot;
+    (void)gpio;
+    (void)trigger;
+    return -1;
+}
+
+void ow_link_gpio_close(unsigned slot, unsigned gpio)
+{
+    (void)slot;
+    (void)gpio;
+}
+
 int ow_reflex_open(unsigned gpio, unsigned trigger)
 {
     (void)gpio;
@@ -627,179 +861,6 @@ int ow_reflex_open(unsigned gpio, unsigned trigger)
 void ow_reflex_close(unsigned gpio)
 {
     (void)gpio;
-}
-
-#endif
-
-// -- ADC --
-
-#if defined(CONFIG_IDF_TARGET_ESP32)
-#include "soc/rtc_io_struct.h"
-#include "soc/sens_reg.h"
-#include "soc/sens_struct.h"
-
-static portMUX_TYPE adc_locks[2] = {
-    portMUX_INITIALIZER_UNLOCKED,
-    portMUX_INITIALIZER_UNLOCKED,
-};
-#endif
-
-static adc_atten_t adc_attenuation(unsigned attenuation)
-{
-    switch (attenuation) {
-    case 0: return ADC_ATTEN_DB_0;
-    case 1: return ADC_ATTEN_DB_2_5;
-    case 2: return ADC_ATTEN_DB_6;
-    default: return ADC_ATTEN_DB_12;
-    }
-}
-
-int ow_adc_open(unsigned unit, void **handle)
-{
-    if (!handle || unit >= SOC_ADC_PERIPH_NUM)
-        return -1;
-
-    adc_oneshot_unit_init_cfg_t config = {
-        .unit_id = (adc_unit_t)unit,
-    };
-    if (adc_oneshot_new_unit(&config, (adc_oneshot_unit_handle_t *)handle) != ESP_OK)
-        return -1;
-    return 0;
-}
-
-int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned attenuation, unsigned bit_width, unsigned default_reference_mv, void **calibration, int *calibration_source)
-{
-    if (!handle || !calibration || !calibration_source || unit >= SOC_ADC_PERIPH_NUM || bit_width == 0)
-        return -1;
-
-    adc_atten_t atten = adc_attenuation(attenuation);
-    adc_oneshot_chan_cfg_t input_config = {
-        .atten = atten,
-        .bitwidth = (adc_bitwidth_t)bit_width,
-    };
-    if (adc_oneshot_config_channel((adc_oneshot_unit_handle_t)handle, (adc_channel_t)channel, &input_config) != ESP_OK)
-        return -1;
-    *calibration = NULL;
-    *calibration_source = -1;
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    adc_cali_line_fitting_config_t calibration_config = {
-        .unit_id = (adc_unit_t)unit,
-        .atten = atten,
-        .bitwidth = (adc_bitwidth_t)bit_width,
-#if CONFIG_IDF_TARGET_ESP32
-        .default_vref = default_reference_mv,
-#endif
-    };
-    if (adc_cali_create_scheme_line_fitting(&calibration_config, (adc_cali_handle_t *)calibration) != ESP_OK)
-        return -1;
-#if CONFIG_IDF_TARGET_ESP32
-    adc_cali_line_fitting_efuse_val_t source;
-    *calibration_source = adc_cali_scheme_line_fitting_check_efuse(&source) == ESP_OK ? (int)source : -1;
-#else
-    (void)default_reference_mv;
-    *calibration_source = 0;
-#endif
-#else
-    // curve fitting only exists with factory efuse data; without it the input still reads raw
-    (void)default_reference_mv;
-    adc_cali_curve_fitting_config_t calibration_config = {
-        .unit_id = (adc_unit_t)unit,
-        .chan = (adc_channel_t)channel,
-        .atten = atten,
-        .bitwidth = (adc_bitwidth_t)bit_width,
-    };
-    if (adc_cali_create_scheme_curve_fitting(&calibration_config, (adc_cali_handle_t *)calibration) == ESP_OK)
-        *calibration_source = 0;
-#endif
-    return 0;
-}
-
-#if defined(CONFIG_IDF_TARGET_ESP32)
-static uint16_t adc1_read_isr(unsigned channel);
-#endif
-
-int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
-{
-    int value;
-    if (!handle || !raw || unit >= SOC_ADC_PERIPH_NUM)
-        return -1;
-#if defined(CONFIG_IDF_TARGET_ESP32)
-    if (unit == ADC_UNIT_1) {
-        portENTER_CRITICAL(&adc_locks[unit]);
-        value = adc1_read_isr(channel);
-        portEXIT_CRITICAL(&adc_locks[unit]);
-    } else
-#endif
-    if (adc_oneshot_read((adc_oneshot_unit_handle_t)handle, (adc_channel_t)channel, &value) != ESP_OK)
-        return -1;
-    *raw = (unsigned)value;
-    return 0;
-}
-
-int IRAM_ATTR ow_adc_read_critical(unsigned channel, unsigned *raw)
-{
-#if defined(CONFIG_IDF_TARGET_ESP32)
-    portENTER_CRITICAL_SAFE(&adc_locks[0]);
-    uint16_t value = adc1_read_isr(channel);
-    portEXIT_CRITICAL_SAFE(&adc_locks[0]);
-    *raw = value;
-    return 0;
-#else
-    (void)channel;
-    (void)raw;
-    return -1;
-#endif
-}
-
-int ow_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
-{
-    int value;
-    if (!calibration || !millivolts || adc_cali_raw_to_voltage((adc_cali_handle_t)calibration, raw, &value) != ESP_OK)
-        return -1;
-    *millivolts = (unsigned)value;
-    return 0;
-}
-
-void ow_adc_input_close(void *calibration)
-{
-    if (!calibration)
-        return;
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    adc_cali_delete_scheme_line_fitting((adc_cali_handle_t)calibration);
-#else
-    adc_cali_delete_scheme_curve_fitting((adc_cali_handle_t)calibration);
-#endif
-}
-
-void ow_adc_close(void *handle)
-{
-    if (handle)
-        adc_oneshot_del_unit((adc_oneshot_unit_handle_t)handle);
-}
-
-#if defined(CONFIG_IDF_TARGET_ESP32)
-static uint16_t IRAM_ATTR adc1_read_isr(unsigned channel)
-{
-    SENS.sar_read_ctrl.sar1_dig_force = 0;
-    SENS.sar_meas_wait2.force_xpd_sar = SENS_FORCE_XPD_SAR_PU;
-    RTCIO.hall_sens.xpd_hall = false;
-    SENS.sar_meas_wait2.force_xpd_amp = SENS_FORCE_XPD_AMP_PD;
-    SENS.sar_meas_ctrl.amp_rst_fb_fsm = 0;
-    SENS.sar_meas_ctrl.amp_short_ref_fsm = 0;
-    SENS.sar_meas_ctrl.amp_short_ref_gnd_fsm = 0;
-    SENS.sar_meas_wait1.sar_amp_wait1 = 1;
-    SENS.sar_meas_wait1.sar_amp_wait2 = 1;
-    SENS.sar_meas_wait2.sar_amp_wait3 = 1;
-    SENS.sar_meas_start1.meas1_start_force = 1;
-    SENS.sar_meas_start1.sar1_en_pad_force = 1;
-    SENS.sar_touch_ctrl1.xpd_hall_force = 1;
-    SENS.sar_touch_ctrl1.hall_phase_force = 1;
-    SENS.sar_meas_start1.sar1_en_pad = 1U << channel;
-    while (SENS.sar_slave_addr1.meas_status != 0) {}
-    SENS.sar_meas_start1.meas1_start_sar = 0;
-    SENS.sar_meas_start1.meas1_start_sar = 1;
-    while (SENS.sar_meas_start1.meas1_done_sar == 0) {}
-    return SENS.sar_meas_start1.meas1_data_sar;
 }
 
 #endif

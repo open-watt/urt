@@ -19,20 +19,6 @@ alias TaskHandle_t       = void*;
 alias EventGroupHandle_t = void*;
 alias EventBits_t        = TickType_t;
 
-enum uint portMUX_FREE_VAL = 0xB33FFFFF;
-
-// SMP-aware spinlock used by portENTER_CRITICAL on ESP-IDF FreeRTOS.
-// Default-init (zero owner is wrong) is patched by giving owner a default
-// value of portMUX_FREE_VAL -- so a zero-initialised portMUX_TYPE is in
-// the "unlocked" state, no explicit constructor needed.
-// (Non-debug layout; CONFIG_FREERTOS_PORTMUX_DEBUG adds two more fields
-// we don't need.)
-struct portMUX_TYPE
-{
-    uint owner = portMUX_FREE_VAL;
-    uint count;
-}
-
 alias TaskFunction_t = extern(C) void function(void*) nothrow @nogc;
 
 enum eNotifyAction : int
@@ -76,11 +62,6 @@ extern(C)
     BaseType_t xTaskGenericNotify(TaskHandle_t xTaskToNotify, UBaseType_t uxIndexToNotify, uint ulValue, eNotifyAction eAction, uint* pulPreviousNotificationValue);
     uint       ulTaskGenericNotifyTake(UBaseType_t uxIndexToWaitOn, BaseType_t xClearCountOnExit, TickType_t xTicksToWait);
 
-    // critical sections (portmacro). ESP-IDF v6's SMP kernel exports the
-    // timeout form only; portENTER_CRITICAL(mux) expands to it with -1.
-    BaseType_t xPortEnterCriticalTimeout(portMUX_TYPE* mux, BaseType_t timeout);
-    void vPortExitCritical(portMUX_TYPE* mux);
-
     // event groups (event_groups.c). Requires configUSE_EVENT_GROUPS=1.
     EventGroupHandle_t xEventGroupCreate();
     void               vEventGroupDelete(EventGroupHandle_t xEventGroup);
@@ -88,12 +69,6 @@ extern(C)
     EventBits_t        xEventGroupClearBits(EventGroupHandle_t xEventGroup, EventBits_t uxBitsToClear);
     EventBits_t        xEventGroupGetBitsFromISR(EventGroupHandle_t xEventGroup);
     EventBits_t        xEventGroupWaitBits(EventGroupHandle_t xEventGroup, EventBits_t uxBitsToWaitFor, BaseType_t xClearOnExit, BaseType_t xWaitForAllBits, TickType_t xTicksToWait);
-}
-
-pragma(inline, true)
-void vPortEnterCritical(portMUX_TYPE* mux)
-{
-    xPortEnterCriticalTimeout(mux, -1);
 }
 
 pragma(inline, true)

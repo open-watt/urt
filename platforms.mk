@@ -111,12 +111,12 @@ else ifeq ($(PLATFORM),esp32-c3)
 else ifeq ($(PLATFORM),esp32-c5)
     # RV32IMAC, 240MHz -- has atomics
     BUILDNAME := esp32-c5
-    PROCESSOR := e907
+    PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-c6)
     # RV32IMAC, 160MHz -- has atomics
     BUILDNAME := esp32-c6
-    PROCESSOR := e907
+    PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-p4)
     # HP core: RV32IMAFDCV, 400MHz
@@ -307,6 +307,13 @@ ifdef PROCESSOR
       MARCH = rv32imafc
       MATTR = +m,+a,+f,+c
       MABI  = ilp32f
+      OS ?= freertos
+  else ifeq ($(PROCESSOR),esp32c6)
+      # RV32IMAC with no FPU (ESP32-C5 and C6); IDF links these soft-float.
+      ARCH  = riscv
+      MARCH = rv32imac
+      MATTR = +m,+a,+c
+      MABI  = ilp32
       OS ?= freertos
   else ifeq ($(PROCESSOR),esp32p4)
       ARCH  = riscv

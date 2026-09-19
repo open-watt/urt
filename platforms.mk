@@ -92,6 +92,9 @@ else ifeq ($(PLATFORM),esp32-s3)
     OS = freertos
     XTENSA_GCC := xtensa-esp32s3-elf-gcc
     MATTR = +fp,+loop
+    # S3 has S32C1I (the S2 does not); see lx6 for why llc needs both of these.
+    XTENSA_LLC_EXTRA_MATTR := +s32c1i
+    XTENSA_LLC_EXTRA_FLAGS := --disable-tail-duplicate
     DFLAGS := $(DFLAGS) -d-version=SupportUnaligned
 else ifeq ($(PLATFORM),esp32-h2)
     BUILDNAME := esp32-h2

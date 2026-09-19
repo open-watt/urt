@@ -3,6 +3,9 @@
 
 #if !defined(_WIN32)
 
+// mbedtls 4.x hides the classic primitives unless this precedes every header.
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS
+
 #include <stddef.h>
 #include <string.h>
 #include <mbedtls/version.h>
@@ -285,20 +288,12 @@ int urt_pk_import_ec_p256_key(mbedtls_pk_context *pk, const unsigned char *d, si
 
     mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*pk);
 
-#if MBEDTLS_VERSION_MAJOR >= 3
-    ret = mbedtls_ecp_group_load(&ec->private_grp, MBEDTLS_ECP_DP_SECP256R1);
-    if (ret != 0) return ret;
-    ret = mbedtls_mpi_read_binary(&ec->private_d, d, d_len);
-    if (ret != 0) return ret;
-    // xy is 0x04 || X || Y (65 bytes)
-    ret = mbedtls_ecp_point_read_binary(&ec->private_grp, &ec->private_Q, xy, xy_len);
-#else
     ret = mbedtls_ecp_group_load(&ec->grp, MBEDTLS_ECP_DP_SECP256R1);
     if (ret != 0) return ret;
     ret = mbedtls_mpi_read_binary(&ec->d, d, d_len);
     if (ret != 0) return ret;
+    // xy is 0x04 || X || Y (65 bytes)
     ret = mbedtls_ecp_point_read_binary(&ec->grp, &ec->Q, xy, xy_len);
-#endif
     return ret;
 }
 
@@ -306,11 +301,7 @@ int urt_pk_import_ec_p256_key(mbedtls_pk_context *pk, const unsigned char *d, si
 int urt_pk_export_privkey_d(mbedtls_pk_context *pk, unsigned char *buf, size_t buflen, size_t *olen)
 {
     mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*pk);
-#if MBEDTLS_VERSION_MAJOR >= 3
-    mbedtls_mpi *d = &ec->private_d;
-#else
     mbedtls_mpi *d = &ec->d;
-#endif
     size_t len = mbedtls_mpi_size(d);
     if (buflen < len)
         return MBEDTLS_ERR_ECP_BUFFER_TOO_SMALL;

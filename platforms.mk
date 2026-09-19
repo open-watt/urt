@@ -92,6 +92,9 @@ else ifeq ($(PLATFORM),esp32-s3)
     OS = freertos
     XTENSA_GCC := xtensa-esp32s3-elf-gcc
     MATTR = +fp,+loop
+    # S3 has S32C1I (the S2 does not); see lx6 for why llc needs both of these.
+    XTENSA_LLC_EXTRA_MATTR := +s32c1i
+    XTENSA_LLC_EXTRA_FLAGS := --disable-tail-duplicate
     DFLAGS := $(DFLAGS) -d-version=SupportUnaligned
 else ifeq ($(PLATFORM),esp32-h2)
     BUILDNAME := esp32-h2
@@ -108,12 +111,12 @@ else ifeq ($(PLATFORM),esp32-c3)
 else ifeq ($(PLATFORM),esp32-c5)
     # RV32IMAC, 240MHz -- has atomics
     BUILDNAME := esp32-c5
-    PROCESSOR := e907
+    PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-c6)
     # RV32IMAC, 160MHz -- has atomics
     BUILDNAME := esp32-c6
-    PROCESSOR := e907
+    PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-p4)
     # HP core: RV32IMAFDCV, 400MHz
@@ -304,6 +307,13 @@ ifdef PROCESSOR
       MARCH = rv32imafc
       MATTR = +m,+a,+f,+c
       MABI  = ilp32f
+      OS ?= freertos
+  else ifeq ($(PROCESSOR),esp32c6)
+      # RV32IMAC with no FPU (ESP32-C5 and C6); IDF links these soft-float.
+      ARCH  = riscv
+      MARCH = rv32imac
+      MATTR = +m,+a,+c
+      MABI  = ilp32
       OS ?= freertos
   else ifeq ($(PROCESSOR),esp32p4)
       ARCH  = riscv
@@ -782,7 +792,7 @@ ifeq ($(COMPILER),ldc)
     ifeq ($(CONFIG),release)
       ifeq ($(TINY),1)
         DFLAGS := $(DFLAGS) -release --enable-asserts -Oz -enable-inlining
-      else ifeq ($(ARCH),xtensa)
+      else ifneq ($(filter freertos baremetal,$(OS)),)
         DFLAGS := $(DFLAGS) -release --enable-asserts -Oz -enable-inlining
       else
         DFLAGS := $(DFLAGS) -release --enable-asserts -O3 -enable-inlining
@@ -790,8 +800,8 @@ ifeq ($(COMPILER),ldc)
     else ifdef BAREMETAL_DIR
         # Embedded debug/unittest: still optimize to fit in firmware partition
         DFLAGS := $(DFLAGS) --enable-asserts -O2 -enable-inlining
-    else ifeq ($(ARCH),xtensa)
-        # Xtensa: -Oz to fit in flash; bitcode emission set above
+    else ifneq ($(filter freertos baremetal,$(OS)),)
+        # Embedded targets are flash-constrained.
         DFLAGS := $(DFLAGS) --enable-asserts -Oz -enable-inlining -d-debug
     else
         # Frame pointers required for x86/x86_64 crash-handler RBP walk;

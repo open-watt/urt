@@ -562,21 +562,17 @@ else ifeq ($(USE_LWIP),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)lwIP
 endif
 
-# Filesystem backends: urt.file has no backend on targets without a host
-# filesystem. Selection is additive -- each enabled backend is consulted in
-# turn, so a file may be sourced from whichever one holds it. Both backends
-# claim the same 'storage' partition though, so enabling both only makes sense
-# while migrating; USE_LITTLEFS=1 therefore turns SPIFFS off unless asked for.
-ifeq ($(USE_LITTLEFS),)
-    USE_LITTLEFS := 0
-endif
+# ESP defaults to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
 ifeq ($(USE_SPIFFS),)
-  ifeq ($(USE_LITTLEFS),1)
     USE_SPIFFS := 0
+endif
+ifeq ($(USE_LITTLEFS),)
+  ifeq ($(USE_SPIFFS),1)
+    USE_LITTLEFS := 0
   else ifneq ($(filter esp%,$(PLATFORM)),)
-    USE_SPIFFS := 1
+    USE_LITTLEFS := 1
   else
-    USE_SPIFFS := 0
+    USE_LITTLEFS := 0
   endif
 endif
 ifeq ($(USE_SPIFFS),1)

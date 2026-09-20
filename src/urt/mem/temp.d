@@ -18,13 +18,7 @@ void[] talloc(size_t size) pure
         assert(InFormatFunction == false, "It is illegal to use the temp allocator inside string conversion functions. Consider using stack storage.");
     }
 
-    assert(size <= TempMemSize / 2, "Requested temp memory size is too large");
-
-    void[] mem = tmem_tail();
-    if (mem.length < size)
-        mem = tmem_reset();
-    tmem_advance(size);
-    return mem[0 .. size];
+    return talloc_aligned(size, 8);
 }
 
 void[] talloc_aligned(size_t size, size_t alignment) pure
@@ -110,14 +104,14 @@ char* tstringz(const(wchar)[] str) pure
 wchar* twstringz(const(char)[] str) pure
 {
     import urt.string.uni : uni_convert;
-    wchar* r = cast(wchar*)talloc(str.length*2 + 2).ptr;
+    wchar* r = talloc_array!wchar(str.length + 1).ptr;
     size_t len = uni_convert(str, r[0 .. str.length]);
     r[len] = '\0';
     return r;
 }
 wchar* twstringz(const(wchar)[] str) pure
 {
-    wchar* r = cast(wchar*)talloc(str.length*2 + 2).ptr;
+    wchar* r = talloc_array!wchar(str.length + 1).ptr;
     r[0 .. str.length] = str[];
     r[str.length] = '\0';
     return r;
@@ -159,7 +153,7 @@ const(dchar)[] tdstring(T)(auto ref T value)
     else
         char[] s = tstring(value);
     import urt.string.uni : uni_convert;
-    dchar* r = cast(dchar*)talloc(s[].length*4).ptr;
+    dchar* r = talloc_array!dchar(s[].length).ptr;
     size_t len = uni_convert(s[], r[0 .. s.length]);
     return r[0 .. len];
 }

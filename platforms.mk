@@ -591,6 +591,18 @@ ifeq ($(CONFIG),unittest)
 endif
 
 # =======================================================================
+# Cortex-M takes unaligned LDR/STR but faults on LDRD/LDM/VLDR, and the compiler
+# chooses between those freely, so it has to be told to keep wide access aligned.
+# Without this the endian helpers take their wide-load path and neighbouring field
+# reads fold into an LDRD that faults on a byte-packed buffer.
+ifeq ($(ARCH),thumb)
+    STRICT_ALIGN ?= 1
+    ifeq ($(STRICT_ALIGN),1)
+        comma := ,
+        MATTR := $(if $(MATTR),$(MATTR)$(comma)+strict-align,+strict-align)
+    endif
+endif
+
 # Compiler configuration -- triple, mattr, link flags
 # =======================================================================
 
@@ -644,6 +656,12 @@ ifeq ($(COMPILER),ldc)
         endif
         ifdef MARCH
             DFLAGS := $(DFLAGS) -mcpu=$(MARCH)
+        endif
+        ifdef MATTR
+            DFLAGS := $(DFLAGS) -mattr=$(MATTR)
+        endif
+        ifeq ($(STRICT_ALIGN),1)
+            DFLAGS := $(DFLAGS) $(VERSION_FLAG)StrictAlign
         endif
     else ifeq ($(ARCH),arm)
         ifeq ($(OS),baremetal)

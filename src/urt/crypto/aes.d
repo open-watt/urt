@@ -38,6 +38,11 @@ else version (Windows)
     private enum NTSTATUS STATUS_AUTH_TAG_MISMATCH = cast(NTSTATUS)0xC000A002;
 }
 
+
+// no software fallback: bare metal has no AES/ECDH at all
+version (MbedTLS) version = HasCryptoBackend;
+else version (Windows) version = HasCryptoBackend;
+
 nothrow @nogc:
 
 
@@ -266,6 +271,7 @@ private Result aes_ecb_block_win(const(ubyte)[] key, ref const ubyte[16] input, 
 }
 
 
+version (HasCryptoBackend)
 unittest
 {
     // McGrew/Viega AES-GCM test vectors (FIPS 800-38D Annex B examples)

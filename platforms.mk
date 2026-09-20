@@ -642,6 +642,8 @@ ifeq ($(COMPILER),ldc)
         else
             DFLAGS := $(DFLAGS) -mtriple=thumbv7em-none-eabihf -gcc=arm-none-eabi-gcc
         endif
+        # LDC needs an explicit hard-float ABI to match libc.
+        DFLAGS := $(DFLAGS) -float-abi=hard
         ifdef MARCH
             DFLAGS := $(DFLAGS) -mcpu=$(MARCH)
         endif

@@ -679,6 +679,12 @@ ifeq ($(COMPILER),ldc)
         RISCV32_GCC ?= $(or $(if $(ESPRESSIF_RISCV32_BIN),$(ESPRESSIF_RISCV32_BIN)/riscv32-esp-elf-gcc),$(shell which riscv32-esp-elf-gcc 2>/dev/null),riscv64-unknown-elf-gcc)
         DFLAGS := $(DFLAGS) -mtriple=riscv32-unknown-elf -gcc=$(RISCV32_GCC)
         DFLAGS := $(DFLAGS) -mattr=$(MATTR) -mabi=$(MABI)
+        ifeq ($(OS),freertos)
+          ifneq ($(filter esp%,$(PLATFORM)),)
+            # Allocate D TLS lazily instead of charging every IDF task stack.
+            DFLAGS := $(DFLAGS) -emulated-tls
+          endif
+        endif
         ifeq ($(PROCESSOR),e902)
             DFLAGS := $(DFLAGS) -d-version=RISCV32E
         endif

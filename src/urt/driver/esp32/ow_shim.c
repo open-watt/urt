@@ -1726,6 +1726,71 @@ int ow_wifi_raw_tx(int ifx, const uint8_t *frame, int len, int en) { (void)ifx;(
 
 #endif // CONFIG_ESP_WIFI_ENABLED
 
+// -- IEEE 802.15.4 radio wrappers --
+
+typedef void (*ow_wpan_rx_cb_t)(const uint8_t *frame, int8_t rssi, uint8_t lqi, uint8_t channel, int pending);
+typedef void (*ow_wpan_tx_cb_t)(int error, const uint8_t *ack, int8_t rssi, uint8_t lqi, uint8_t channel);
+
+#if CONFIG_IEEE802154_ENABLED
+#include "esp_ieee802154.h"
+
+static ow_wpan_rx_cb_t ow_wpan_rx_cb;
+static ow_wpan_tx_cb_t ow_wpan_tx_cb;
+
+// Release the driver buffer after D has copied it.
+static void IRAM_ATTR ow_wpan_rx_done(uint8_t *frame, esp_ieee802154_frame_info_t *info)
+{
+    if (ow_wpan_rx_cb)
+        ow_wpan_rx_cb(frame, info->rssi, info->lqi, info->channel, info->pending ? 1 : 0);
+    esp_ieee802154_receive_handle_done(frame);
+}
+
+static void IRAM_ATTR ow_wpan_tx_done(const uint8_t *frame, const uint8_t *ack, esp_ieee802154_frame_info_t *info)
+{
+    (void)frame;
+    if (ow_wpan_tx_cb)
+        ow_wpan_tx_cb(ESP_IEEE802154_TX_ERR_NONE, ack, ack ? info->rssi : 0, ack ? info->lqi : 0, ack ? info->channel : 0);
+    if (ack)
+        esp_ieee802154_receive_handle_done(ack);
+}
+
+static void IRAM_ATTR ow_wpan_tx_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
+{
+    (void)frame;
+    if (ow_wpan_tx_cb)
+        ow_wpan_tx_cb((int)error, NULL, 0, 0, 0);
+}
+
+int ow_wpan_enable(ow_wpan_rx_cb_t rx, ow_wpan_tx_cb_t tx)
+{
+    ow_wpan_rx_cb = rx;
+    ow_wpan_tx_cb = tx;
+    esp_ieee802154_event_cb_list_t cbs = {
+        .rx_done_cb = ow_wpan_rx_done,
+        .tx_done_cb = ow_wpan_tx_done,
+        .tx_failed_cb = ow_wpan_tx_failed,
+    };
+    if (esp_ieee802154_event_callback_list_register(cbs) != ESP_OK)
+        return -1;
+    if (esp_ieee802154_enable() != ESP_OK) {
+        esp_ieee802154_event_callback_list_unregister();
+        return -1;
+    }
+    return 0;
+}
+
+void ow_wpan_disable(void)
+{
+    esp_ieee802154_disable();
+    esp_ieee802154_event_callback_list_unregister();
+    ow_wpan_rx_cb = NULL;
+    ow_wpan_tx_cb = NULL;
+}
+#else // !CONFIG_IEEE802154_ENABLED
+int ow_wpan_enable(ow_wpan_rx_cb_t rx, ow_wpan_tx_cb_t tx) { (void)rx; (void)tx; return -1; }
+void ow_wpan_disable(void) {}
+#endif // CONFIG_IEEE802154_ENABLED
+
 // -- BLE (NimBLE) wrappers --
 
 #if CONFIG_BT_ENABLED && CONFIG_BT_NIMBLE_ENABLED

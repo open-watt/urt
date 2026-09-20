@@ -137,6 +137,9 @@ Reset_Handler:
     cmp     r4, r5
     blo     .Linit_loop
 
+    mov     r0, #0
+    mov     r1, #0
+    mov     fp, #0
     bl      main
 
 .Lhalt:

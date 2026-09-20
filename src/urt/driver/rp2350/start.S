@@ -155,6 +155,9 @@ Reset_Handler:
     blo     .Linit_loop
 
     /* -- Enter main (should never return) -- */
+    movs    r0, #0
+    movs    r1, #0
+    mov     r7, r0
     bl      main
 
     /* If main returns, spin */

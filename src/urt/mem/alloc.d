@@ -496,8 +496,8 @@ unittest
     // alloc with flags (on desktop, flags are ignored but API works)
     mem = alloc(64, 8, MemFlags.fast);
     assert(mem !is null);
-    size_t s = memsize(mem.ptr);
-    assert(s >= 64);
+    static if (has_memsize)
+        assert(memsize(mem.ptr) >= 64);
     free(mem);
 
     // realloc preserves data
@@ -510,9 +510,12 @@ unittest
 
     // expand
     mem = alloc(16, 8);
-    void[] expanded = expand(mem, 8);
-    if (expanded !is null)
-        assert(expanded.ptr is mem.ptr);
+    static if (has_expand || has_memsize)
+    {
+        void[] expanded = expand(mem, 8);
+        if (expanded !is null)
+            assert(expanded.ptr is mem.ptr);
+    }
     free(mem);
 
     // pointer tagging utilities

@@ -20,6 +20,10 @@ else version (Espressif)
 else
     enum uint num_uarts = 0;
 
+// Platforms whose console is not UART0 declare their own.
+static if (!__traits(compiles, console_uart))
+    enum uint console_uart = 0;
+
 nothrow @nogc:
 
 
@@ -480,9 +484,12 @@ unittest
         assert(!r);
         assert(!u.is_open);
 
-        // Open/close each valid port (skip port 0 -- it's usually the console)
-        foreach (p; 1 .. num_uarts)
+        // Open/close each valid port; reconfiguring the console would kill it
+        foreach (p; 0 .. num_uarts)
         {
+            if (p == console_uart)
+                continue;
+
             Uart port;
             auto r2 = uart_open(port, cast(ubyte)p, cfg);
             assert(r2, "uart_open failed");

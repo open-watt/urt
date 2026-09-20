@@ -745,7 +745,7 @@ ifeq ($(COMPILER),ldc)
         BAREMETAL_SRCS := start.S boot_handlers.S portasm.s
       else ifeq ($(PLATFORM),rp2350)
         BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/rp2350
-        BAREMETAL_SRCS := start.S boot2.S
+        BAREMETAL_SRCS := start.S
       else ifdef STM32_VARIANT
         BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/stm32
         BAREMETAL_SRCS := start.S

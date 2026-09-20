@@ -1,45 +1,25 @@
-/* RP2350 (ARM Cortex-M33) linker script
- *
- * Raspberry Pi RP2350B — dual Cortex-M33 @ 150MHz, 520KB SRAM, XIP QSPI flash.
- *
- * Memory layout:
- *   BOOT2:  0x10000000, 256B    (second-stage bootloader, copied to SRAM by ROM)
- *   FLASH:  0x10000100, ~4MB    (XIP execute-in-place, read-only)
- *   SRAM:   0x20000000, 520KB   (8 banks x 64KB + 8KB scratch)
- *
- * The RP2350 ROM loads the 256-byte boot2 block from the start of flash,
- * executes it from SRAM to configure the QSPI interface, then jumps to
- * the vector table at the start of .text.
- */
-
 ENTRY(Reset_Handler)
 
-/* Force-link newlib syscall stubs and D runtime symbols */
 EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
 {
-    /* Second-stage bootloader — first 256 bytes of flash */
-    BOOT2 (rx)  : ORIGIN = 0x10000000, LENGTH = 256
-    /* Application flash — XIP, code and read-only data */
-    FLASH (rx)  : ORIGIN = 0x10000100, LENGTH = 4M - 256
-    /* SRAM — all 8 banks contiguous (banks 0-7: 8 x 64KB = 512KB) + 8KB scratch */
+    FLASH (rx)  : ORIGIN = 0x10000000, LENGTH = 4M
     SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 520K
 }
 
 SECTIONS
 {
-    /* Boot2 — second-stage bootloader for QSPI flash init */
-    .boot2 : ALIGN(4)
-    {
-        KEEP(*(.boot2))
-    } > BOOT2
-
-    /* Vector table must be first in FLASH (right after boot2) */
     .vector_table : ALIGN(4)
     {
         KEEP(*(.vector_table))
+    } > FLASH
+
+    /* The boot ROM rejects an image whose first 4KB holds no IMAGE_DEF block. */
+    .embedded_block : ALIGN(4)
+    {
+        KEEP(*(.embedded_block))
     } > FLASH
 
     .text : ALIGN(4)
@@ -71,7 +51,6 @@ SECTIONS
         __init_array_end = .;
     } > FLASH
 
-    /* ARM exception unwind tables */
     .ARM.exidx : ALIGN(4)
     {
         __exidx_start = .;
@@ -84,7 +63,6 @@ SECTIONS
         *(.ARM.extab* .gnu.linkonce.armextab.*)
     } > FLASH
 
-    /* GOT in SRAM for fast access — LMA in FLASH, copied at startup */
     .got : ALIGN(4)
     {
         _got_load  = LOADADDR(.got);
@@ -94,7 +72,6 @@ SECTIONS
         _got_end = .;
     } > SRAM AT > FLASH
 
-    /* Initialized data — LMA in FLASH, copied to SRAM at startup */
     .data : ALIGN(4)
     {
         _data_start = .;
@@ -107,7 +84,6 @@ SECTIONS
     __ram_data_start__ = _data_start;
     __ram_data_end__ = _data_end;
 
-    /* Thread-local initialized data — LMA in FLASH, copied to SRAM at startup */
     .tdata : ALIGN(4)
     {
         _tdata_start = .;
@@ -117,7 +93,6 @@ SECTIONS
 
     _tdata_load = LOADADDR(.tdata);
 
-    /* Thread-local zero-initialized data */
     .tbss (NOLOAD) : ALIGN(4)
     {
         _tbss_start = .;
@@ -125,7 +100,9 @@ SECTIONS
         _tbss_end = .;
     } > SRAM
 
-    /* Zero-initialized data */
+    /* ARM EABI reserves an 8-byte TCB, padded to the TLS segment alignment. */
+    _tls_base = (SIZEOF(.tdata) ? ADDR(.tdata) : ADDR(.tbss)) - MAX(8, MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
+
     .bss (NOLOAD) : ALIGN(4)
     {
         __bss_start__ = .;
@@ -136,14 +113,15 @@ SECTIONS
         __bss_end__ = .;
     } > SRAM
 
-    /* Heap grows up from end of BSS */
-    __heap_start = _bss_end;
-    __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - 4K;
+    _stack_size = 4K;
 
-    /* Stack at top of SRAM (4KB reserved) */
+    __heap_start = _bss_end;
+    __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - _stack_size;
+
     _stack_top = ORIGIN(SRAM) + LENGTH(SRAM);
-    _stack_low = ORIGIN(SRAM);
+    _stack_low = __heap_end;
     __StackTop = _stack_top;
+    ASSERT(__heap_end > __heap_start, "SRAM exhausted: static data collides with the stack")
 
     /DISCARD/ :
     {

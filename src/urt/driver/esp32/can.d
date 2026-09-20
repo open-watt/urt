@@ -15,19 +15,21 @@ nothrow @nogc:
 
 
 // SOC_TWAI_CONTROLLER_NUM per chip variant (ESP-IDF v6.0 soc_caps.h)
-version (ESP32)         enum uint num_can = 1;
-else version (ESP32_S2) enum uint num_can = 1;
-else version (ESP32_S3) enum uint num_can = 1;
-else version (ESP32_P4) enum uint num_can = 3;
-else version (ESP32_C3) enum uint num_can = 1;
-else version (ESP32_C5) enum uint num_can = 2;
-else version (ESP32_C6) enum uint num_can = 2;
-else version (ESP32_H2) enum uint num_can = 1;
-else                    enum uint num_can = 0; // C2, C61
+version (ESP32)          enum uint num_can = 1;
+else version (ESP32_S2)  enum uint num_can = 1;
+else version (ESP32_S3)  enum uint num_can = 1;
+else version (ESP32_S31) enum uint num_can = 2;
+else version (ESP32_P4)  enum uint num_can = 3;
+else version (ESP32_C3)  enum uint num_can = 1;
+else version (ESP32_C5)  enum uint num_can = 2;
+else version (ESP32_C6)  enum uint num_can = 2;
+else version (ESP32_H2)  enum uint num_can = 1;
+else                     enum uint num_can = 0; // C2, C61
 
 // SOC_TWAI_FD_SUPPORTED (ESP-IDF v6.0 soc_caps.h)
-version (ESP32_C5) enum bool has_can_fd = true;
-else               enum bool has_can_fd = false;
+version (ESP32_C5)       enum bool has_can_fd = true;
+else version (ESP32_S31) enum bool has_can_fd = true;
+else                     enum bool has_can_fd = false;
 
 
 static if (num_can > 0):

@@ -12,15 +12,16 @@ nothrow @nogc:
 
 
 // SOC_UART_NUM per chip variant
-version (ESP32)         enum num_uarts = 3;
-else version (ESP32_S3) enum num_uarts = 3;
-else version (ESP32_P4) enum num_uarts = 6;
-else version (ESP32_S2) enum num_uarts = 2;
-else version (ESP32_C2) enum num_uarts = 2;
-else version (ESP32_C3) enum num_uarts = 2;
-else version (ESP32_C5) enum num_uarts = 2;
-else version (ESP32_C6) enum num_uarts = 3;
-else version (ESP32_H2) enum num_uarts = 2;
+version (ESP32)          enum num_uarts = 3;
+else version (ESP32_S3)  enum num_uarts = 3;
+else version (ESP32_S31) enum num_uarts = 4;
+else version (ESP32_P4)  enum num_uarts = 6;
+else version (ESP32_S2)  enum num_uarts = 2;
+else version (ESP32_C2)  enum num_uarts = 2;
+else version (ESP32_C3)  enum num_uarts = 2;
+else version (ESP32_C5)  enum num_uarts = 2;
+else version (ESP32_C6)  enum num_uarts = 3;
+else version (ESP32_H2)  enum num_uarts = 2;
 else static assert(false, "unknown Espressif chip -- add num_uarts");
 
 enum uint uart_clock_hz = 80_000_000;

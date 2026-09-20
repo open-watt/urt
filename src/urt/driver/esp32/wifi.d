@@ -19,14 +19,15 @@ import urt.driver.wifi;
 nothrow @nogc:
 
 
-version (ESP32)         enum uint num_wifi = 1;
-else version (ESP32_S2) enum uint num_wifi = 1;
-else version (ESP32_S3) enum uint num_wifi = 1;
-else version (ESP32_C2) enum uint num_wifi = 1;
-else version (ESP32_C3) enum uint num_wifi = 1;
-else version (ESP32_C5) enum uint num_wifi = 1;
-else version (ESP32_C6) enum uint num_wifi = 1;
-else                    enum uint num_wifi = 0; // H2 (BT/802.15.4 only), P4 (needs external)
+version (ESP32)          enum uint num_wifi = 1;
+else version (ESP32_S2)  enum uint num_wifi = 1;
+else version (ESP32_S3)  enum uint num_wifi = 1;
+else version (ESP32_S31) enum uint num_wifi = 1;
+else version (ESP32_C2)  enum uint num_wifi = 1;
+else version (ESP32_C3)  enum uint num_wifi = 1;
+else version (ESP32_C5)  enum uint num_wifi = 1;
+else version (ESP32_C6)  enum uint num_wifi = 1;
+else                     enum uint num_wifi = 0; // H2 (BT/802.15.4 only), P4 (needs external)
 
 version (ESP32_C5) version = DualBandRadio;
 

@@ -23,6 +23,7 @@ version (ESP8266)           enum string Platform = "ESP8266";
 else version (ESP32)        enum string Platform = "ESP32";
 else version (ESP32_S2)     enum string Platform = "ESP32-S2";
 else version (ESP32_S3)     enum string Platform = "ESP32-S3";
+else version (ESP32_S31)    enum string Platform = "ESP32-S31";
 else version (ESP32_C2)     enum string Platform = "ESP32-C2";
 else version (ESP32_C3)     enum string Platform = "ESP32-C3";
 else version (ESP32_C5)     enum string Platform = "ESP32-C5";

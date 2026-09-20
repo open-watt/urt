@@ -8,7 +8,8 @@ import urt.mem.pagepool : Page, page_alloc, page_release;
 nothrow @nogc:
 
 
-version (ESP32_C5)      enum uint num_wpan = 1;
+version (ESP32_S31)     enum uint num_wpan = 1;
+else version (ESP32_C5) enum uint num_wpan = 1;
 else version (ESP32_C6) enum uint num_wpan = 1;
 else version (ESP32_H2) enum uint num_wpan = 1;
 else                    enum uint num_wpan = 0;

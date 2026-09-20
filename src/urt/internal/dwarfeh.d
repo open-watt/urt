@@ -272,15 +272,8 @@ struct ExceptionHeader
 
 _Unwind_Ptr read_unaligned(T, bool consume)(ref const(ubyte)* p) nothrow @nogc @trusted
 {
-    import urt.processor : SupportUnalignedLoadStore;
-    static if (SupportUnalignedLoadStore)
-        T value = *cast(T*) p;
-    else
-    {
-        import urt.mem : memcpy;
-        T value = void;
-        memcpy(&value, p, T.sizeof);
-    }
+    import urt.endian : endianToNative, LittleEndian;
+    T value = cast(T)endianToNative!(T, LittleEndian)(p[0 .. T.sizeof]);
 
     static if (consume)
         p += T.sizeof;

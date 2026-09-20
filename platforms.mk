@@ -119,7 +119,7 @@ else ifeq ($(PLATFORM),esp32-c6)
     PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-p4)
-    # HP core: RV32IMAFDCV, 400MHz
+    # HP core: RV32IMAFC with Espressif PIE extensions, 400MHz.
     BUILDNAME := esp32-p4
     PROCESSOR := esp32p4
     OS = freertos
@@ -317,8 +317,8 @@ ifdef PROCESSOR
       OS ?= freertos
   else ifeq ($(PROCESSOR),esp32p4)
       ARCH  = riscv
-      MARCH = rv32imafdcv
-      MATTR = +m,+a,+f,+d,+c,+v
+      MARCH = rv32imafc
+      MATTR = +m,+a,+f,+c
       MABI  = ilp32f
       OS ?= freertos
   endif

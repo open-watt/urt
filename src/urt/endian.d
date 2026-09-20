@@ -9,74 +9,82 @@ import urt.util : is_aligned;
 
 pure nothrow @nogc:
 
+// Xtensa lowers unaligned scalars to bytes; assemble the swapped order directly.
+version (Xtensa)
+    private enum bytewise_swap = true;
+else
+    private enum bytewise_swap = false;
 
-// load from byte arrays
+
+// Byte-array loads accept byte-aligned input.
 pragma(inline, true) T endianToNative(T, bool little)(ref const ubyte[1] bytes)
     if (T.sizeof == 1 && is_integral!T)
 {
     return cast(T)bytes[0];
 }
 
-ushort endianToNative(T, bool little)(ref const ubyte[2] bytes)
+pragma(inline, true) ushort endianToNative(T, bool little)(ref const ubyte[2] bytes)
     if (T.sizeof == 2 && is_integral!T)
 {
-    if (__ctfe || !SupportUnalignedLoadStore)
+    if (__ctfe || ((max_unaligned_scalar_access_bytes < 2 || bytewise_swap) && LittleEndian != little))
     {
-        // ctfe can't do the memory reinterpreting
         static if (little)
             return cast(T)(bytes[0] | bytes[1] << 8);
         else
             return cast(T)(bytes[0] << 8 | bytes[1]);
     }
-    static if (SupportUnalignedLoadStore)
+    static if (max_unaligned_scalar_access_bytes >= 2 || LittleEndian == little)
     {
-        pragma(inline, true);
         static if (LittleEndian == little)
-            return *cast(ushort*)bytes.ptr;
+            return load_unaligned!ushort(bytes);
         else
-            return byte_reverse(*cast(ushort*)bytes.ptr);
+            return byte_reverse(load_unaligned!ushort(bytes));
     }
 }
 
 uint endianToNative(T, bool little)(ref const ubyte[4] bytes)
     if (T.sizeof == 4 && is_integral!T)
 {
-    if (__ctfe || !SupportUnalignedLoadStore)
+    if (__ctfe || max_unaligned_scalar_access_bytes < 4 || (bytewise_swap && LittleEndian != little))
     {
-        // ctfe can't do the memory reinterpreting
         static if (little)
             return cast(T)(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24);
         else
             return cast(T)(bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]);
     }
-    static if (SupportUnalignedLoadStore)
+    static if (max_unaligned_scalar_access_bytes >= 4)
     {
         pragma(inline, true);
         static if (LittleEndian == little)
-            return *cast(uint*)bytes.ptr;
+            return load_unaligned!uint(bytes);
         else
-            return byte_reverse(*cast(uint*)bytes.ptr);
+            return byte_reverse(load_unaligned!uint(bytes));
     }
 }
 
 ulong endianToNative(T, bool little)(ref const ubyte[8] bytes)
     if (T.sizeof == 8 && is_integral!T)
 {
-    if (__ctfe || !SupportUnalignedLoadStore)
+    if (__ctfe || max_unaligned_scalar_access_bytes < 4)
     {
-        // ctfe can't do the memory reinterpreting
         static if (little)
             return cast(T)(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | ulong(bytes[3]) << 24 | ulong(bytes[4]) << 32 | ulong(bytes[5]) << 40 | ulong(bytes[6]) << 48 | ulong(bytes[7]) << 56);
         else
             return cast(T)(ulong(bytes[0]) << 56 | ulong(bytes[1]) << 48 | ulong(bytes[2]) << 40 | ulong(bytes[3]) << 32 | ulong(bytes[4]) << 24 | bytes[5] << 16 | bytes[6] << 8 | bytes[7]);
     }
-    static if (SupportUnalignedLoadStore)
+    static if (max_unaligned_scalar_access_bytes >= 8)
     {
         pragma(inline, true);
         static if (LittleEndian == little)
-            return *cast(ulong*)bytes.ptr;
+            return load_unaligned!ulong(bytes);
         else
-            return byte_reverse(*cast(ulong*)bytes.ptr);
+            return byte_reverse(load_unaligned!ulong(bytes));
+    }
+    else static if (max_unaligned_scalar_access_bytes >= 4)
+    {
+        pragma(inline, true);
+        enum first_shift = little ? 0 : 32;
+        return (ulong(endianToNative!(uint, little)(bytes[0 .. 4])) << first_shift) | (ulong(endianToNative!(uint, little)(bytes[4 .. 8])) << (32 - first_shift));
     }
 }
 
@@ -144,63 +152,62 @@ pragma(inline, true) ubyte[1] nativeToEndian(bool little)(ubyte u)
     return [ u ];
 }
 
-ubyte[2] nativeToEndian(bool little)(ushort u)
+pragma(inline, true) ubyte[2] nativeToEndian(bool little)(ushort u)
 {
-    if (__ctfe || !SupportUnalignedLoadStore)
+    if (__ctfe || max_unaligned_scalar_access_bytes < 2)
     {
-        // ctfe can't do the memory reinterpreting
         static if (little)
             return [ u & 0xFF, u >> 8 ];
         else
             return [ u >> 8, u & 0xFF ];
     }
-    static if (SupportUnalignedLoadStore)
+    static if (max_unaligned_scalar_access_bytes >= 2)
     {
         static if (LittleEndian != little)
             u = byte_reverse(u);
-        else
-            pragma(inline, true);
         return *cast(ubyte[2]*)&u;
     }
 }
 
-ubyte[4] nativeToEndian(bool little)(uint u)
+pragma(inline, true) ubyte[4] nativeToEndian(bool little)(uint u)
 {
-    if (__ctfe || !SupportUnalignedLoadStore)
+    if (__ctfe || max_unaligned_scalar_access_bytes < 4)
     {
-        // ctfe can't do the memory reinterpreting
         static if (little)
             return [ u & 0xFF, (u >> 8) & 0xFF, (u >> 16) & 0xFF, u >> 24 ];
         else
             return [ u >> 24, (u >> 16) & 0xFF, (u >> 8) & 0xFF, u & 0xFF ];
     }
-    static if (SupportUnalignedLoadStore)
+    static if (max_unaligned_scalar_access_bytes >= 4)
     {
         static if (LittleEndian != little)
             u = byte_reverse(u);
-        else
-            pragma(inline, true);
         return *cast(ubyte[4]*)&u;
     }
 }
 
-ubyte[8] nativeToEndian(bool little)(ulong u)
+pragma(inline, true) ubyte[8] nativeToEndian(bool little)(ulong u)
 {
-    if (__ctfe || !SupportUnalignedLoadStore)
+    if (__ctfe || max_unaligned_scalar_access_bytes < 4)
     {
-        // ctfe can't do the memory reinterpreting
         static if (little)
             return [ u & 0xFF, (u >> 8) & 0xFF, (u >> 16) & 0xFF, (u >> 24) & 0xFF, (u >> 32) & 0xFF, (u >> 40) & 0xFF, (u >> 48) & 0xFF, u >> 56 ];
         else
             return [ u >> 56, (u >> 48) & 0xFF, (u >> 40) & 0xFF, (u >> 32) & 0xFF, (u >> 24) & 0xFF, (u >> 16) & 0xFF, (u >> 8) & 0xFF, u & 0xFF ];
     }
-    static if (SupportUnalignedLoadStore)
+    static if (max_unaligned_scalar_access_bytes >= 8)
     {
         static if (LittleEndian != little)
             u = byte_reverse(u);
-        else
-            pragma(inline, true);
         return *cast(ubyte[8]*)&u;
+    }
+    else static if (max_unaligned_scalar_access_bytes >= 4)
+    {
+        enum first_shift = little ? 0 : 32;
+        ubyte[8] bytes = void;
+        bytes[0 .. 4] = nativeToEndian!little(cast(uint)(u >> first_shift));
+        bytes[4 .. 8] = nativeToEndian!little(cast(uint)(u >> (32 - first_shift)));
+        return bytes;
     }
 }
 
@@ -259,7 +266,7 @@ ubyte[T.sizeof] nativeToLittleEndian(T)(auto ref const T data)
     => nativeToEndian!true(data);
 
 
-// load/store from/to memory
+// Pointer loads and stores require T.alignof.
 void storeBigEndian(T)(T* target, const T val)
     if (is_some_int!T || is(T == float) || is(T == double))
 {
@@ -357,8 +364,76 @@ void reverse_endian(T)(ref const T src, ref T dst)
 }
 
 
+private pragma(inline, true) T load_unaligned(T)(ref const ubyte[T.sizeof] bytes)
+{
+    version (DigitalMars)
+    {
+        struct Unaligned { align(1) T value; }
+        return (cast(const(Unaligned)*)bytes.ptr).value;
+    }
+    else
+    {
+        T value = void;
+        (cast(ubyte*)&value)[0 .. T.sizeof] = bytes[];
+        return value;
+    }
+}
+
 unittest
 {
+    import urt.meta : AliasSeq;
+
+    static assert({
+        ubyte[8] bytes = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0];
+        return bigEndianToNative!ushort(bytes[0 .. 2]) == 0x1234
+            && littleEndianToNative!uint(bytes[0 .. 4]) == 0x78563412
+            && bigEndianToNative!ulong(bytes) == 0x123456789ABCDEF0
+            && nativeToLittleEndian(0xF0DEBC9A78563412UL) == bytes;
+    }());
+
+    align(8) ubyte[24] buffer = void;
+    static foreach (T; AliasSeq!(ushort, uint, ulong))
+    {{
+        enum T value = cast(T)0xFEDCBA9876543210UL;
+        foreach (offset; 1 .. 9)
+        {
+            buffer[] = 0xA5;
+            buffer[offset .. offset + T.sizeof] = nativeToLittleEndian(value);
+            foreach (i; 0 .. T.sizeof)
+                assert(buffer[offset + i] == cast(ubyte)(value >> (i * 8)));
+            assert(littleEndianToNative!T(buffer[offset .. offset + T.sizeof][0 .. T.sizeof]) == value);
+            assert(buffer[offset - 1] == 0xA5 && buffer[offset + T.sizeof] == 0xA5);
+
+            buffer[offset .. offset + T.sizeof] = nativeToBigEndian(value);
+            foreach (i; 0 .. T.sizeof)
+                assert(buffer[offset + i] == cast(ubyte)(value >> ((T.sizeof - i - 1) * 8)));
+            assert(bigEndianToNative!T(buffer[offset .. offset + T.sizeof][0 .. T.sizeof]) == value);
+            assert(buffer[offset - 1] == 0xA5 && buffer[offset + T.sizeof] == 0xA5);
+        }
+    }}
+    static foreach (T; AliasSeq!(float, double))
+    {{
+        import urt.meta : IntForWidth;
+        alias U = IntForWidth!(T.sizeof * 8);
+        static if (T.sizeof == 4)
+            enum U[] patterns = [0, 0x80000000, 0x3F800000, 0x7F800000, 0xFF800000, 0x7FC12345, 1, 0x007FFFFF];
+        else
+            enum U[] patterns = [0, 0x8000000000000000, 0x3FF0000000000000, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8123456789ABC, 1, 0x000FFFFFFFFFFFFF];
+        foreach (bits; patterns)
+            foreach (offset; 1 .. 9)
+                static foreach (little; AliasSeq!(false, true))
+                {{
+                    T value = *cast(T*)&bits;
+                    buffer[] = 0xA5;
+                    buffer[offset .. offset + T.sizeof] = nativeToEndian!little(value);
+                    foreach (i; 0 .. T.sizeof)
+                        assert(buffer[offset + i] == cast(ubyte)(bits >> (8 * (little ? i : T.sizeof - 1 - i))));
+                    T decoded = endianToNative!(T, little)(buffer[offset .. offset + T.sizeof][0 .. T.sizeof]);
+                    assert(*cast(U*)&decoded == bits);
+                    assert(buffer[offset - 1] == 0xA5 && buffer[offset + T.sizeof] == 0xA5);
+                }}
+    }}
+
     ubyte[8] test = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0];
 
     assert(endianToNative!(ubyte,   LittleEndian)(test[0..1]) == 0x12);

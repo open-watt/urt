@@ -208,36 +208,34 @@ else version (Xtensa)
 else
     static assert(0, "Unsupported processor");
 
+// Native unaligned scalar width in bytes; zero means unsupported.
 version (X86)
-    enum SupportUnalignedLoadStore = true;
+    enum max_unaligned_scalar_access_bytes = 8;
 else version (X86_64)
-    enum SupportUnalignedLoadStore = true;
+    enum max_unaligned_scalar_access_bytes = 8;
 else version (AArch64)
-    enum SupportUnalignedLoadStore = true;
+    enum max_unaligned_scalar_access_bytes = 8;
 else version (ARM)
 {
     version (StrictAlign)
-        enum SupportUnalignedLoadStore = false;
+        enum max_unaligned_scalar_access_bytes = 0;
     else
-        enum SupportUnalignedLoadStore = !ProcFeatures.strict_align;
+        enum max_unaligned_scalar_access_bytes = ProcFeatures.strict_align ? 0 : 4;
 }
 else version (RISCV64)
 {
-    enum SupportUnalignedLoadStore = __traits(targetHasFeature, "unaligned-scalar-mem");
+    enum max_unaligned_scalar_access_bytes = __traits(targetHasFeature, "unaligned-scalar-mem") ? 8 : 0;
 }
 else version (RISCV32)
 {
-    enum SupportUnalignedLoadStore = __traits(targetHasFeature, "unaligned-scalar-mem");
+    enum max_unaligned_scalar_access_bytes = __traits(targetHasFeature, "unaligned-scalar-mem") ? 4 : 0;
 }
 else
 {
-    // No arch-level feature flag available (Xtensa, MIPS, etc.)
-    // Platforms that support unaligned access set -d-version=SupportUnaligned in Makefile
-    // (e.g., ESP32-S3 Xtensa LX7 has hardware unaligned load/store)
     version (SupportUnaligned)
-        enum SupportUnalignedLoadStore = true;
+        enum max_unaligned_scalar_access_bytes = 4;
     else
-        enum SupportUnalignedLoadStore = false;
+        enum max_unaligned_scalar_access_bytes = 0;
 }
 
 // Different arch may define this differently...

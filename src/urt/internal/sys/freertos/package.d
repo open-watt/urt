@@ -76,11 +76,6 @@ extern(C)
     BaseType_t xTaskGenericNotify(TaskHandle_t xTaskToNotify, UBaseType_t uxIndexToNotify, uint ulValue, eNotifyAction eAction, uint* pulPreviousNotificationValue);
     uint       ulTaskGenericNotifyTake(UBaseType_t uxIndexToWaitOn, BaseType_t xClearCountOnExit, TickType_t xTicksToWait);
 
-    // critical sections (portmacro). ESP-IDF v6's SMP kernel exports the
-    // timeout form only; portENTER_CRITICAL(mux) expands to it with -1.
-    BaseType_t xPortEnterCriticalTimeout(portMUX_TYPE* mux, BaseType_t timeout);
-    void vPortExitCritical(portMUX_TYPE* mux);
-
     // event groups (event_groups.c). Requires configUSE_EVENT_GROUPS=1.
     EventGroupHandle_t xEventGroupCreate();
     void               vEventGroupDelete(EventGroupHandle_t xEventGroup);
@@ -90,10 +85,26 @@ extern(C)
     EventBits_t        xEventGroupWaitBits(EventGroupHandle_t xEventGroup, EventBits_t uxBitsToWaitFor, BaseType_t xClearOnExit, BaseType_t xWaitForAllBits, TickType_t xTicksToWait);
 }
 
-pragma(inline, true)
-void vPortEnterCritical(portMUX_TYPE* mux)
+// critical sections (portmacro): Xtensa inlines vPortEnterCritical and exports
+// the timeout form, unicore RISC-V exports an argument-less pair and no mux form.
+version (RISCV32)
 {
-    xPortEnterCriticalTimeout(mux, -1);
+    private extern(C) pragma(mangle, "vPortEnterCritical") void kernel_enter_critical();
+    private extern(C) pragma(mangle, "vPortExitCritical") void kernel_exit_critical();
+
+    pragma(inline, true)
+    void vPortEnterCritical(portMUX_TYPE*) { kernel_enter_critical(); }
+
+    pragma(inline, true)
+    void vPortExitCritical(portMUX_TYPE*) { kernel_exit_critical(); }
+}
+else
+{
+    extern(C) BaseType_t xPortEnterCriticalTimeout(portMUX_TYPE* mux, BaseType_t timeout);
+    extern(C) void vPortExitCritical(portMUX_TYPE* mux);
+
+    pragma(inline, true)
+    void vPortEnterCritical(portMUX_TYPE* mux) { xPortEnterCriticalTimeout(mux, -1); }
 }
 
 pragma(inline, true)

@@ -28,6 +28,13 @@ else                enum bool has_eth_gigabit = false;
 
 enum bool has_eth_timestamp = num_ethernet > 0 && emac_v2;
 enum bool has_eth_pin_select = num_ethernet > 0 && emac_v2;
+// esp_eth runs the receive checksum engine on every part and discards what it fails
+enum bool has_eth_rx_checksum = num_ethernet > 0;
+// Insertion needs store-and-forward, so the whole frame has to fit the transmit FIFO.
+version (ESP32_P4)       enum size_t emac_tx_fifo = 256;
+else version (ESP32_S31) enum size_t emac_tx_fifo = 1024;
+else                     enum size_t emac_tx_fifo = 2048;
+enum bool has_eth_tx_checksum = num_ethernet > 0 && emac_tx_fifo >= eth_max_frame;
 
 
 static if (num_ethernet > 0):
@@ -52,9 +59,11 @@ bool eth_hw_open(uint port, ref const EthernetConfig cfg)
     c.promiscuous = cfg.promiscuous;
     c.flow_control = cfg.flow_control;
     c.timestamp = cfg.timestamp;
+    c.tx_checksum = cfg.tx_checksum;
 
     reset_queues();
     _timestamps = cfg.timestamp;
+    _tx_checksum = cfg.tx_checksum;
     if (ow_eth_open(&c, &eth_rx_trampoline, &eth_link_trampoline) != 0)
         return false;
     _opened = true;
@@ -74,9 +83,9 @@ bool eth_hw_close(uint port)
     return true;
 }
 
-bool eth_hw_tx(uint port, const(ubyte)[] frame)
+bool eth_hw_tx(uint port, const(ubyte)[] frame, bool insert_checksum)
 {
-    return is_active(port) && ow_eth_tx(frame.ptr, cast(uint)frame.length) == 0;
+    return is_active(port) && (_tx_checksum || !insert_checksum) && ow_eth_tx(frame.ptr, cast(uint)frame.length, insert_checksum) == 0;
 }
 
 bool eth_hw_get_hardware_address(uint port, ref ubyte[6] address)
@@ -195,6 +204,7 @@ struct ow_eth_config_t
     bool promiscuous;
     bool flow_control;
     bool timestamp;
+    bool tx_checksum;
 }
 
 // Each queued frame owns the heap buffer supplied by esp_eth.
@@ -219,6 +229,7 @@ shared uint _link_changed;
 __gshared bool _opened;
 __gshared bool _servicing;
 __gshared bool _timestamps;
+__gshared bool _tx_checksum;
 __gshared EthRxCallback _rx_cb;
 __gshared EthLinkCallback _link_cb;
 shared size_t _ready_cb_bits;
@@ -313,7 +324,7 @@ extern(C) nothrow @nogc
 {
     int ow_eth_open(const(ow_eth_config_t)* config, void function(ubyte*, uint, uint, uint, int) nothrow @nogc rx, void function(int) nothrow @nogc link);
     int ow_eth_close();
-    int ow_eth_tx(const(ubyte)* frame, uint length);
+    int ow_eth_tx(const(ubyte)* frame, uint length, bool insert_checksum);
     void ow_eth_free(void* buffer);
     int ow_eth_set_mac(const(ubyte)* mac);
     int ow_eth_set_promiscuous(bool enable);

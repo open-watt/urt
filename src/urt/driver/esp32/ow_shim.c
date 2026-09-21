@@ -1809,6 +1809,8 @@ void ow_wpan_disable(void) {}
 #ifdef OW_USE_ETHERNET
 #include "esp_eth.h"
 #include "esp_event.h"
+#include "hal/emac_hal.h"
+#include "hal/emac_ll.h"
 
 enum { OW_ETH_IF_DEFAULT, OW_ETH_IF_RMII, OW_ETH_IF_RGMII };
 enum { OW_ETH_CLK_DEFAULT, OW_ETH_CLK_EXTERNAL, OW_ETH_CLK_OUTPUT };
@@ -1829,6 +1831,7 @@ typedef struct
     bool promiscuous;
     bool flow_control;
     bool timestamp;
+    bool tx_checksum;
 } ow_eth_config_t;
 
 typedef void (*ow_eth_rx_cb_t)(uint8_t *buffer, uint32_t length, uint32_t seconds, uint32_t nanoseconds, int has_timestamp);
@@ -1840,6 +1843,7 @@ static esp_eth_phy_t *ow_eth_phy;
 static ow_eth_rx_cb_t ow_eth_rx_cb;
 static ow_eth_link_cb_t ow_eth_link_cb;
 static bool ow_eth_timestamps;
+static bool ow_eth_inserting_checksum;
 
 // The callee owns buffer and releases it through ow_eth_free.
 static esp_err_t ow_eth_input(esp_eth_handle_t handle, uint8_t *buffer, uint32_t length, void *priv, void *info)
@@ -2013,6 +2017,10 @@ int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t li
     ow_eth_rx_cb = rx;
     ow_eth_link_cb = link;
     ow_eth_timestamps = false;
+    ow_eth_inserting_checksum = false;
+    // The checksum engine only completes a frame it holds whole, and esp_eth runs the FIFO cut-through.
+    if (c->tx_checksum)
+        emac_ll_trans_store_forward_enable(&EMAC_DMA, true);
 
     bool promiscuous = c->promiscuous;
     bool flow_control = c->flow_control;
@@ -2038,8 +2046,16 @@ int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t li
     return 0;
 }
 
-int ow_eth_tx(const uint8_t *frame, uint32_t length)
+int ow_eth_tx(const uint8_t *frame, uint32_t length, bool insert_checksum)
 {
+    // esp_eth applies these descriptor bits to every frame until told otherwise, so flip them per frame:
+    // left on, the MAC would also rewrite the checksums of frames this port only bridges.
+    if (insert_checksum != ow_eth_inserting_checksum)
+    {
+        uint32_t bits = EMAC_HAL_TDES0_IP_CRC_INSERT_HDR_PAYLOAD_PSEUDO;
+        esp_eth_ioctl(ow_eth_handle, insert_checksum ? ETH_MAC_ESP_CMD_SET_TDES0_CFG_BITS : ETH_MAC_ESP_CMD_CLEAR_TDES0_CFG_BITS, &bits);
+        ow_eth_inserting_checksum = insert_checksum;
+    }
     return esp_eth_transmit(ow_eth_handle, (void *)frame, length) == ESP_OK ? 0 : -1;
 }
 

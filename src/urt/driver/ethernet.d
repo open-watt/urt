@@ -10,6 +10,8 @@ else
     enum bool has_eth_timestamp = false;
     enum bool has_eth_gigabit = false;
     enum bool has_eth_pin_select = false;
+    enum bool has_eth_rx_checksum = false;
+    enum bool has_eth_tx_checksum = false;
 }
 
 nothrow @nogc:
@@ -70,6 +72,7 @@ struct EthernetConfig
     bool promiscuous = true;
     bool flow_control;
     bool timestamp;     // hardware receive timestamps; needs has_eth_timestamp
+    bool tx_checksum;   // allow eth_tx to ask for checksum insertion; needs has_eth_tx_checksum
 }
 
 struct EthLinkInfo
@@ -129,6 +132,8 @@ Result eth_open(ref EthMac eth, ubyte port, ref const EthernetConfig cfg)
             return InternalResult.invalid_parameter;
         if (cfg.timestamp && !has_eth_timestamp)
             return InternalResult.unsupported;
+        if (cfg.tx_checksum && !has_eth_tx_checksum)
+            return InternalResult.unsupported;
         if (cfg.phy_interface == EthPhyInterface.rgmii && !has_eth_gigabit)
             return InternalResult.unsupported;
         if (!eth_hw_open(port, cfg))
@@ -152,8 +157,9 @@ Result eth_close(ref EthMac eth)
     return Result.success;
 }
 
-// The frame is copied into the MAC descriptors before this returns.
-Result eth_tx(ref EthMac eth, const(ubyte)[] frame)
+// The frame is copied before this returns. insert_checksum, refused unless opened with tx_checksum,
+// has the MAC fill in the IPv4 header checksum and a zeroed TCP or UDP checksum.
+Result eth_tx(ref EthMac eth, const(ubyte)[] frame, bool insert_checksum = false)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
@@ -161,7 +167,7 @@ Result eth_tx(ref EthMac eth, const(ubyte)[] frame)
     {
         if (frame.length < 14 || frame.length > eth_max_frame)
             return InternalResult.invalid_parameter;
-        return eth_hw_tx(eth.port, frame) ? Result.success : InternalResult.failed;
+        return eth_hw_tx(eth.port, frame, insert_checksum) ? Result.success : InternalResult.failed;
     }
 }
 

@@ -125,8 +125,14 @@ else ifeq ($(PLATFORM),esp32-c6)
     PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-p4)
-    # HP core: RV32IMAFC with Espressif PIE extensions, 400MHz.
+    # HP core: RV32IMAFC with Espressif PIE extensions, 360MHz.
     BUILDNAME := esp32-p4
+    PROCESSOR := esp32p4
+    OS = freertos
+else ifeq ($(PLATFORM),esp32-p4x)
+    # The P4 from revision v3.0, sold as the P4X: a different register map and different
+    # ISA extensions, but the same rv32imafc/ilp32f base the D side compiles for.
+    BUILDNAME := esp32-p4x
     PROCESSOR := esp32p4
     OS = freertos
 else ifeq ($(PLATFORM),bl808)
@@ -550,7 +556,9 @@ else ifeq ($(PLATFORM),esp32-c6)
     DFLAGS := $(DFLAGS) -d-version=ESP32_C6
 else ifeq ($(PLATFORM),esp32-h2)
     DFLAGS := $(DFLAGS) -d-version=ESP32_H2
-else ifeq ($(PLATFORM),esp32-p4)
+else ifneq ($(filter esp32-p4 esp32-p4x,$(PLATFORM)),)
+    # The revisions differ in register map and ISA extensions, not in anything the
+    # D side sees: it reaches the hardware through ESP-IDF and targets the base ISA.
     DFLAGS := $(DFLAGS) -d-version=ESP32_P4
 endif
 

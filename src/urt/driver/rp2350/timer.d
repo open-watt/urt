@@ -1,10 +1,3 @@
-// RP2350 timer driver
-//
-// Uses the ARM Cortex-M33 SysTick timer for the periodic main loop tick.
-// SysTick is a 24-bit down-counter clocked from the processor clock.
-//
-// RP2350 also has a 64-bit microsecond timer at 0x400B_0000 (TIMER0)
-// which can be used for wall-clock time -- not yet implemented here.
 module urt.driver.rp2350.timer;
 
 import core.volatile;
@@ -46,7 +39,7 @@ void timer_init(uint reload_value)
 
 void timer_hw_init()
 {
-    // TIMER0 is always running at 1MHz on RP2350 -- nothing to init.
+    // sys_init configures TIMER0 before runtime initialization.
 }
 
 // Read 64-bit monotonic microsecond counter.

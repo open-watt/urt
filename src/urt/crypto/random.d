@@ -45,6 +45,11 @@ Result crypto_random_bytes(ubyte[] dst)
         import urt.driver.bk7231.trng : trng_read;
         return trng_read(dst) ? Result.success : InternalResult.failed;
     }
+    else version (RP2350)
+    {
+        import urt.driver.rp2350.trng : trng_read;
+        return trng_read(dst) ? Result.success : InternalResult.failed;
+    }
     else
         return InternalResult.unsupported;
 }
@@ -57,4 +62,17 @@ private:
 version (Espressif)
 {
     extern(C) void esp_fill_random(void* buf, size_t len) nothrow @nogc;
+}
+
+
+unittest
+{
+    assert(crypto_random_bytes(null).succeeded);
+    ubyte[48] a = 0, b = 0;
+    const result = crypto_random_bytes(a);
+    if (result == InternalResult.unsupported)
+        return;
+    assert(result.succeeded);
+    assert(crypto_random_bytes(b).succeeded);
+    assert(a[] != b[]);
 }

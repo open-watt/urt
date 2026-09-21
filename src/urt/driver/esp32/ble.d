@@ -20,14 +20,15 @@ import urt.uuid : GUID;
 nothrow @nogc:
 
 
-version (ESP32)         enum uint num_ble = 1;
-else version (ESP32_S3) enum uint num_ble = 1;
-else version (ESP32_C2) enum uint num_ble = 1;
-else version (ESP32_C3) enum uint num_ble = 1;
-else version (ESP32_C5) enum uint num_ble = 1;
-else version (ESP32_C6) enum uint num_ble = 1;
-else version (ESP32_H2) enum uint num_ble = 1;
-else                    enum uint num_ble = 0; // S2, P4
+version (ESP32)          enum uint num_ble = 1;
+else version (ESP32_S3)  enum uint num_ble = 1;
+else version (ESP32_S31) enum uint num_ble = 1;
+else version (ESP32_C2)  enum uint num_ble = 1;
+else version (ESP32_C3)  enum uint num_ble = 1;
+else version (ESP32_C5)  enum uint num_ble = 1;
+else version (ESP32_C6)  enum uint num_ble = 1;
+else version (ESP32_H2)  enum uint num_ble = 1;
+else                     enum uint num_ble = 0; // S2, P4
 
 
 static if (num_ble > 0):

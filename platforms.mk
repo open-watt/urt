@@ -96,6 +96,11 @@ else ifeq ($(PLATFORM),esp32-s3)
     XTENSA_LLC_EXTRA_MATTR := +s32c1i
     XTENSA_LLC_EXTRA_FLAGS := --disable-tail-duplicate
     DFLAGS := $(DFLAGS) -d-version=SupportUnaligned
+else ifeq ($(PLATFORM),esp32-s31)
+    # Dual-core RV32IMAFC, 300MHz -- FPU, atomics
+    BUILDNAME := esp32-s31
+    PROCESSOR := e907
+    OS = freertos
 else ifeq ($(PLATFORM),esp32-h2)
     BUILDNAME := esp32-h2
     PROCESSOR := e906
@@ -532,6 +537,8 @@ else ifeq ($(PLATFORM),esp32-s2)
     DFLAGS := $(DFLAGS) -d-version=ESP32_S2
 else ifeq ($(PLATFORM),esp32-s3)
     DFLAGS := $(DFLAGS) -d-version=ESP32_S3
+else ifeq ($(PLATFORM),esp32-s31)
+    DFLAGS := $(DFLAGS) -d-version=ESP32_S31
 else ifeq ($(PLATFORM),esp32-c2)
     DFLAGS := $(DFLAGS) -d-version=ESP32_C2
 else ifeq ($(PLATFORM),esp32-c3)

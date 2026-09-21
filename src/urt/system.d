@@ -107,6 +107,10 @@ struct SystemInfo
 
 SystemInfo get_sysinfo()
 {
+    version (Windows) enum hosted = true;
+    else version (Posix) enum hosted = true;
+    else enum hosted = false;
+
     SystemInfo r;
     r.os_name = Platform;
     r.processor = ProcessorName;
@@ -182,7 +186,6 @@ SystemInfo get_sysinfo()
             r.pools[1].largest_free = heap_caps_get_largest_free_block(slow_memory_caps);
         }
 
-        r.uptime = get_app_time();
     }
     else version (Beken)
     {
@@ -206,7 +209,6 @@ SystemInfo get_sysinfo()
             r.pools[1].largest_free = largest;
         }
 
-        r.uptime = get_app_time();
     }
     else version (Bouffalo)
     {
@@ -223,8 +225,11 @@ SystemInfo get_sysinfo()
             r.pools[i].peak_used = s.peak_used;
             r.pools[i].largest_free = s.largest_free;
         }
-        r.uptime = get_app_time();
     }
+
+    static if (!hosted)
+        r.uptime = get_app_time();
+
     return r;
 }
 

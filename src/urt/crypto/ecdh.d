@@ -15,6 +15,11 @@ else version (Windows)
     private enum wstring BCRYPT_KDF_RAW_SECRET = "TRUNCATE"w;
 }
 
+
+// no software fallback: bare metal has no AES/ECDH at all
+version (MbedTLS) version = HasCryptoBackend;
+else version (Windows) version = HasCryptoBackend;
+
 nothrow @nogc:
 
 
@@ -113,6 +118,7 @@ Result ecdh_p256_compute_shared(const(ubyte)[] priv_d,
 }
 
 
+version (HasCryptoBackend)
 unittest
 {
     // RFC 5903 Section 8.1 (IKE Group 19, P-256) ECDH test vector

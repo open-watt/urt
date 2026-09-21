@@ -31,17 +31,14 @@ extern(C) extern __gshared char _stack_low;
 
 
 // --- Shared fp-chain walker -------------------------------------------
-//
-// RV64 / AArch64 / ARM-AAPCS all share the same prologue layout when
-// -frame-pointer=all is in effect:
-//   fp[-1] = saved return address
-//   fp[-2] = saved previous frame pointer
-// (indices in machine-word units; RV64 uses fp-8 / fp-16 in bytes).
-//
-// On 32-bit ARM AAPCS the layout is fp[0] = prev fp, fp[+1] = saved lr
-// for Thumb prologues - we don't currently target that combo, so stick
-// to the standard layout for now.
-//
+
+// RV32/RV64/AArch64 aim fp above the saved pair; 32-bit ARM aims it at the
+// saved-fp slot itself (push {.., r7, lr}; add r7, sp, #N).
+version (ARM)
+    private enum int fp_ra = 1, fp_prev = 0;
+else
+    private enum int fp_ra = -1, fp_prev = -2;
+
 /// Walk the frame-pointer chain starting at `fp`, writing return addresses
 /// into `out_addrs`. Returns the number of frames captured.
 size_t walk_fp_chain(size_t fp, void*[] out_addrs) @trusted
@@ -52,14 +49,19 @@ size_t walk_fp_chain(size_t fp, void*[] out_addrs) @trusted
     const stack_hi = cast(size_t) &_stack_top;
     const stack_lo = cast(size_t) &_stack_low;
 
+    enum reach_lo = (fp_prev < fp_ra ? fp_prev : fp_ra) * ptrdiff_t(size_t.sizeof);
+    enum reach_hi = ((fp_prev > fp_ra ? fp_prev : fp_ra) + 1) * ptrdiff_t(size_t.sizeof);
+
     size_t n = 0;
     while (n < out_addrs.length)
     {
-        if (fp < stack_lo || fp >= stack_hi || (fp & (size_t.sizeof - 1)) != 0)
+        const access_lo = fp + reach_lo;
+        const access_hi = fp + reach_hi;
+        if (access_lo < stack_lo || access_hi > stack_hi || access_lo > access_hi || (fp & (size_t.sizeof - 1)) != 0)
             break;
 
-        const ret_addr = *cast(size_t*)(fp - size_t.sizeof);
-        const prev_fp  = *cast(size_t*)(fp - 2 * size_t.sizeof);
+        const ret_addr = (cast(size_t*)fp)[fp_ra];
+        const prev_fp  = (cast(size_t*)fp)[fp_prev];
 
         if (ret_addr == 0)
             break;
@@ -85,6 +87,8 @@ private size_t read_fp() @trusted
         asm nothrow @nogc @trusted { "mv %0, s0" : "=r"(fp); }
     else version (AArch64)
         asm nothrow @nogc @trusted { "mov %0, x29" : "=r"(fp); }
+    else version (ARM_Thumb)
+        asm nothrow @nogc @trusted { "mov %0, r7" : "=r"(fp); }
     else version (ARM)
         asm nothrow @nogc @trusted { "mov %0, r11" : "=r"(fp); }
     else version (Xtensa)

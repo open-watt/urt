@@ -594,6 +594,15 @@ endif
 ifeq ($(USE_SPIFFS),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseSpiffs
 endif
+
+# An EMAC is only a network port where a board wires a PHY to it, so the driver is a
+# board decision, never a chip default. One switch feeds both the D driver and the C shim.
+ifeq ($(USE_ETHERNET),)
+    USE_ETHERNET := 0
+endif
+ifeq ($(USE_ETHERNET),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseEthernet
+endif
 ifeq ($(USE_LITTLEFS),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseLittleFS
 endif

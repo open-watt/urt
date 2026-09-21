@@ -102,8 +102,9 @@ else ifeq ($(PLATFORM),esp32-s31)
     PROCESSOR := e907
     OS = freertos
 else ifeq ($(PLATFORM),esp32-h2)
+    # RV32IMAC, 96MHz -- has atomics
     BUILDNAME := esp32-h2
-    PROCESSOR := e906
+    PROCESSOR := esp32c6
     OS = freertos
 else ifeq ($(PLATFORM),esp32-c2)
     BUILDNAME := esp32-c2

@@ -159,11 +159,10 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = default_alignment
     {
         // Fallback path uses nested alloc/free, which are already hooked.
         void[] new_mem = alloc(new_size, alignment, flags);
-        if (new_mem.ptr !is null)
-        {
-            size_t copy = min(mem.length, new_size);
-            new_mem[0 .. copy] = mem[0 .. copy];
-        }
+        if (new_mem.ptr is null)
+            return null;
+        size_t copy = min(mem.length, new_size);
+        new_mem[0 .. copy] = mem[0 .. copy];
         free(mem);
         return new_mem;
     }

@@ -699,7 +699,7 @@ int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned at
     (void)default_reference_mv;
     *calibration_source = 0;
 #endif
-#else
+#elif ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     // curve fitting only exists with factory efuse data; without it the input still reads raw
     (void)default_reference_mv;
     adc_cali_curve_fitting_config_t calibration_config = {
@@ -710,6 +710,8 @@ int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned at
     };
     if (adc_cali_create_scheme_curve_fitting(&calibration_config, (adc_cali_handle_t *)calibration) == ESP_OK)
         *calibration_source = 0;
+#else
+    (void)default_reference_mv;
 #endif
     return 0;
 }
@@ -766,7 +768,7 @@ void ow_adc_input_close(void *calibration)
         return;
 #if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
     adc_cali_delete_scheme_line_fitting((adc_cali_handle_t)calibration);
-#else
+#elif ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     adc_cali_delete_scheme_curve_fitting((adc_cali_handle_t)calibration);
 #endif
 }

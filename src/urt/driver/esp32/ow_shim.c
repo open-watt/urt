@@ -25,6 +25,14 @@
 void esp_rom_uart_putc(char c) { esp_rom_output_tx_one_char(c); }
 #endif
 
+// IDF's xTaskCreate is a static inline, and the affinity constant it passes is
+// 0x7FFFFFFF on IDF's kernel but -1 on the SMP one, so D cannot spell it.
+
+BaseType_t ow_task_create(TaskFunction_t code, const char *name, uint32_t stack_depth, void *params, UBaseType_t priority, TaskHandle_t *task)
+{
+    return xTaskCreate(code, name, stack_depth, params, priority, task);
+}
+
 // -- errno accessor (picolibc uses _Thread_local errno, incompatible with emulated-TLS) --
 
 #include <errno.h>

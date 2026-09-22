@@ -71,12 +71,20 @@ else version (BK7231)   alias critical = Attrs!(section(".ramfunc"), no_tables);
 else version (RP2350)   alias critical = Attrs!(section(".ramfunc"), no_tables);
 else                    enum critical;
 
-// @persist - data that survives deep sleep / hibernate.
-// Not initialized at startup - the whole point is retaining prior values.
-// Only available on platforms with RTC or hibernate-capable memory.
-version (Espressif)     enum persist = section(".rtc_noinit");
-else version (BL808)    enum persist = section(".hbn_ram");
+// @persist - data that survives a reset (and deep sleep / hibernate where the part has
+// retained memory). Not initialized at startup - the whole point is retaining prior values.
+version (ESP32_C2)      enum persist = section(".noinit");      // no RTC memory: survives a reset, not deep sleep
+else version (Espressif) enum persist = section(".rtc_noinit");
+else version (Bouffalo) enum persist = section(".hbn_ram");
+else version (RP2350)   enum persist = section(".persist");
+else version (Beken)    enum persist = section(".persist");
 else                    enum persist;
+
+version (Espressif)     enum bool has_persist = true;
+else version (Bouffalo) enum bool has_persist = true;
+else version (RP2350)   enum bool has_persist = true;
+else version (Beken)    enum bool has_persist = true;
+else                    enum bool has_persist = false;
 
 // @fast_data - data in the fastest available RAM (TCM/DTCM/SRAM).
 // Use sparingly: these regions are small and shared with stack/GOT.

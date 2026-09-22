@@ -113,9 +113,17 @@ SECTIONS
         __bss_end__ = .;
     } > SRAM
 
+    /* @persist: never zeroed or loaded; prior contents survive a reset. */
+    .persist (NOLOAD) : ALIGN(8)
+    {
+        *(.persist .persist.*)
+        . = ALIGN(8);
+        _persist_end = .;
+    } > SRAM
+
     _stack_size = 4K;
 
-    __heap_start = _bss_end;
+    __heap_start = _persist_end;
     __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - _stack_size;
 
     _stack_top = ORIGIN(SRAM) + LENGTH(SRAM);

@@ -46,7 +46,12 @@ extern(C) void* _sbrk(int incr) @nogc nothrow
     return prev;
 }
 
-extern(C) void _exit(int code) @nogc nothrow { while (true) {} }
+extern(C) void _exit(int code) @nogc nothrow
+{
+    import urt.driver.reset : ResetMark, reset_record_mark, system_reset;
+    reset_record_mark(ResetMark.crashed);
+    system_reset();
+}
 extern(C) int _kill(int pid, int sig) @nogc nothrow { return -1; }
 extern(C) int _getpid() @nogc nothrow { return 1; }
 

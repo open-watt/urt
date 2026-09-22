@@ -39,7 +39,12 @@ extern(C) int _close(int) { return -1; }
 extern(C) int _lseek(int, int, int) { return 0; }
 extern(C) int _fstat(int, void*) { return 0; }
 extern(C) int _isatty(int) { return 1; }
-extern(C) void _exit(int) { while (true) {} }
+extern(C) void _exit(int)
+{
+    import urt.driver.reset : ResetMark, reset_record_mark, system_reset;
+    reset_record_mark(ResetMark.crashed);
+    system_reset();
+}
 extern(C) int _kill(int, int) { return -1; }
 extern(C) int _getpid() { return 1; }
 

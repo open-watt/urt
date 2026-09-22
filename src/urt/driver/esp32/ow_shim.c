@@ -1801,6 +1801,318 @@ int ow_wpan_enable(ow_wpan_rx_cb_t rx, ow_wpan_tx_cb_t tx) { (void)rx; (void)tx;
 void ow_wpan_disable(void) {}
 #endif // CONFIG_IEEE802154_ENABLED
 
+// -- Ethernet (EMAC) wrappers --
+//
+// eth_esp32_emac_config_t has target-conditional members and a per-target default
+// initialiser, so the struct is assembled here and D passes ow_eth_config_t.
+
+#ifdef OW_USE_ETHERNET
+#include "esp_eth.h"
+#include "esp_event.h"
+
+enum { OW_ETH_IF_DEFAULT, OW_ETH_IF_RMII, OW_ETH_IF_RGMII };
+enum { OW_ETH_CLK_DEFAULT, OW_ETH_CLK_EXTERNAL, OW_ETH_CLK_OUTPUT };
+enum { OW_ETH_PHY_GENERIC, OW_ETH_PHY_YT8531 };
+
+typedef struct
+{
+    uint8_t phy;
+    int8_t phy_addr;
+    int8_t mdc_gpio;
+    int8_t mdio_gpio;
+    int8_t phy_reset_gpio;
+    uint8_t phy_interface;
+    uint8_t clock_mode;
+    int8_t clock_gpio;
+    int8_t clock_loopback_gpio;
+    int8_t data_gpio[12];
+    bool promiscuous;
+    bool flow_control;
+    bool timestamp;
+} ow_eth_config_t;
+
+typedef void (*ow_eth_rx_cb_t)(uint8_t *buffer, uint32_t length, uint32_t seconds, uint32_t nanoseconds, int has_timestamp);
+typedef void (*ow_eth_link_cb_t)(int up);
+
+static esp_eth_handle_t ow_eth_handle;
+static esp_eth_mac_t *ow_eth_mac;
+static esp_eth_phy_t *ow_eth_phy;
+static ow_eth_rx_cb_t ow_eth_rx_cb;
+static ow_eth_link_cb_t ow_eth_link_cb;
+static bool ow_eth_timestamps;
+
+// The callee owns buffer and releases it through ow_eth_free.
+static esp_err_t ow_eth_input(esp_eth_handle_t handle, uint8_t *buffer, uint32_t length, void *priv, void *info)
+{
+    eth_mac_time_t *ts = ow_eth_timestamps ? (eth_mac_time_t *)info : NULL;
+    if (ow_eth_rx_cb)
+        ow_eth_rx_cb(buffer, length, ts ? ts->seconds : 0, ts ? ts->nanoseconds : 0, ts != NULL);
+    else
+        free(buffer);
+    return ESP_OK;
+}
+
+static void ow_eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (!ow_eth_link_cb)
+        return;
+    if (id == ETHERNET_EVENT_CONNECTED)
+        ow_eth_link_cb(1);
+    else if (id == ETHERNET_EVENT_DISCONNECTED || id == ETHERNET_EVENT_STOP)
+        ow_eth_link_cb(0);
+}
+
+static bool ow_eth_pins_given(const int8_t *pins, int count)
+{
+    for (int i = 0; i < count; ++i)
+        if (pins[i] < 0)
+            return false;
+    return true;
+}
+
+static bool ow_eth_phy_ext_update(uint32_t ext_reg, uint32_t clear, uint32_t set)
+{
+    uint32_t value = ext_reg;
+    esp_eth_phy_reg_rw_data_t reg = { .reg_addr = 0x1E, .reg_value_p = &value };
+    if (esp_eth_ioctl(ow_eth_handle, ETH_CMD_WRITE_PHY_REG, &reg) != ESP_OK)
+        return false;
+    reg.reg_addr = 0x1F;
+    if (esp_eth_ioctl(ow_eth_handle, ETH_CMD_READ_PHY_REG, &reg) != ESP_OK)
+        return false;
+    value = (value & ~clear) | set;
+    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_WRITE_PHY_REG, &reg) == ESP_OK;
+}
+
+// The YT8531 comes out of hardware reset with autonegotiation off, which its datasheet does
+// not say, and RGMII needs ~2ns on both clocks: rxc_dly_en, and 13 x 150ps on each tx_delay_sel.
+static bool ow_eth_phy_yt8531_init(void)
+{
+    bool autonegotiate = true;
+    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_AUTONEGO, &autonegotiate) == ESP_OK &&
+           ow_eth_phy_ext_update(0xA001, 0, 1u << 8) &&
+           ow_eth_phy_ext_update(0xA003, 0xFF, (13u << 4) | 13u);
+}
+
+int ow_eth_close(void)
+{
+    if (ow_eth_handle)
+    {
+        esp_eth_stop(ow_eth_handle);
+        esp_event_handler_unregister(ETH_EVENT, ESP_EVENT_ANY_ID, &ow_eth_event);
+        if (esp_eth_driver_uninstall(ow_eth_handle) != ESP_OK)
+            return -1;
+        ow_eth_handle = NULL;
+    }
+    if (ow_eth_phy)
+        ow_eth_phy->del(ow_eth_phy);
+    if (ow_eth_mac)
+        ow_eth_mac->del(ow_eth_mac);
+    ow_eth_phy = NULL;
+    ow_eth_mac = NULL;
+    ow_eth_rx_cb = NULL;
+    ow_eth_link_cb = NULL;
+    return 0;
+}
+
+int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t link)
+{
+    // A failed initialization may still own a driver.
+    if (ow_eth_handle && ow_eth_close() != 0)
+        return -1;
+
+    eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+    eth_esp32_emac_config_t emac = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+    eth_data_interface_t default_interface = emac.interface;
+
+    if (c->mdc_gpio >= 0)
+        emac.smi_gpio.mdc_num = c->mdc_gpio;
+    if (c->mdio_gpio >= 0)
+        emac.smi_gpio.mdio_num = c->mdio_gpio;
+
+    if (c->phy_interface == OW_ETH_IF_RMII)
+        emac.interface = EMAC_DATA_INTERFACE_RMII;
+#if SOC_EMAC_SUPPORT_1000M
+    else if (c->phy_interface == OW_ETH_IF_RGMII)
+        emac.interface = EMAC_DATA_INTERFACE_RGMII;
+#endif
+    else if (c->phy_interface != OW_ETH_IF_DEFAULT)
+        return -1;
+
+    // The default initialiser only describes the default interface, so moving off it
+    // leaves no pins to fall back on and every one must be given.
+    bool moved = emac.interface != default_interface;
+
+    if (emac.interface == EMAC_DATA_INTERFACE_RMII)
+    {
+        if (moved && (c->clock_mode == OW_ETH_CLK_DEFAULT || c->clock_gpio < 0))
+            return -1;
+        if (c->clock_mode == OW_ETH_CLK_EXTERNAL)
+            emac.clock_config.rmii.clock_mode = EMAC_CLK_EXT_IN;
+        else if (c->clock_mode == OW_ETH_CLK_OUTPUT)
+            emac.clock_config.rmii.clock_mode = EMAC_CLK_OUT;
+        if (c->clock_gpio >= 0)
+            emac.clock_config.rmii.clock_gpio = c->clock_gpio;
+#if !SOC_EMAC_RMII_CLK_OUT_INTERNAL_LOOPBACK
+        // no internal loopback: an output clock comes back in on a second pad
+        if (emac.clock_config.rmii.clock_mode == EMAC_CLK_OUT)
+        {
+            if (c->clock_loopback_gpio < 0)
+                return -1;
+            emac.clock_config_out_in.rmii.clock_mode = EMAC_CLK_EXT_IN;
+            emac.clock_config_out_in.rmii.clock_gpio = c->clock_loopback_gpio;
+        }
+#endif
+#if SOC_EMAC_USE_MULTI_IO_MUX
+        if (moved && !ow_eth_pins_given(c->data_gpio, 6))
+            return -1;
+        eth_mac_rmii_gpio_config_t *p = &emac.emac_dataif_gpio.rmii;
+        int *pins[6] = { &p->tx_en_num, &p->txd0_num, &p->txd1_num, &p->crs_dv_num, &p->rxd0_num, &p->rxd1_num };
+        for (int i = 0; i < 6; ++i)
+            if (c->data_gpio[i] >= 0)
+                *pins[i] = c->data_gpio[i];
+#endif
+    }
+#if SOC_EMAC_SUPPORT_1000M
+    else if (emac.interface == EMAC_DATA_INTERFACE_RGMII)
+    {
+        if (moved && !ow_eth_pins_given(c->data_gpio, 12))
+            return -1;
+        eth_mac_rgmii_gpio_config_t *p = &emac.emac_dataif_gpio.rgmii;
+        int *pins[12] = { &p->tx_ctl_num, &p->txd0_num, &p->txd1_num, &p->txd2_num, &p->txd3_num,
+                          &p->rx_ctl_num, &p->rxd0_num, &p->rxd1_num, &p->rxd2_num, &p->rxd3_num,
+                          &emac.clock_config.rgmii.clock_rx_gpio, &emac.clock_config.rgmii.clock_tx_gpio };
+        for (int i = 0; i < 12; ++i)
+            if (c->data_gpio[i] >= 0)
+                *pins[i] = c->data_gpio[i];
+    }
+#endif
+
+    eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+    phy_config.phy_addr = c->phy_addr;
+    phy_config.reset_gpio_num = c->phy_reset_gpio;
+    // esp_eth_start otherwise blocks its caller polling for negotiation, 4s with no cable;
+    // the link check finds the result whenever the link arrives.
+    phy_config.autonego_timeout_ms = 0;
+
+    ow_eth_mac = esp_eth_mac_new_esp32(&emac, &mac_config);
+    ow_eth_phy = esp_eth_phy_new_generic(&phy_config);
+    if (!ow_eth_mac || !ow_eth_phy)
+    {
+        ow_eth_close();
+        return -1;
+    }
+
+    esp_eth_config_t config = ETH_DEFAULT_CONFIG(ow_eth_mac, ow_eth_phy);
+    if (esp_eth_driver_install(&config, &ow_eth_handle) != ESP_OK)
+    {
+        ow_eth_handle = NULL;
+        ow_eth_close();
+        return -1;
+    }
+
+    ow_eth_rx_cb = rx;
+    ow_eth_link_cb = link;
+    ow_eth_timestamps = false;
+
+    bool promiscuous = c->promiscuous;
+    bool flow_control = c->flow_control;
+    bool ok = esp_eth_update_input_path_info(ow_eth_handle, &ow_eth_input, NULL) == ESP_OK &&
+              esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &ow_eth_event, NULL) == ESP_OK &&
+              esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_PROMISCUOUS, &promiscuous) == ESP_OK &&
+              esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_FLOW_CTRL, &flow_control) == ESP_OK;
+    if (ok && c->phy == OW_ETH_PHY_YT8531)
+        ok = ow_eth_phy_yt8531_init();
+#ifdef SOC_EMAC_IEEE1588V2_SUPPORTED
+    if (ok && c->timestamp)
+    {
+        eth_mac_ptp_config_t ptp = ETH_MAC_ESP_PTP_DEFAULT_CONFIG();
+        ok = esp_eth_mac_ptp_enable(ow_eth_mac, &ptp) == ESP_OK;
+        ow_eth_timestamps = ok;
+    }
+#endif
+    if (!ok || esp_eth_start(ow_eth_handle) != ESP_OK)
+    {
+        ow_eth_close();
+        return -1;
+    }
+    return 0;
+}
+
+int ow_eth_tx(const uint8_t *frame, uint32_t length)
+{
+    return esp_eth_transmit(ow_eth_handle, (void *)frame, length) == ESP_OK ? 0 : -1;
+}
+
+void ow_eth_free(void *buffer)
+{
+    free(buffer);
+}
+
+int ow_eth_set_mac(const uint8_t *mac)
+{
+    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_MAC_ADDR, (void *)mac) == ESP_OK ? 0 : -1;
+}
+
+int ow_eth_set_promiscuous(bool enable)
+{
+    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_PROMISCUOUS, &enable) == ESP_OK ? 0 : -1;
+}
+
+int ow_eth_get_link(int *speed, int *full_duplex)
+{
+    eth_speed_t s;
+    eth_duplex_t d;
+    if (esp_eth_ioctl(ow_eth_handle, ETH_CMD_G_SPEED, &s) != ESP_OK || esp_eth_ioctl(ow_eth_handle, ETH_CMD_G_DUPLEX_MODE, &d) != ESP_OK)
+        return -1;
+    *speed = s == ETH_SPEED_10M ? 0 : s == ETH_SPEED_100M ? 1 : 2;
+    *full_duplex = d == ETH_DUPLEX_FULL;
+    return 0;
+}
+
+// The driver refuses link-mode changes while started.
+int ow_eth_set_link_mode(bool autonegotiate, int speed, bool full_duplex)
+{
+    eth_speed_t s = speed == 0 ? ETH_SPEED_10M : speed == 1 ? ETH_SPEED_100M :
+#if SOC_EMAC_SUPPORT_1000M
+                    ETH_SPEED_1000M;
+#else
+                    ETH_SPEED_100M;
+#endif
+    eth_duplex_t d = full_duplex ? ETH_DUPLEX_FULL : ETH_DUPLEX_HALF;
+
+    if (esp_eth_stop(ow_eth_handle) != ESP_OK)
+        return -1;
+    bool ok = esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_AUTONEGO, &autonegotiate) == ESP_OK;
+    if (ok && !autonegotiate)
+        ok = esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_SPEED, &s) == ESP_OK && esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_DUPLEX_MODE, &d) == ESP_OK;
+    return esp_eth_start(ow_eth_handle) == ESP_OK && ok ? 0 : -1;
+}
+
+#ifdef SOC_EMAC_IEEE1588V2_SUPPORTED
+int ow_eth_get_time(uint32_t *seconds, uint32_t *nanoseconds)
+{
+    eth_mac_time_t t;
+    if (esp_eth_mac_get_ptp_time(ow_eth_mac, &t) != ESP_OK)
+        return -1;
+    *seconds = t.seconds;
+    *nanoseconds = t.nanoseconds;
+    return 0;
+}
+
+int ow_eth_set_time(uint32_t seconds, uint32_t nanoseconds)
+{
+    eth_mac_time_t t = { .seconds = seconds, .nanoseconds = nanoseconds };
+    return esp_eth_mac_set_ptp_time(ow_eth_mac, &t) == ESP_OK ? 0 : -1;
+}
+
+int ow_eth_adjust_frequency(int32_t ppb)
+{
+    return esp_eth_mac_adj_ptp_freq_ppb(ow_eth_mac, ppb) == ESP_OK ? 0 : -1;
+}
+#endif
+
+#endif // OW_USE_ETHERNET
+
 // -- BLE (NimBLE) wrappers --
 
 #if CONFIG_BT_ENABLED && CONFIG_BT_NIMBLE_ENABLED

@@ -10,7 +10,6 @@ else
     enum bool has_eth_timestamp = false;
     enum bool has_eth_gigabit = false;
     enum bool has_eth_pin_select = false;
-    enum bool has_eth_rx_checksum = false;
     enum bool has_eth_tx_checksum = false;
 }
 
@@ -91,6 +90,7 @@ struct EthRxInfo
 {
     EthTime timestamp;  // when the SFD crossed the MAC, on the MAC clock
     bool has_timestamp;
+    bool checksum_verified; // the MAC checked the IP header and TCP or UDP checksum of this frame
 }
 
 // Delivered by eth_service() for each received frame. Frame starts at the
@@ -157,8 +157,7 @@ Result eth_close(ref EthMac eth)
     return Result.success;
 }
 
-// The frame is copied before this returns. insert_checksum, refused unless opened with tx_checksum,
-// has the MAC fill in the IPv4 header checksum and a zeroed TCP or UDP checksum.
+// The frame is copied before return; checksum insertion requires a zeroed TCP or UDP checksum field.
 Result eth_tx(ref EthMac eth, const(ubyte)[] frame, bool insert_checksum = false)
 {
     static if (num_ethernet == 0)
@@ -169,6 +168,15 @@ Result eth_tx(ref EthMac eth, const(ubyte)[] frame, bool insert_checksum = false
             return InternalResult.invalid_parameter;
         return eth_hw_tx(eth.port, frame, insert_checksum) ? Result.success : InternalResult.failed;
     }
+}
+
+// Requires a valid frame; checks hardware layout support, not protocol validity.
+bool eth_checksum_insertable(ref const EthMac eth, const(ubyte)[] frame)
+{
+    static if (num_ethernet == 0)
+        return false;
+    else
+        return eth_hw_checksum_insertable(eth.port, frame);
 }
 
 // The factory address; needs no open MAC.

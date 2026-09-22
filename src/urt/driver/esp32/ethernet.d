@@ -28,8 +28,6 @@ else                enum bool has_eth_gigabit = false;
 
 enum bool has_eth_timestamp = num_ethernet > 0 && emac_v2;
 enum bool has_eth_pin_select = num_ethernet > 0 && emac_v2;
-// esp_eth runs the receive checksum engine on every part and discards what it fails
-enum bool has_eth_rx_checksum = num_ethernet > 0;
 // Insertion needs store-and-forward, so the whole frame has to fit the transmit FIFO.
 version (ESP32_P4)       enum size_t emac_tx_fifo = 256;
 else version (ESP32_S31) enum size_t emac_tx_fifo = 1024;
@@ -84,9 +82,10 @@ bool eth_hw_close(uint port)
 }
 
 bool eth_hw_tx(uint port, const(ubyte)[] frame, bool insert_checksum)
-{
-    return is_active(port) && (_tx_checksum || !insert_checksum) && ow_eth_tx(frame.ptr, cast(uint)frame.length, insert_checksum) == 0;
-}
+    => (insert_checksum ? eth_hw_checksum_insertable(port, frame) : is_active(port)) && ow_eth_tx(frame.ptr, cast(uint)frame.length, insert_checksum) == 0;
+
+bool eth_hw_checksum_insertable(uint port, const(ubyte)[] frame)
+    => is_active(port) && _tx_checksum && engine_checksums(frame);
 
 bool eth_hw_get_hardware_address(uint port, ref ubyte[6] address)
 {
@@ -240,6 +239,18 @@ bool is_active(uint port)
     return port < num_ethernet && _opened;
 }
 
+// IDF hides descriptor checksum status; only classify layouts its engine covers.
+bool engine_checksums(const(ubyte)[] frame) pure
+{
+    size_t at = frame.length >= 18 && frame[12] == 0x81 && frame[13] == 0x00 ? 16 : 12;
+    if (frame.length < at + 2)
+        return false;
+    const(ubyte)[] ip = frame[at + 2 .. $];
+    if (frame[at] == 0x08 && frame[at + 1] == 0x00)
+        return ip.length >= 20 && ip[0] == 0x45 && ((ip[6] & 0x3F) | ip[7]) == 0 && (ip[9] == 6 || ip[9] == 17);
+    return frame[at] == 0x86 && frame[at + 1] == 0xDD && ip.length >= 40 && ip[0] >> 4 == 6 && (ip[6] == 6 || ip[6] == 17);
+}
+
 // Only called with the MAC stopped, so no producer races the drain.
 void reset_queues()
 {
@@ -285,8 +296,9 @@ bool dispatch_one_rx(EthMac eth)
     atomicStore!(MemoryOrder.release)(_rx_tail, tail + 1);
     if (_rx_cb !is null)
     {
-        EthRxInfo info = EthRxInfo(frame.timestamp, frame.has_timestamp);
-        _rx_cb(eth, frame.buffer[0 .. frame.length], info);
+        const(ubyte)[] data = frame.buffer[0 .. frame.length];
+        EthRxInfo info = EthRxInfo(frame.timestamp, frame.has_timestamp, engine_checksums(data));
+        _rx_cb(eth, data, info);
     }
     ow_eth_free(frame.buffer);
     return true;
@@ -335,4 +347,49 @@ extern(C) nothrow @nogc
     int ow_eth_adjust_frequency(int ppb);
 
     int esp_read_mac(ubyte* mac, int type);
+}
+
+unittest
+{
+    ubyte[74] frame;
+    frame[12] = 0x08;
+    frame[14] = 0x45;
+    frame[23] = 17;
+    assert(engine_checksums(frame[]));
+    frame[20] = 0x20;
+    assert(!engine_checksums(frame[]));
+    frame[20] = 0;
+    frame[14] = 0x46;
+    assert(!engine_checksums(frame[]));
+
+    frame[] = 0;
+    frame[12] = 0x86;
+    frame[13] = 0xDD;
+    frame[14] = 0x60;
+    frame[20] = 17;
+    assert(engine_checksums(frame[]));
+    frame[14] = 0x40;
+    assert(!engine_checksums(frame[]));
+    frame[14] = 0x60;
+    frame[20] = 0;
+    assert(!engine_checksums(frame[]));
+    frame[20] = 17;
+    foreach (length; 0 .. 54)
+        assert(!engine_checksums(frame[0 .. length]));
+
+    for (size_t i = 62; i-- > 14; )
+        frame[i + 4] = frame[i];
+    frame[12] = 0x81;
+    frame[13] = 0x00;
+    frame[16] = 0x86;
+    frame[17] = 0xDD;
+    assert(engine_checksums(frame[]));
+    frame[12] = 0x88;
+    frame[13] = 0xA8;
+    assert(!engine_checksums(frame[]));
+    frame[12] = 0x81;
+    frame[13] = 0;
+    frame[16] = 0x81;
+    frame[17] = 0;
+    assert(!engine_checksums(frame[]));
 }

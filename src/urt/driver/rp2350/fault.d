@@ -1,5 +1,6 @@
 module urt.driver.rp2350.fault;
 
+import urt.driver.reset : ResetMark, reset_record_mark, system_reset;
 import urt.driver.rp2350.uart : uart0_hw_puts;
 
 nothrow @nogc:
@@ -7,6 +8,7 @@ nothrow @nogc:
 // Runs in fault context: no allocations or managed logging.
 extern(C) void fault_report(uint vector, const(uint)* frame)
 {
+    reset_record_mark(ResetMark.crashed);
     static immutable string[16] names = [
         "?", "reset", "NMI", "hard fault", "MemManage", "BusFault", "UsageFault",
         "SecureFault", "?", "?", "?", "SVCall", "DebugMon", "?", "PendSV", "SysTick",
@@ -24,10 +26,9 @@ extern(C) void fault_report(uint vector, const(uint)* frame)
     put_reg(" bfar=", volatile_load(0xE000ED38));
     put_reg(" sp=", cast(uint)frame);
     uart0_hw_puts(" ***\r\n");
-
-    for (;;)
-    {}
+    system_reset();
 }
+
 
 private:
 

@@ -70,6 +70,8 @@ public:
 ///  [17]=s2..[26]=s11 [27]=t3..[30]=t6
 extern(C) void _crash_handler(size_t* regs, size_t mcause, size_t mepc, size_t mtval) @nogc nothrow
 {
+    import urt.driver.reset : ResetMark, reset_record_mark;
+    reset_record_mark(ResetMark.crashed);
     uart0_print("\n\n*** CRASH ***\nException: ");
 
     size_t cause = mcause & (size_t.max >> 1);

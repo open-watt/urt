@@ -152,12 +152,28 @@ else
     }
 }
 
-// Access persistent state in battery-retained RAM.
+// The epoch the RTC counter is measured from, in retained memory beside the counter itself.
 static if (has_rtc)
 {
-    HbnPersist* persistent_state()
+    version (Bouffalo)
     {
-        return hbn_persist();
+        alias RtcPersist = HbnPersist;
+        RtcPersist* persistent_state() => hbn_persist();
+    }
+    else
+    {
+        struct RtcPersist
+        {
+            enum uint magic_value = 0x4F57_4254; // "OWBT" (OpenWatt Boot Time)
+
+            uint magic;
+            long utc_offset; // RTC ticks from the counter's epoch to the Unix epoch
+        }
+
+        import urt.attribute : persist, used;
+        @persist @used __gshared RtcPersist _rtc_persist;
+
+        RtcPersist* persistent_state() => &_rtc_persist;
     }
 }
 

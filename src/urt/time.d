@@ -1159,13 +1159,13 @@ private void apply_os_clock(ulong unix_ns)
     {
         static if (has_rtc)
         {
-            auto p = hbn_persist();
+            auto p = persistent_state();
             ulong mtime_ticks = unix_ns / nsec_multiplier;
             ulong sec = mtime_ticks / mtime_freq_hz;
             ulong frac = mtime_ticks % mtime_freq_hz;
             ulong hbn_ticks = sec * rtc_freq_hz + frac * rtc_freq_hz / mtime_freq_hz;
             p.utc_offset = cast(long)hbn_ticks - cast(long)rtc_read();
-            p.magic = HbnPersist.HBN_MAGIC;
+            p.magic = RtcPersist.magic_value;
         }
     }
 }
@@ -1757,8 +1757,8 @@ version (Embedded) static if (has_rtc)
 
     void correct_drift()
     {
-        auto p = hbn_persist();
-        if (p.magic != HbnPersist.HBN_MAGIC)
+        auto p = persistent_state();
+        if (p.magic != RtcPersist.magic_value)
             return;
 
         ulong now_hbn = rtc_read();
@@ -1782,8 +1782,12 @@ version (Embedded) static if (has_rtc)
 
     void recalc_sys_time_offset()
     {
-        auto p = hbn_persist();
-        if (p.magic == HbnPersist.HBN_MAGIC)
+        import urt.driver.reset : ResetMark, reset_record_take;
+
+        auto p = persistent_state();
+        if (reset_record_take() == ResetMark.none)
+            p.magic = 0;    // the supply went away; whatever survived in RAM is not a clock
+        if (p.magic == RtcPersist.magic_value)
         {
             last_hbn = rtc_read();
             long hbn_total = cast(long)(last_hbn + p.utc_offset);

@@ -262,6 +262,9 @@ size_t _capture_trace(void*[] addrs) @trusted
     // +2: skip _capture_trace itself + the public wrapper. addrs[0]
     // is then the PC inside USER (where USER called capture_trace).
     auto n = rtlCaptureStackBackTrace(2, count, addrs.ptr, null);
+    // WOW64 can include the terminal null return address in the captured count.
+    while (n && addrs[n - 1] is null)
+        --n;
     if (n == 0 && addrs.length >= 32)
     {
         void*[32] scratch = void;

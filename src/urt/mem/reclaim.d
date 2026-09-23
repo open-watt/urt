@@ -313,6 +313,15 @@ nothrow @nogc:
 
 unittest
 {
+    auto registered = _reclaimers;
+    const registered_count = _num_reclaimers;
+    _num_reclaimers = 0;
+    scope(exit)
+    {
+        _reclaimers = registered;
+        _num_reclaimers = registered_count;
+    }
+
     static size_t[3] handler_arg;
     static int[3] provider_calls;
     static int calls;

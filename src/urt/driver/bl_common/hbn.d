@@ -22,6 +22,7 @@ import urt.attribute : persist, used;
 struct HbnPersist
 {
     enum uint HBN_MAGIC = 0x4F57_4254; // "OWBT" (OpenWatt Boot Time)
+    alias magic_value = HBN_MAGIC;
 
     uint magic;
     long utc_offset; // HBN ticks from RTC epoch to Unix epoch

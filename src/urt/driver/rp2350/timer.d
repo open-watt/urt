@@ -6,7 +6,7 @@ import core.volatile;
 
 enum uint mtime_freq_hz = 1_000_000;  // TIMER0 runs at 1MHz (microsecond counter)
 enum bool has_mtime = true;
-enum bool has_rtc = false;
+enum bool has_rtc = true;
 enum bool has_mcycle = false;
 enum bool has_timer_stop = false;
 enum bool has_oneshot_timer = false;
@@ -16,6 +16,46 @@ enum bool has_oneshot_timer = false;
 private enum uint TIMER0_BASE = 0x400B_0000;
 private enum uint TIMEHR      = TIMER0_BASE + 0x08;  // Time read high (latched on TIMELR read)
 private enum uint TIMELR      = TIMER0_BASE + 0x0C;  // Time read low (triggers latch)
+
+// POWMAN's always-on timer counts milliseconds and keeps running across a reset; it stops only
+// when the always-on domain loses power. Writes to POWMAN need the password in the top half.
+private enum uint POWMAN_BASE       = 0x4010_0000;
+private enum uint POWMAN_READ_UPPER = POWMAN_BASE + 0x70;
+private enum uint POWMAN_READ_LOWER = POWMAN_BASE + 0x74;
+private enum uint POWMAN_TIMER      = POWMAN_BASE + 0x88;
+private enum uint POWMAN_PASSWORD   = 0x5AFE_0000;
+private enum uint TIMER_RUN         = 1 << 1;
+private enum uint TIMER_USE_LPOSC   = 1 << 8;
+private enum uint TIMER_USING_LPOSC = 1 << 17;
+
+enum uint rtc_freq_hz = 1000;
+
+void rtc_enable()
+{
+    uint timer = volatileLoad(cast(uint*)POWMAN_TIMER);
+    if (timer & TIMER_RUN)
+        return;
+    if (!(timer & TIMER_USING_LPOSC))
+        volatileStore(cast(uint*)POWMAN_TIMER, POWMAN_PASSWORD | (timer & 0xFFFF) | TIMER_USE_LPOSC);
+    volatileStore(cast(uint*)POWMAN_TIMER, POWMAN_PASSWORD | (volatileLoad(cast(uint*)POWMAN_TIMER) & 0xFFFF) | TIMER_RUN);
+}
+
+void rtc_reset()
+{
+    volatileStore(cast(uint*)POWMAN_TIMER, POWMAN_PASSWORD | (volatileLoad(cast(uint*)POWMAN_TIMER) & 0xFFFF & ~TIMER_RUN));
+}
+
+// The halves tick independently, so re-read until the upper half agrees with itself.
+ulong rtc_read()
+{
+    for (;;)
+    {
+        uint hi = volatileLoad(cast(uint*)POWMAN_READ_UPPER);
+        uint lo = volatileLoad(cast(uint*)POWMAN_READ_LOWER);
+        if (hi == volatileLoad(cast(uint*)POWMAN_READ_UPPER))
+            return (ulong(hi) << 32) | lo;
+    }
+}
 
 // SysTick registers (ARM standard, part of the System Control Block)
 private enum uint SYST_CSR = 0xE000_E010;

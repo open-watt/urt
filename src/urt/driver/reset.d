@@ -16,17 +16,22 @@ enum ResetMark : ubyte
 
 enum bool has_reset_record = has_persist;
 
-// Call early in boot: returns the previous run's mark and stamps this one as running.
+// The previous run's mark. The first call stamps this run as running; later ones repeat the
+// answer, so boot order between callers does not matter.
 ResetMark reset_record_take()
 {
     static if (has_reset_record)
     {
-        ResetRecord* r = record();
-        ResetMark m = r.valid ? cast(ResetMark)r.mark : ResetMark.none;
-        if (m == ResetMark.none)
-            r.scratch[] = 0;
-        r.set(ResetMark.running);
-        return m;
+        if (!_taken)
+        {
+            _taken = true;
+            ResetRecord* r = record();
+            _mark = r.valid ? cast(ResetMark)r.mark : ResetMark.none;
+            if (_mark == ResetMark.none)
+                r.scratch[] = 0;
+            r.set(ResetMark.running);
+        }
+        return _mark;
     }
     else
         return ResetMark.none;
@@ -92,6 +97,9 @@ private:
 
 static if (has_reset_record)
 {
+    __gshared bool _taken;
+    __gshared ResetMark _mark;
+
     struct ResetRecord
     {
     nothrow @nogc:

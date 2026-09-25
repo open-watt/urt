@@ -47,6 +47,8 @@ else version (Espressif)
     public import urt.driver.esp32.gpio;
 else version (linux)
     public import urt.driver.posix.gpio;
+else version (MT7621)
+    public import urt.driver.mt7621.gpio;
 else
 {
     enum uint num_gpio = 0;
@@ -60,6 +62,7 @@ else
 }
 
 version (Espressif) {}
+else version (MT7621) {}
 else enum uint num_gpio_interrupts = 0;
 
 nothrow @nogc:
@@ -127,9 +130,18 @@ Result gpio_interrupt_open(ref GpioInterrupt interrupt, ubyte port, ref const Gp
             return InternalResult.already_exists;
         if (port >= num_gpio_interrupts || config.input.line == uint.max || config.trigger > GpioInterruptTrigger.low)
             return InternalResult.invalid_parameter;
+        if (_open_ports & (1u << port))
+            return InternalResult.already_exists;
+        foreach (p; 0 .. num_gpio_interrupts)
+        {
+            if ((_open_ports & (1u << p)) && _port_lines[p] == config.input)
+                return InternalResult.already_exists;
+        }
         Result result = gpio_interrupt_hw_open(port, config);
         if (!result)
             return result;
+        _port_lines[port] = config.input;
+        _open_ports |= 1u << port;
         interrupt.port = port;
         return Result.success;
     }
@@ -151,7 +163,10 @@ void gpio_interrupt_close(ref GpioInterrupt interrupt)
     static if (num_gpio_interrupts != 0)
     {
         if (interrupt.is_open)
+        {
             gpio_interrupt_hw_close(interrupt.port);
+            _open_ports &= ~(1u << interrupt.port);
+        }
     }
     interrupt = GpioInterrupt();
 }
@@ -181,6 +196,14 @@ nothrow @nogc:
 }
 
 
+static if (num_gpio_interrupts != 0)
+{
+    static assert(num_gpio_interrupts <= 32);
+    private __gshared uint _open_ports;
+    private __gshared GpioLine[num_gpio_interrupts] _port_lines;
+}
+
+
 unittest
 {
     static assert(is(typeof(num_gpio) == uint));
@@ -200,4 +223,25 @@ unittest
 
     // gpio_count() is callable on every backend (returns 0 on fallback).
     gpio_count();
+}
+
+
+// A backend nominates a free input-capable line as `test_gpio_line` for this to run on its hardware.
+static if (num_gpio_interrupts != 0 && __traits(compiles, test_gpio_line))
+unittest // an interrupt port and a line each have one owner at a time
+{
+    GpioInterruptConfig cfg;
+    cfg.input = GpioLine(0, test_gpio_line);
+    cfg.trigger = GpioInterruptTrigger.rising;
+    GpioInterruptConfig other = cfg;
+    other.input.line = (test_gpio_line + 1) % num_gpio;
+
+    GpioInterrupt a, b;
+    assert(gpio_interrupt_open(a, 0, cfg));
+    assert(!gpio_interrupt_open(b, 0, other) && !b.is_open, "a second line opened on an owned port");
+    assert(!gpio_interrupt_open(b, 1, cfg) && !b.is_open, "a second port opened on an owned line");
+    gpio_interrupt_close(a);
+    assert(gpio_interrupt_open(b, 0, cfg), "the port did not come back after close");
+    gpio_interrupt_close(b);
+    assert(_open_ports == 0);
 }

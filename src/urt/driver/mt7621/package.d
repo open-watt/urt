@@ -29,6 +29,8 @@ extern(C) void sys_init()
     import urt.driver.mt7621.watchdog : wdt_stop;
     wdt_stop();
     stack_guard_init();
+    import urt.driver.mt7621.ethernet : fe_init;
+    fe_init();
     uart_hw_init(console_uart, UartConfig.init);
     uart0_hw_puts("MT7621: sys_init\r\n");
     irq_init();
@@ -76,7 +78,7 @@ void mmio_write(uint addr, uint value)
 }
 
 // TODO: hEX S bring-up probe: the power LED (GPIO16) blinks while time runs, and the board resets after
-// 10 minutes to hand the next netboot back to RouterOS. Board facts in a chip driver.
+// 10 minutes to hand the next netboot back to RouterOS. Board facts in a chip driver; delete with the netconsole.
 enum uint gpio_base = 0xBE00_0600;
 enum uint led = 1 << 16;
 
@@ -113,6 +115,8 @@ void assert_reset(string file, size_t line, string msg)
     uart0_hw_puts(":");
     uart0_hw_puts(buf[i .. $]);
     uart0_hw_puts("\r\n");
+    import urt.driver.mt7621.netcon : netcon_flush;
+    netcon_flush();
     import urt.driver.reset : system_reset;
     system_reset();
 }

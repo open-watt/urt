@@ -68,6 +68,12 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
         while (n < end)
             write_reg(base, thr, buf[n++]);
     }
+    // The hEX S has no UART header, so the netconsole takes everything offered, not what the FIFO took.
+    if (id == console_uart)
+    {
+        import urt.driver.mt7621.netcon : netcon_put;
+        netcon_put(cast(const(char)[])buf);
+    }
     return n;
 }
 
@@ -89,6 +95,8 @@ ptrdiff_t uart_hw_flush(uint id)
 
 void uart0_hw_puts(const(char)[] s)
 {
+    import urt.driver.mt7621.netcon : netcon_put;
+    netcon_put(s);
     enum uint base = uart_base(console_uart);
     foreach (c; s)
     {

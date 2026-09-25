@@ -13,6 +13,10 @@ else
     enum bool has_eth_tx_checksum = false;
 }
 
+// A MAC that fronts a switch declares has_eth_switch and carries per-frame front-port metadata.
+static if (!__traits(compiles, has_eth_switch))
+    enum bool has_eth_switch = false;
+
 nothrow @nogc:
 
 
@@ -91,6 +95,7 @@ struct EthRxInfo
     EthTime timestamp;  // when the SFD crossed the MAC, on the MAC clock
     bool has_timestamp;
     bool checksum_verified; // the MAC checked the IP header and TCP or UDP checksum of this frame
+    ubyte switch_port = ubyte.max; // the front port it arrived on, when the MAC fronts a switch
 }
 
 // Delivered by eth_service() for each received frame. Frame starts at the
@@ -99,6 +104,9 @@ alias EthRxCallback = void function(EthMac eth, const(ubyte)[] frame, ref const 
 
 // Delivered by eth_service() on each link transition.
 alias EthLinkCallback = void function(EthMac eth, EthLinkEvent event) nothrow @nogc;
+
+// Delivered by eth_service() on each link transition of a front port.
+alias EthSwitchLinkCallback = void function(EthMac eth, ubyte switch_port, EthLinkEvent event) nothrow @nogc;
 
 // Same contract as WifiReadyCallback: may fire from task or interrupt
 // context, must only signal or schedule service, never re-enter the driver.
@@ -119,6 +127,24 @@ void eth_set_ready_callback(EthReadyCallback cb)
 {
     static if (num_ethernet > 0)
         eth_hw_set_ready_callback(cb);
+}
+
+// The vendor's name for the MAC (e.g. "ge1"); null where the platform does not name its MACs.
+const(char)[] eth_name(ubyte port)
+{
+    static if (__traits(compiles, eth_hw_name(port)))
+        return port < num_ethernet ? eth_hw_name(port) : null;
+    else
+        return null;
+}
+
+// Front ports of the switch behind the MAC; 0 for a plain MAC.
+uint eth_switch_ports(ubyte port)
+{
+    static if (has_eth_switch)
+        return port < num_ethernet ? eth_hw_switch_ports(port) : 0;
+    else
+        return 0;
 }
 
 // Link events arrive asynchronously after open.
@@ -168,6 +194,49 @@ Result eth_tx(ref EthMac eth, const(ubyte)[] frame, bool insert_checksum = false
             return InternalResult.invalid_parameter;
         return eth_hw_tx(eth.port, frame, insert_checksum) ? Result.success : InternalResult.failed;
     }
+}
+
+// Sends out one front port of the switch behind the MAC; the frame is copied before return.
+Result eth_tx_switch(ref EthMac eth, const(ubyte)[] frame, ubyte switch_port)
+{
+    static if (has_eth_switch)
+    {
+        if (frame.length < 14 || frame.length > eth_max_frame || switch_port >= eth_hw_switch_ports(eth.port))
+            return InternalResult.invalid_parameter;
+        return eth_hw_tx_switch(eth.port, frame, switch_port) ? Result.success : InternalResult.failed;
+    }
+    else
+        assert(false, "no switch behind this MAC");
+}
+
+// An enabled front port exchanges frames with the CPU only; a disabled one is off.
+Result eth_switch_port_enable(ref EthMac eth, ubyte switch_port, bool enable)
+{
+    static if (has_eth_switch)
+    {
+        if (switch_port >= eth_hw_switch_ports(eth.port))
+            return InternalResult.invalid_parameter;
+        return eth_hw_switch_port_enable(eth.port, switch_port, enable) ? Result.success : InternalResult.failed;
+    }
+    else
+        assert(false, "no switch behind this MAC");
+}
+
+// Valid once a link-up event has been delivered for the port.
+Result eth_get_switch_link(ref EthMac eth, ubyte switch_port, ref EthLinkInfo info)
+{
+    static if (has_eth_switch)
+        return eth_hw_get_switch_link(eth.port, switch_port, info) ? Result.success : InternalResult.failed;
+    else
+        assert(false, "no switch behind this MAC");
+}
+
+void eth_set_switch_link_callback(ref EthMac eth, EthSwitchLinkCallback cb)
+{
+    static if (has_eth_switch)
+        eth_hw_set_switch_link_callback(eth.port, cb);
+    else
+        assert(false, "no switch behind this MAC");
 }
 
 // Requires a valid frame; checks hardware layout support, not protocol validity.

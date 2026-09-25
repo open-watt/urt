@@ -31,6 +31,8 @@ extern(C) void fault_report(uint cause, uint epc, uint badvaddr, uint sp, uint r
         }
     }
 
+    import urt.driver.mt7621.netcon : netcon_flush;
+    netcon_flush();
     system_reset();
 }
 

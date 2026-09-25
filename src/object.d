@@ -1684,14 +1684,17 @@ pragma(mangle, "_D2rt10invariant_12_d_invariantFC6ObjectZv")
 void _d_invariant_impl(Object o) nothrow @nogc
 {
     assert(o !is null);
-    auto c = typeid(o);
-    do
+    version (D_TypeInfo)
     {
-        if (c.classInvariant)
-            c.classInvariant(o);
-        c = c.base;
+        auto c = typeid(o);
+        do
+        {
+            if (c.classInvariant)
+                c.classInvariant(o);
+            c = c.base;
+        }
+        while (c);
     }
-    while (c);
 }
 
 // ----------------------------------------------------------------------

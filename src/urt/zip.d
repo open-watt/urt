@@ -57,7 +57,7 @@ Result zlib_uncompress(const(void)[] source, void[] dest, out size_t destLen)
     if (footer + 4 > src + sourceLen)
         return InternalResult.data_error;
 
-    if (adler32(dest[0 .. destLen]) != loadBigEndian!uint(cast(uint*)footer))
+    if (adler32(dest[0 .. destLen]) != footer[0 .. 4].bigEndianToNative!uint)
         return InternalResult.data_error;
 
     return InternalResult.success;
@@ -86,7 +86,7 @@ Result gzip_uncompressed_length(const(void)[] source, out size_t destLen)
         return InternalResult.data_error;
 
     // get decompressed length
-    destLen = loadLittleEndian!uint(cast(uint*)(src + sourceLen - 4));
+    destLen = (src + sourceLen - 4)[0 .. 4].littleEndianToNative!uint;
 
     return InternalResult.success;
 }
@@ -119,7 +119,7 @@ Result gzip_uncompress(const(void)[] source, void[] dest, out size_t destLen)
     // skip extra data if present
     if (flg & GzipFlag.fextra)
     {
-        uint xlen = loadLittleEndian!ushort(cast(ushort*)start);
+        uint xlen = start[0 .. 2].littleEndianToNative!ushort;
 
         if (xlen > sourceLen - 12)
             return InternalResult.data_error;
@@ -157,7 +157,7 @@ Result gzip_uncompress(const(void)[] source, void[] dest, out size_t destLen)
         if (start - src > sourceLen - 2)
             return InternalResult.data_error;
 
-        hcrc = loadLittleEndian!ushort(cast(ushort*)start);
+        hcrc = start[0 .. 2].littleEndianToNative!ushort;
 
         if (hcrc != (zlib_crc(src[0 .. start - src]) & 0x0000FFFF))
             return InternalResult.data_error;
@@ -173,10 +173,10 @@ Result gzip_uncompress(const(void)[] source, void[] dest, out size_t destLen)
     if (footer + 8 > src + sourceLen)
         return InternalResult.data_error;
 
-    if (zlib_crc(dest[0..destLen]) != loadLittleEndian!uint(cast(uint*)footer))
+    if (zlib_crc(dest[0..destLen]) != footer[0 .. 4].littleEndianToNative!uint)
         return InternalResult.data_error;
 
-    uint isize = loadLittleEndian!uint(cast(uint*)(footer + 4));
+    uint isize = footer[4 .. 8].littleEndianToNative!uint;
     if (isize != destLen)
         return InternalResult.data_error;
 
@@ -465,8 +465,8 @@ ubyte[] gzip_compress(const void[] message, int quality)
     static immutable ubyte[10] gzip_header = [0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0, 0xFF];
     result[0 .. 10] = gzip_header[];
     result[10 .. 10 + raw_len] = zlib_out[2 .. $ - 4];
-    storeLittleEndian!uint(cast(uint*)(result.ptr + 10 + raw_len), zlib_crc(message));
-    storeLittleEndian!uint(cast(uint*)(result.ptr + 10 + raw_len + 4), cast(uint)message.length);
+    result[10 + raw_len .. 14 + raw_len] = zlib_crc(message).nativeToLittleEndian;
+    result[14 + raw_len .. 18 + raw_len] = (cast(uint)message.length).nativeToLittleEndian;
 
     free(zlib_out);
     return result;
@@ -485,7 +485,49 @@ unittest
     assert(len == src.length);
     assert(decompressBuffer[0 .. len] == src);
 
+    ubyte[] unaligned = cast(ubyte[])alloc(result.length + uint.alignof);
+    size_t offset = (1 + uint.alignof - cast(size_t)(unaligned.ptr + result.length - 4) % uint.alignof) % uint.alignof;
+    unaligned[offset .. offset + result.length] = result[];
+    assert(cast(size_t)(unaligned.ptr + offset + result.length - 4) % uint.alignof == 1);
+    assert(gzip_uncompressed_length(unaligned[offset .. offset + result.length], len));
+    assert(len == src.length);
+    assert(gzip_uncompress(unaligned[offset .. offset + result.length], decompressBuffer, len));
+    assert(len == src.length);
+    assert(decompressBuffer[0 .. len] == src);
+
+    free(unaligned);
     free(result);
+}
+
+
+unittest
+{
+    // Stored "ABC" blocks, with an Adler-32 trailer for zlib and all optional
+    // header fields plus header/data CRCs for gzip.
+    static immutable ubyte[] zlib = [
+        0x78, 0x01, 0x01, 0x03, 0x00, 0xFC, 0xFF, 0x41, 0x42, 0x43,
+        0x01, 0x8D, 0x00, 0xC7];
+    static immutable ubyte[] gzip = [
+        0x1F, 0x8B, 0x08, 0x1E, 0, 0, 0, 0, 0, 0xFF,
+        0x03, 0, 0x78, 0x79, 0x7A, 0x6E, 0, 0x63, 0, 0x41, 0x1F,
+        0x01, 0x03, 0, 0xFC, 0xFF, 0x41, 0x42, 0x43,
+        0x48, 0x03, 0x83, 0xA3, 0x03, 0, 0, 0];
+
+    align(4) ubyte[40] buffer;
+    ubyte[3] output;
+    size_t len;
+    foreach (offset; 0 .. 4)
+    {
+        buffer[offset .. offset + zlib.length] = zlib;
+        assert(zlib_uncompress(buffer[offset .. offset + zlib.length], output, len));
+        assert(len == 3 && output[] == "ABC");
+
+        buffer[offset .. offset + gzip.length] = gzip;
+        assert(gzip_uncompressed_length(buffer[offset .. offset + gzip.length], len));
+        assert(len == 3);
+        assert(gzip_uncompress(buffer[offset .. offset + gzip.length], output, len));
+        assert(len == 3 && output[] == "ABC");
+    }
 }
 
 
@@ -988,10 +1030,10 @@ Result inflate_uncompressed_block(data *d)
         return InternalResult.data_error;
 
     /* Get length */
-    uint length = loadLittleEndian!ushort(cast(ushort*)d.source);
+    uint length = d.source[0 .. 2].littleEndianToNative!ushort;
 
     /* Get one's complement of length */
-    uint invlength = loadLittleEndian!ushort(cast(ushort*)(d.source + 2));
+    uint invlength = d.source[2 .. 4].littleEndianToNative!ushort;
 
     /* Check length */
     if (length != (~invlength & 0x0000FFFF))

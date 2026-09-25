@@ -36,6 +36,7 @@ else version (BL618)        enum string Platform = "BL618";
 else version (BK7231N)      enum string Platform = "BK7231N";
 else version (BK7231T)      enum string Platform = "BK7231T";
 else version (RP2350)       enum string Platform = "RP2350";
+else version (MT7621)       enum string Platform = "MT7621";
 else version (STM32F4)      enum string Platform = "STM32F4";
 else version (STM32F7)      enum string Platform = "STM32F7";
 else version (Windows)      enum string Platform = "Windows";

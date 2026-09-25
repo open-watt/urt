@@ -1,6 +1,6 @@
 # Embedded C dependencies included through platforms.mk.
 
-ifneq ($(filter bl808 bl618 bk7231n,$(PLATFORM)),)
+ifneq ($(filter bl808 bl618 bk7231n mt7621,$(PLATFORM)),)
 TLSF_DIR  := $(URT_ROOT)third_party/tlsf
 TLSF_SRCS := $(TLSF_DIR)/tlsf.c
 endif

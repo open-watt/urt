@@ -10,11 +10,26 @@ enum GUID UUID(string s) = () { GUID g; ptrdiff_t n = g.fromString(s); assert(n 
 struct GUID
 {
 nothrow @nogc:
-align(1):
-    uint data1;
-    ushort data2;
-    ushort data3;
+    // Byte storage, not align(1) fields: LDC loads align(1) fields at their natural alignment.
+    private ubyte[4] _data1;
+    private ubyte[2] _data2;
+    private ubyte[2] _data3;
     ubyte[8] data4;
+
+    this(uint data1, ushort data2, ushort data3, ubyte[8] data4) pure
+    {
+        this.data1 = data1;
+        this.data2 = data2;
+        this.data3 = data3;
+        this.data4 = data4;
+    }
+
+    uint data1() const pure => native!uint(_data1);
+    void data1(uint value) pure { _data1 = bytes(value); }
+    ushort data2() const pure => native!ushort(_data2);
+    void data2(ushort value) pure { _data2 = bytes(value); }
+    ushort data3() const pure => native!ushort(_data3);
+    void data3(ushort value) pure { _data3 = bytes(value); }
 
     bool opEquals(ref const GUID rh) const pure
         => data1 == rh.data1 && data2 == rh.data2 && data3 == rh.data3 && data4 == rh.data4;
@@ -89,3 +104,24 @@ align(1):
 
 static assert(GUID.sizeof == 16);
 static assert(GUID.alignof == 1);
+
+
+private:
+
+T native(T)(ref const ubyte[T.sizeof] b) pure
+{
+    import urt.endian : bigEndianToNative, littleEndianToNative;
+    version (LittleEndian)
+        return littleEndianToNative!T(b);
+    else
+        return bigEndianToNative!T(b);
+}
+
+ubyte[T.sizeof] bytes(T)(T value) pure
+{
+    import urt.endian : nativeToBigEndian, nativeToLittleEndian;
+    version (LittleEndian)
+        return nativeToLittleEndian(value);
+    else
+        return nativeToBigEndian(value);
+}

@@ -151,6 +151,19 @@ CI_PLATFORMS := \
     esp32 esp32-s2 esp32-s3 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2 esp32-p4 \
     bl618 bk7231n bk7231t rp2350 stm4xx stm7xx bl808-d0 bl808-m0
 
+# Optional host regression: make check-invariants CONFIG=debug COMPILER=ldc
+.PHONY: check-invariants
+check-invariants:
+ifeq ($(COMPILER),ldc)
+	mkdir -p $(OBJDIR) $(TARGETDIR)
+	@set -e; for rtti in "" "--fno-rtti"; do \
+	    "$(DC)" $(filter-out -unittest -release,$(DFLAGS)) --fno-moduleinfo $$rtti -of$(TARGETDIR)/invariant-test$(if $(filter windows,$(OS)),.exe) $(URT_SOURCES) tools/test_invariant.d; \
+	    ./$(TARGETDIR)/invariant-test$(if $(filter windows,$(OS)),.exe); \
+	done
+else
+	$(error check-invariants requires COMPILER=ldc)
+endif
+
 .PHONY: check-no-rtti
 check-no-rtti:
 ifeq ($(COMPILER),ldc)

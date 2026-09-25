@@ -7,6 +7,8 @@ import urt.time;
 // num_i2c is a compile-time upper bound used to remove unsupported backends. i2c_count() returns the actual number of usable controllers.
 version (Espressif)
     public import urt.driver.esp32.i2c;
+else version (MT7621)
+    public import urt.driver.mt7621.i2c;
 else
 {
     enum uint num_i2c = 0;

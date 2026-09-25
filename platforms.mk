@@ -182,6 +182,12 @@ else ifeq ($(PLATFORM),stm4xx)
     OS = baremetal
     STM32_VARIANT = f4
     MFPU = fpv4-sp-d16
+else ifeq ($(PLATFORM),mt7621)
+    # MediaTek MT7621A -- dual MIPS 1004Kc (2 VPEs each), 880MHz, no FPU. RAM-resident ELF
+    # loaded by the board's bootloader (RouterBOOT netboot or flash).
+    BUILDNAME := mt7621
+    PROCESSOR := 1004kc
+    OS = baremetal
 else ifeq ($(PLATFORM),routeros)
     # MikroTik RouterOS container (ARM64 Linux). Packaging is consumer-side.
     BUILDNAME := routeros
@@ -333,6 +339,10 @@ ifdef PROCESSOR
       MATTR = +m,+a,+f,+c
       MABI  = ilp32f
       OS ?= freertos
+  else ifeq ($(PROCESSOR),1004kc)
+      ARCH  = mipsel
+      MARCH = mips32r2
+      OS ?= baremetal
   endif
 endif
 
@@ -375,6 +385,16 @@ ifdef ESPRESSIF_PATH
     ESPRESSIF_XTENSA_BIN := $(lastword $(sort $(wildcard $(ESPRESSIF_PATH)/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin)))
     ESPRESSIF_RISCV32_BIN := $(lastword $(sort $(wildcard $(ESPRESSIF_PATH)/tools/riscv32-esp-elf/*/riscv32-esp-elf/bin)))
 endif
+
+# =======================================================================
+# Toolchain discovery (MIPS): no distro ships a bare-metal soft-float mipsel toolchain.
+# The musl.cc muslsf gcc assembles and preprocesses; its libgcc is PIC abicalls code that
+# derives gp from t9, so MIPSEL_SYSROOT carries picolibc and compiler-rt builtins built
+# non-PIC. Recipe: platforms/mt7621/README.txt.
+# =======================================================================
+
+MIPSEL_GCC ?= $(or $(shell which mipsel-linux-muslsf-gcc 2>/dev/null),$(wildcard $(HOME)/toolchains/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-gcc),mipsel-linux-muslsf-gcc)
+MIPSEL_SYSROOT ?= $(HOME)/toolchains/picolibc-mipsel
 
 # =======================================================================
 # URT_SOURCES -- urt/**.d + urt/driver/<platform>/**.d
@@ -436,6 +456,9 @@ ifneq ($(filter esp%,$(PLATFORM)),)
 endif
 ifdef STM32_VARIANT
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/stm32" -type f -name '*.d')
+endif
+ifeq ($(PLATFORM),mt7621)
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/mt7621" -type f -name '*.d')
 endif
 ifeq ($(OS),windows)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/windows" -type f -name '*.d')
@@ -511,6 +534,9 @@ ifeq ($(PLATFORM),bl618)
 endif
 ifeq ($(PLATFORM),rp2350)
     DFLAGS := $(DFLAGS) -d-version=RP2350 -d-version=CRuntime_Picolibc
+endif
+ifeq ($(PLATFORM),mt7621)
+    DFLAGS := $(DFLAGS) -d-version=MT7621 -d-version=CRuntime_Picolibc
 endif
 ifdef STM32_VARIANT
     DFLAGS := $(DFLAGS) -d-version=STM32 -d-version=CRuntime_Picolibc
@@ -713,6 +739,10 @@ ifeq ($(COMPILER),ldc)
         ifeq ($(PROCESSOR),e902)
             DFLAGS := $(DFLAGS) -d-version=RISCV32E
         endif
+    else ifeq ($(ARCH),mipsel)
+        # No TLS register to rely on in kernel mode (UserLocal is optional in r2), so TLS is emulated.
+        DFLAGS := $(DFLAGS) -mtriple=mipsel-unknown-elf -mcpu=$(MARCH) -float-abi=soft -relocation-model=static -mattr=+noabicalls -emulated-tls
+        DFLAGS := $(DFLAGS) -gcc=$(MIPSEL_GCC) -P=-nostdinc -P=-isystem -P=$(MIPSEL_SYSROOT)/include
     else ifeq ($(ARCH),xtensa)
         # Xtensa -- requires Espressif toolchain (chip-specific GCC wrappers).
         # Two-stage codegen: LDC emits bitcode, Espressif's llc does codegen
@@ -767,6 +797,9 @@ ifeq ($(COMPILER),ldc)
       else ifdef STM32_VARIANT
         BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/stm32
         BAREMETAL_SRCS := start.S
+      else ifeq ($(PLATFORM),mt7621)
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/mt7621
+        BAREMETAL_SRCS := start.S
       endif
 
       ifdef BAREMETAL_DIR
@@ -779,16 +812,25 @@ ifeq ($(COMPILER),ldc)
           BAREMETAL_NM     := arm-none-eabi-nm
           MFPU ?= fpv5-sp-d16
           BAREMETAL_CFLAGS := -mcpu=$(MARCH) -mthumb -mfloat-abi=hard -mfpu=$(MFPU)
+        else ifeq ($(ARCH),mipsel)
+          BAREMETAL_GCC    := $(MIPSEL_GCC)
+          BAREMETAL_NM     := $(MIPSEL_GCC:-gcc=-nm)
+          BAREMETAL_CFLAGS := -march=$(MARCH) -EL -msoft-float -G0 -fno-pic -mno-abicalls -nostdinc -isystem $(shell $(MIPSEL_GCC) -print-file-name=include) -isystem $(shell $(MIPSEL_GCC) -print-file-name=include-fixed) -isystem $(MIPSEL_SYSROOT)/include
+          BAREMETAL_LIBC   := $(MIPSEL_SYSROOT)/lib/libc.a
+          BAREMETAL_LIBM   := $(MIPSEL_SYSROOT)/lib/libm.a
+          BAREMETAL_LIBGCC := $(MIPSEL_SYSROOT)/lib/libclang_rt.builtins.a
         else
           BAREMETAL_GCC    := riscv64-unknown-elf-gcc
           BAREMETAL_NM     := riscv64-unknown-elf-nm
           BAREMETAL_CFLAGS := -march=$(MARCH) -mabi=$(MABI)
         endif
-        BAREMETAL_LIBGCC := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-libgcc-file-name)
+        BAREMETAL_LIBGCC ?= $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-libgcc-file-name)
         # picolibc/newlib via --specs=picolibc.specs first, then plain gcc, then multilib fallback
         PICOLIBC_MULTIDIR := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-multi-directory 2>/dev/null)
+        ifndef BAREMETAL_LIBC
         BAREMETAL_LIBC   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libc.a))
         BAREMETAL_LIBM   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        endif
         # Vendor C deps (tlsf, mbedtls shim) include hosted headers (assert.h,
         # string.h). A bare cross-gcc (CI's gcc-<arch>) only finds those via
         # picolibc's specs; a full newlib toolchain has them by default. Add

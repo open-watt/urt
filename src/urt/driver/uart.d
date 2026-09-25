@@ -13,6 +13,8 @@ else version (Beken)
     public import urt.driver.bk7231.uart;
 else version (RP2350)
     public import urt.driver.rp2350.uart;
+else version (MT7621)
+    public import urt.driver.mt7621.uart;
 else version (STM32)
     public import urt.driver.stm32.uart;
 else version (Espressif)

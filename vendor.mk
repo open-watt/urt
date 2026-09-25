@@ -1,6 +1,6 @@
 # Embedded C dependencies included through platforms.mk.
 
-ifneq ($(filter bl808 bl618 bk7231n,$(PLATFORM)),)
+ifneq ($(filter bl808 bl618 bk7231n mt7621,$(PLATFORM)),)
 TLSF_DIR  := $(URT_ROOT)third_party/tlsf
 TLSF_SRCS := $(TLSF_DIR)/tlsf.c
 endif
@@ -35,7 +35,8 @@ endif
 
 # BAREMETAL_SPECS routes a bare cross-gcc to picolibc's hosted headers.
 ifdef TLSF_DIR
-  ifneq ($(BUILDNAME),bl808-d0)
+  # On 32-bit, TLSF's 4-byte size field makes forced 8-byte blocks alternate between 8- and 4-aligned.
+  ifeq ($(filter bl808-d0 mt7621,$(BUILDNAME)),)
     TLSF_DEFINES += -DTLSF_ALIGN_SIZE_LOG2=3
   endif
   TLSF_OBJS    = $(patsubst $(TLSF_DIR)/%.c,$(OBJDIR)/tlsf/%.o,$(TLSF_SRCS))

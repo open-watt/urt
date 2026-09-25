@@ -36,6 +36,9 @@ ifeq ($(CONFIG),unittest)
     BAREMETAL_LD := platforms/rp2350/rp2350.ld
   else ifdef STM32_VARIANT
     BAREMETAL_LD := platforms/stm32/stm32_$(STM32_VARIANT).ld
+  else ifeq ($(PLATFORM),mt7621)
+    BAREMETAL_LD := platforms/mt7621/mt7621.ld
+    DFLAGS := $(DFLAGS) -L--defsym=__ram_size=64M
   endif
   ifdef BAREMETAL_LD
     DFLAGS := $(DFLAGS) -L-T$(BAREMETAL_LD) -main
@@ -89,6 +92,9 @@ ifeq ($(BUILD_MODE),embedded-exe)
   ifneq ($(filter arm thumb,$(ARCH)),)
     BAREMETAL_OBJCOPY := arm-none-eabi-objcopy
     OBJCOPY_FLAGS     := -R .bss -R .tbss -R '.tbss.*' -R .ARM.attributes -R '.debug*'
+  else ifeq ($(ARCH),mipsel)
+    BAREMETAL_OBJCOPY := $(MIPSEL_GCC:-gcc=-objcopy)
+    OBJCOPY_FLAGS     :=
   else
     BAREMETAL_OBJCOPY := riscv64-unknown-elf-objcopy
     OBJCOPY_FLAGS     :=

@@ -210,6 +210,21 @@ SystemInfo get_sysinfo()
         }
 
     }
+    else version (MT7621)
+    {
+        import urt.driver.mt7621 : chip_id;
+        r.os_name = chip_id();
+
+        import urt.driver.mt7621.alloc : heap_stats;
+
+        size_t total, used, peak, largest;
+        heap_stats(total, used, peak, largest);
+        r.pools[0].name = "RAM";
+        r.pools[0].total = total;
+        r.pools[0].used = used;
+        r.pools[0].peak_used = peak;
+        r.pools[0].largest_free = largest;
+    }
     else version (Bouffalo)
     {
         import urt.driver.bl_common.alloc : num_pools, query_pool_stats, PoolStats;

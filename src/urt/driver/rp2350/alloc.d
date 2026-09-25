@@ -15,6 +15,8 @@ void[] _alloc(size_t size, size_t alignment, MemFlags) pure
 {
     import urt.util : align_down;
 
+    if (alignment < (void*).sizeof)
+        alignment = (void*).sizeof;
     size_t header_size = (void*).sizeof + alignment;
     void* p = malloc(header_size + size);
     if (p is null)

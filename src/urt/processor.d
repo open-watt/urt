@@ -205,6 +205,14 @@ else version (Xtensa)
     }
     enum ProcFeatures = ProcFeaturesT();
 }
+else version (MIPS32)
+{
+    enum string ProcessorFamily = "MIPS";
+    version (LDC)
+        enum string ProcessorName = __traits(targetCPU);
+    else
+        enum string ProcessorName = "mips32";
+}
 else
     static assert(0, "Unsupported processor");
 

@@ -47,6 +47,8 @@ else version (Espressif)
     public import urt.driver.esp32.gpio;
 else version (linux)
     public import urt.driver.posix.gpio;
+else version (MT7621)
+    public import urt.driver.mt7621.gpio;
 else
 {
     enum uint num_gpio = 0;
@@ -60,6 +62,7 @@ else
 }
 
 version (Espressif) {}
+else version (MT7621) {}
 else enum uint num_gpio_interrupts = 0;
 
 nothrow @nogc:

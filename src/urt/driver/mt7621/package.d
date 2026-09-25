@@ -78,7 +78,7 @@ void mmio_write(uint addr, uint value)
 }
 
 // TODO: hEX S bring-up probe: the power LED (GPIO16) blinks while time runs, and the board resets after
-// 10 minutes to hand the next netboot back to RouterOS. Board facts in a chip driver; delete with the netconsole.
+// 10 minutes to hand the next netboot back to RouterOS. Board facts in a chip driver.
 enum uint gpio_base = 0xBE00_0600;
 enum uint led = 1 << 16;
 

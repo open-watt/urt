@@ -20,9 +20,13 @@ else version (Espressif)
 else
     enum uint num_uarts = 0;
 
-// Platforms whose console is not UART0 declare their own.
+// Platforms that number their ports from the datasheet's UART1 declare their own.
+static if (!__traits(compiles, first_uart))
+    enum uint first_uart = 0;
+
+// Platforms whose console is not the first port declare their own.
 static if (!__traits(compiles, console_uart))
-    enum uint console_uart = 0;
+    enum uint console_uart = first_uart;
 
 nothrow @nogc:
 
@@ -211,7 +215,7 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, size_t buf
         assert(false, "no UART on this platform");
     else
     {
-        if (port >= num_uarts)
+        if (port < first_uart || port >= first_uart + num_uarts)
             return InternalResult.invalid_parameter;
 
         static if (__traits(compiles, uart_hw_open(port, cfg, rx_cb)))
@@ -479,13 +483,14 @@ unittest
 
         uart_init();
 
-        // Out-of-range port
-        auto r = uart_open(u, cast(ubyte)num_uarts, cfg);
+        auto r = uart_open(u, cast(ubyte)(first_uart + num_uarts), cfg);
         assert(!r);
         assert(!u.is_open);
+        static if (first_uart > 0)
+            assert(!uart_open(u, 0, cfg));
 
         // Open/close each valid port; reconfiguring the console would kill it
-        foreach (p; 0 .. num_uarts)
+        foreach (p; first_uart .. first_uart + num_uarts)
         {
             if (p == console_uart)
                 continue;

@@ -99,6 +99,110 @@ private size_t read_fp() @trusted
 }
 
 
+// --- MIPS prologue unwinder -------------------------------------------
+//
+// LLVM's MIPS frames keep ra at a size-dependent offset with no fp chain, so frames are read from each
+// function's prologue, as Linux's get_frame_info does: `addiu sp, sp, -N` then `sw ra, off(sp)`.
+
+version (MIPS32)
+{
+    extern(C) extern __gshared char _text_start;
+    extern(C) extern __gshared char _text_end;
+
+    private struct MipsFrame
+    {
+        size_t start;
+        size_t size;
+        ptrdiff_t ra_off;
+    }
+
+    private bool is_frame_alloc(uint insn) => (insn & 0xFFFF_8000) == 0x27BD_8000;
+
+    private bool mips_frame_from(size_t prologue, ref MipsFrame f) @trusted
+    {
+        const insn = *cast(const(uint)*)prologue;
+        f.start = prologue;
+        f.size = -cast(ptrdiff_t)cast(short)(insn & 0xFFFF);
+        foreach (i; 1 .. 32)
+        {
+            const next = *cast(const(uint)*)(prologue + i * 4);
+            if ((next & 0xFFFF_0000) == 0xAFBF_0000)
+            {
+                f.ra_off = cast(short)(next & 0xFFFF);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool mips_frame_containing(size_t pc, ref MipsFrame f) @trusted
+    {
+        const lo = cast(size_t)&_text_start;
+        if (pc < lo || pc >= cast(size_t)&_text_end || (pc & 3))
+            return false;
+        for (size_t p = pc; p >= lo && pc - p < 256 * 1024; p -= 4)
+        {
+            if (is_frame_alloc(*cast(const(uint)*)p))
+                return mips_frame_from(p, f);
+        }
+        return false;
+    }
+
+    // Emits return addresses from the frame of `wrapper` (inclusive or not) upward, after `skip` of them.
+    @noinline
+    private size_t mips_unwind(void*[] out_addrs, size_t wrapper, bool include_wrapper, uint skip) @trusted
+    {
+        size_t sp;
+        asm nothrow @nogc @trusted { "move %0, $sp" : "=r"(sp); }
+
+        MipsFrame f;
+        const self = cast(size_t)&mips_unwind;
+        bool found;
+        foreach (i; 0 .. 8)
+        {
+            if (is_frame_alloc(*cast(const(uint)*)(self + i * 4)))
+            {
+                found = mips_frame_from(self + i * 4, f);
+                break;
+            }
+        }
+        if (!found)
+            return 0;
+
+        const stack_hi = cast(size_t)&_stack_top;
+        const stack_lo = cast(size_t)&_stack_low;
+        size_t n;
+        bool emitting;
+        foreach (depth; 0 .. 64)
+        {
+            if (sp < stack_lo || sp + f.size > stack_hi || f.ra_off < 0 || f.ra_off >= f.size)
+                break;
+            const ra = *cast(const(size_t)*)(sp + f.ra_off);
+            const is_wrapper = f.start == wrapper;
+            if (is_wrapper && include_wrapper)
+                emitting = true;
+            if (emitting)
+            {
+                if (skip)
+                    --skip;
+                else
+                {
+                    out_addrs[n++] = cast(void*)ra;
+                    if (n == out_addrs.length)
+                        break;
+                }
+            }
+            if (is_wrapper)
+                emitting = true;
+            sp += f.size;
+            if (!mips_frame_containing(ra - 8, f))
+                break;
+        }
+        return n;
+    }
+}
+
+
 // --- Driver interface -------------------------------------------------
 //
 // All three primitives assume they are called through a one-level public
@@ -110,16 +214,24 @@ private size_t read_fp() @trusted
 @noinline
 size_t _capture_trace(void*[] addrs) @trusted
 {
-    // LLVM elides _capture_trace's prologue and reads s0 before saving it,
-    // so read_fp() returns the CALLER's fp -- not our own. With LTO/tail-call
-    // chains (eh_capture_here -> capture_trace -> _capture_trace all tail-
-    // calling), this collapses to whichever frame is the topmost non-tail-
-    // called caller. Walk from there directly; the old "step up once"
-    // overshot whenever the wrapper chain tail-called.
-    auto fp = read_fp();
-    if (fp == 0)
-        return 0;
-    return walk_fp_chain(fp, addrs);
+    version (MIPS32)
+    {
+        import urt.internal.exception : capture_trace;
+        return mips_unwind(addrs, cast(size_t)&capture_trace, true, 0);
+    }
+    else
+    {
+        // LLVM elides _capture_trace's prologue and reads s0 before saving it,
+        // so read_fp() returns the CALLER's fp -- not our own. With LTO/tail-call
+        // chains (eh_capture_here -> capture_trace -> _capture_trace all tail-
+        // calling), this collapses to whichever frame is the topmost non-tail-
+        // called caller. Walk from there directly; the old "step up once"
+        // overshot whenever the wrapper chain tail-called.
+        auto fp = read_fp();
+        if (fp == 0)
+            return 0;
+        return walk_fp_chain(fp, addrs);
+    }
 }
 
 /// Return the return address of the `skip`-th frame above the public
@@ -127,23 +239,32 @@ size_t _capture_trace(void*[] addrs) @trusted
 @noinline
 void* _caller_address(uint skip) @trusted
 {
-    // Same elision/tail-call pattern as _capture_trace: read_fp() returns
-    // the topmost non-tail-called caller's fp. With LLVM tail-calling the
-    // public capture_address wrapper, that is USER's fp directly. So
-    //   buf[0] = USER's saved ra = inside USER's caller   ← skip=0 wants this
-    //   buf[1] = caller's caller                          ← skip=1
-    auto fp = read_fp();
-    if (fp == 0)
-        return null;
+    version (MIPS32)
+    {
+        import urt.internal.exception : caller_address;
+        void*[1] buf = void;
+        return mips_unwind(buf[], cast(size_t)&caller_address, false, skip) ? buf[0] : null;
+    }
+    else
+    {
+        // Same elision/tail-call pattern as _capture_trace: read_fp() returns
+        // the topmost non-tail-called caller's fp. With LLVM tail-calling the
+        // public capture_address wrapper, that is USER's fp directly. So
+        //   buf[0] = USER's saved ra = inside USER's caller   ← skip=0 wants this
+        //   buf[1] = caller's caller                          ← skip=1
+        auto fp = read_fp();
+        if (fp == 0)
+            return null;
 
-    void*[32] buf = void;
-    const need = skip + 1;
-    if (need > buf.length)
-        return null;
-    const got = walk_fp_chain(fp, buf[0 .. need]);
-    if (got < need)
-        return null;
-    return buf[skip];
+        void*[32] buf = void;
+        const need = skip + 1;
+        if (need > buf.length)
+            return null;
+        const got = walk_fp_chain(fp, buf[0 .. need]);
+        if (got < need)
+            return null;
+        return buf[skip];
+    }
 }
 
 /// On bare-metal we have no on-device symbol table. Always returns

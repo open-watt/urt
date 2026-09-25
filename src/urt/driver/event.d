@@ -42,6 +42,8 @@ import urt.result : InternalResult, Result;
 
 version (Espressif)
     public import urt.driver.esp32.event;
+else version (MT7621)
+    public import urt.driver.mt7621.event;
 else
 {
     enum uint num_links = 0;

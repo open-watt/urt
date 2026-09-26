@@ -100,8 +100,9 @@ SECTIONS
         _tbss_end = .;
     } > SRAM
 
-    /* ARM EABI reserves an 8-byte TCB, padded to the TLS segment alignment. */
-    _tls_base = (SIZEOF(.tdata) ? ADDR(.tdata) : ADDR(.tbss)) - MAX(8, MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
+    /* The thread pointer sits 8 bytes (the ARM TCB) below the TLS block, rounded down to the
+     * block alignment: lld places each thread-local at tp + 8 + ((block - 8) mod align). */
+    _tls_base = ((SIZEOF(.tdata) ? ADDR(.tdata) : ADDR(.tbss)) - 8) & ~(MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)) - 1);
 
     .bss (NOLOAD) : ALIGN(4)
     {

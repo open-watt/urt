@@ -13,6 +13,9 @@ Board facts are make variables:
 
   STM32_PART    memory map, platforms/stm32/stm32_<part>.ld. Defaults: f407vg, f746ng, h743vi.
   STM32_HSE_HZ  HSE crystal in Hz. Unset runs from HSI.
+  STM32_DFU_BUTTON
+                a button held at reset to enter the ROM bootloader: port * 16 + pin, plus 256
+                when active high. PE3 active low is 67.
 
 Each part script declares MEMORY and the CORE_RAM / BULK_RAM aliases and includes
 stm32_common.ld. CORE_RAM (F4 CCM, F7/H7 DTCM) holds statics, TLS and the stack; BULK_RAM
@@ -50,7 +53,11 @@ Flash
             -c "program bin/stm32h7_unittest/urt_test.bin 0x08000000 verify reset exit"
     dfu-util -a 0 -s 0x08000000:leave -D bin/stm32h7_unittest/urt_test.bin
 
-dfu-util needs the ROM bootloader: BOOT0 high at reset.
+dfu-util needs the ROM bootloader: BOOT0 high at reset, the board's STM32_DFU_BUTTON held at
+reset, or urt.driver.stm32.reboot_to_bootloader() from a running image. The first two work even
+when the image is broken, since the button is read before .data, .bss or clocks are set up.
+dfu-util's :leave jumps into the new image without a reset, so the image resets itself once to
+shed the ROM's USB and clock state.
 
 Console
 -------

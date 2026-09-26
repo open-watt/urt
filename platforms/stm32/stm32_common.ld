@@ -8,6 +8,7 @@ EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
 PROVIDE(__stm32_hse_hz = 0);
+PROVIDE(__stm32_dfu_button = 0xFFFF);
 
 SECTIONS
 {

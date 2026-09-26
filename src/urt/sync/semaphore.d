@@ -188,7 +188,7 @@ nothrow @nogc:
             import urt.driver.irq;
             static if (has_mtime && has_wait_for_interrupt)
             {
-                ulong deadline = mtime_read() + cast(ulong)timeout.as!"usecs";
+                ulong deadline = mtime_read() + timeout.ticks;
                 while (!try_wait())
                 {
                     if (mtime_read() >= deadline)

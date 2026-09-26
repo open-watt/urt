@@ -40,14 +40,14 @@ ulong mtime_read()
 
 alias TimerCallback = void function() @nogc nothrow;
 
-void timer_set_periodic(uint period_us, TimerCallback cb)
+void timer_set_periodic(ulong period_ticks, TimerCallback cb)
 {
-    tick_interval = period_us;
+    tick_interval = period_ticks;
     tick_callback = cb;
 
     irq_set_handler(IrqClass.timer, &_timer_irq_handler);
     irq_set_enable(IrqClass.timer);
-    mtimecmp_write_oneshot(mtime_read() + period_us);
+    mtimecmp_write_oneshot(mtime_read() + period_ticks);
 }
 
 void timer_stop()
@@ -91,7 +91,7 @@ enum uint MTIMECMP_LO = CORET_BASE + 0x0000;
 enum uint MTIMECMP_HI = CORET_BASE + 0x0004;
 
 __gshared TimerCallback tick_callback;
-__gshared uint tick_interval;
+__gshared ulong tick_interval;
 
 ulong mtimecmp_read()
 {
@@ -132,7 +132,7 @@ unittest // periodic timer fires its callback repeatedly via the real IRQ path
     // Snapshot the live periodic config (sys_init installed a 50ms tick) so
     // we can restore it after the test.
     TimerCallback prev_cb       = tick_callback;
-    uint          prev_interval = tick_interval;
+    ulong         prev_interval = tick_interval;
 
     timer_stop();
 
@@ -178,7 +178,7 @@ unittest // periodic timer fires its callback repeatedly via the real IRQ path
 unittest // timer_stop disarms -- no further callbacks after stop
 {
     TimerCallback prev_cb       = tick_callback;
-    uint          prev_interval = tick_interval;
+    ulong         prev_interval = tick_interval;
 
     timer_stop();
 

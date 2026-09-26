@@ -64,7 +64,7 @@ void sleep(Duration duration)
 
         static if (has_mtime)
         {
-            ulong deadline = mtime_read() + duration.as!"usecs";
+            ulong deadline = mtime_read() + duration.ticks;
             static if (has_oneshot_timer && has_wait_for_interrupt)
             {
                 mtimecmp_write_oneshot(deadline);

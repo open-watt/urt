@@ -43,10 +43,11 @@ void timer_init(uint reload_value)
     volatileStore(cast(uint*)SYST_CSR, CSR_ENABLE | CSR_TICKINT | CSR_CLKSOURCE);
 }
 
-void timer_set_periodic(uint period_us, TimerCallback cb)
+// TODO: mtime_read assumes SYSTICK_RELOAD, so any other period corrupts mtime.
+void timer_set_periodic(ulong period_ticks, TimerCallback cb)
 {
     tick_callback = cb;
-    timer_init(period_us * 16);
+    timer_init(cast(uint)(period_ticks - 1));
 }
 
 // Full-resolution monotonic time by combining SysTick overflow count with

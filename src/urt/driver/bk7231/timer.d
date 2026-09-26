@@ -79,8 +79,6 @@ enum bool has_mcycle = false;
 enum bool has_timer_stop = false;
 enum bool has_oneshot_timer = false;
 
-private enum uint timer_freq_hz = mtime_freq_hz;
-
 private __gshared uint timer_high;
 private __gshared uint timer_last;
 
@@ -137,21 +135,20 @@ alias TimerCallback = void function() @nogc nothrow;
 
 private __gshared TimerCallback tick_callback;
 
-void timer_set_periodic(uint period_us, TimerCallback cb)
+void timer_set_periodic(ulong period_ticks, TimerCallback cb)
 {
     tick_callback = cb;
 
     uint ctl = reg_read(TIMER0_2_CTL);
 
-    if (!cb || period_us == 0)
+    if (!cb || period_ticks == 0)
     {
         reg_write(TIMER0_2_CTL, ctl & ~(INT_FLAG_MASK | TIMER1_EN));
         return;
     }
 
-    ulong ticks = cast(ulong)period_us * (timer_freq_hz / 1_000_000);
-    assert(ticks > 0 && ticks <= uint.max, "bk7231 timer: period out of range");
-    reg_write(TIMER1_PERIOD, cast(uint)ticks);
+    assert(period_ticks <= uint.max, "bk7231 timer: period out of range");
+    reg_write(TIMER1_PERIOD, cast(uint)period_ticks);
 
     irq_set_handler(IRQ_TIMER, &timer_isr);
     irq_set_enable(IRQ_TIMER);

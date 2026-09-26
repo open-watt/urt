@@ -1,7 +1,7 @@
 module urt.time;
 
 import urt.array : Array;
-import urt.traits : is_some_float;
+import urt.traits : is_signed_integral, is_some_float;
 
 version (Windows)
 {
@@ -239,21 +239,21 @@ pure nothrow @nogc:
     long as(string base)() const
     {
         static if (base == "nsecs")
-            return ticks*nsec_multiplier;
+            return ticks_to_nsecs(ticks);
         else static if (base == "usecs")
-            return ticks*nsec_multiplier / 1_000;
+            return ticks_to_nsecs(ticks) / 1_000;
         else static if (base == "msecs")
-            return ticks*nsec_multiplier / 1_000_000;
+            return ticks_to_nsecs(ticks) / 1_000_000;
         else static if (base == "seconds")
-            return ticks*nsec_multiplier / 1_000_000_000;
+            return ticks_to_nsecs(ticks) / 1_000_000_000;
         else static if (base == "minutes")
-            return ticks*nsec_multiplier / 60_000_000_000;
+            return ticks_to_nsecs(ticks) / 60_000_000_000;
         else static if (base == "hours")
-            return ticks*nsec_multiplier / 3_600_000_000_000;
+            return ticks_to_nsecs(ticks) / 3_600_000_000_000;
         else static if (base == "days")
-            return ticks*nsec_multiplier / 86_400_000_000_000;
+            return ticks_to_nsecs(ticks) / 86_400_000_000_000;
         else static if (base == "weeks")
-            return ticks*nsec_multiplier / 604_800_000_000_000;
+            return ticks_to_nsecs(ticks) / 604_800_000_000_000;
         else
             static assert(false, "Invalid base");
     }
@@ -359,7 +359,7 @@ pure nothrow @nogc:
         if (last_unit == 8)
             return -1;
 
-        ticks = (negate ? -total_nsecs : total_nsecs) / nsec_multiplier;
+        ticks = nsecs_to_ticks(negate ? -total_nsecs : total_nsecs);
         return offset;
     }
 
@@ -975,21 +975,21 @@ SysTime next_occurrence(SysTime now, TimeOfDay tod, ubyte weekday_mask = 0x7F) p
 Duration dur(string base)(long value) pure
 {
     static if (base == "nsecs")
-        return Duration(value / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value));
     else static if (base == "usecs")
-        return Duration(value*1_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*1_000));
     else static if (base == "msecs")
-        return Duration(value*1_000_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*1_000_000));
     else static if (base == "seconds")
-        return Duration(value*1_000_000_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*1_000_000_000));
     else static if (base == "minutes")
-        return Duration(value*60_000_000_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*60_000_000_000));
     else static if (base == "hours")
-        return Duration(value*3_600_000_000_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*3_600_000_000_000));
     else static if (base == "days")
-        return Duration(value*86_400_000_000_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*86_400_000_000_000));
     else static if (base == "weeks")
-        return Duration(value*604_800_000_000_000 / nsec_multiplier);
+        return Duration(nsecs_to_ticks(value*604_800_000_000_000));
     else
         static assert(false, "Invalid base");
 }
@@ -1092,7 +1092,7 @@ ulong unix_time_ns(SysTime t) pure
     else version (Posix)
         return t.ticks;
     else version (Embedded)
-        return t.ticks * nsec_multiplier;
+        return ticks_to_nsecs(t.ticks);
     else
         static assert(false, "TODO");
 }
@@ -1104,7 +1104,7 @@ SysTime from_unix_time_ns(ulong ns) pure
     else version (Posix)
         return SysTime(ns);
     else version (Embedded)
-        return SysTime(ns / nsec_multiplier);
+        return SysTime(nsecs_to_ticks(ns));
     else
         static assert(false, "TODO");
 }
@@ -1120,8 +1120,8 @@ bool wall_time_set()
 void set_utc_time(ulong unix_ns)
 {
     long old_offset = cast(long)sys_time_offset;
-    cast()sys_time_offset = unix_ns / nsec_multiplier - get_time().ticks;
-    long delta_ns = has_wall_time ? (cast(long)sys_time_offset - old_offset) * nsec_multiplier : 0;
+    cast()sys_time_offset = nsecs_to_ticks(unix_ns) - get_time().ticks;
+    long delta_ns = has_wall_time ? ticks_to_nsecs(cast(long)sys_time_offset - old_offset) : 0;
     has_wall_time = true;
 
     apply_os_clock(unix_ns);
@@ -1130,7 +1130,7 @@ void set_utc_time(ulong unix_ns)
 
 void adjust_utc_time(long delta_ns)
 {
-    cast()sys_time_offset = cast(ulong)(cast(long)sys_time_offset + delta_ns / nsec_multiplier);
+    cast()sys_time_offset = cast(ulong)(cast(long)sys_time_offset + nsecs_to_ticks(delta_ns));
     has_wall_time = true;
 
     apply_os_clock(unix_time_ns(get_sys_time()));
@@ -1160,7 +1160,7 @@ private void apply_os_clock(ulong unix_ns)
         static if (has_rtc)
         {
             auto p = persistent_state();
-            ulong mtime_ticks = unix_ns / nsec_multiplier;
+            ulong mtime_ticks = nsecs_to_ticks(unix_ns);
             ulong sec = mtime_ticks / mtime_freq_hz;
             ulong frac = mtime_ticks % mtime_freq_hz;
             ulong hbn_ticks = sec * rtc_freq_hz + frac * rtc_freq_hz / mtime_freq_hz;
@@ -1224,17 +1224,73 @@ version (Windows)
     enum ulong unix_epoch_as_filetime = 116_444_736_000_000_000UL;
 
     enum uint ticks_per_second = 10_000_000; // QPC has been 10mHz for several decades. I don't think it can ever change...
-    enum uint nsec_multiplier = 100;
 }
 else version (Posix)
-{
     enum uint ticks_per_second = 1_000_000_000;
-    enum uint nsec_multiplier = 1;
-}
 else version (Embedded)
-{
     enum uint ticks_per_second = mtime_freq_hz;
-    enum uint nsec_multiplier = 1_000_000_000 / mtime_freq_hz;
+
+// A tick is nsec_num / nsec_den nanoseconds, reduced, so rates that do not divide a second convert exactly.
+enum ulong nsec_num = 1_000_000_000 / gcd(1_000_000_000, ticks_per_second);
+enum ulong nsec_den = ticks_per_second / gcd(1_000_000_000, ticks_per_second);
+
+T ticks_to_nsecs(T)(T ticks) pure
+    => scale!(nsec_num, nsec_den)(ticks);
+
+T nsecs_to_ticks(T)(T ns) pure
+    => scale!(nsec_den, nsec_num)(ns);
+
+// x * num / den by a multiply-high with the fraction fixed at compile time: never a divide, and truncated toward zero
+// except for |x| >= 2^64 / den, where it may land one tick up. Compile time takes the same path, so the two agree.
+T scale(ulong num, ulong den, T)(T x) pure
+{
+    enum T n = num, d = den;
+    static if (den == 1)
+        return x * n;
+    else
+    {
+        static if (is_signed_integral!T)
+        {
+            if (x < 0)
+                return -cast(T)scale_up!(num, den)(0UL - cast(ulong)x);
+        }
+        return cast(T)scale_up!(num, den)(x);
+    }
+}
+
+ulong scale_up(ulong num, ulong den)(ulong x) pure
+{
+    static assert(den <= uint.max);
+    enum ulong frac = () {
+        ulong r = num % den, q;
+        foreach (_; 0 .. 2)
+        {
+            r <<= 32;
+            q = q << 32 | r / den;
+            r %= den;
+        }
+        return r ? q + 1 : q;
+    }();
+
+    if (__ctfe)
+    {
+        immutable ulong xl = cast(uint)x, xh = x >> 32, fl = cast(uint)frac, fh = frac >> 32;
+        immutable ulong mid = (xl * fl >> 32) + cast(uint)(xh * fl) + cast(uint)(xl * fh);
+        return x * (num / den) + xh * fh + (xh * fl >> 32) + (xl * fh >> 32) + (mid >> 32);
+    }
+    import urt.math : mul64to128;
+    return x * (num / den) + mul64to128(x, frac)[1];
+}
+
+ulong gcd(ulong a, ulong b) pure
+{
+    while (b)
+    {
+        immutable t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
 }
 
 __gshared immutable ulong sys_time_offset;
@@ -1449,6 +1505,25 @@ ptrdiff_t time_to_string(long ns, char[] buffer) pure
 unittest
 {
     import urt.mem.temp;
+
+    assert(scale!(125, 2)(3L) == 187);
+    assert(scale!(125, 2)(-3L) == -187);
+    assert(scale!(2, 125)(1_000_000_000L) == 16_000_000);
+    assert(scale!(500, 13)(26_000_000L) == 1_000_000_000);
+    assert(scale!(500, 13)(long.max / 500 * 13) == long.max / 500 * 500);
+    enum ulong exact = ulong.max / 500 * 13 + ulong.max % 500 * 13 / 500;
+    assert(scale!(13, 500)(ulong.max) - exact <= 1);
+    enum ulong big = 1_800_000_000_000_000_499UL;
+    assert(scale!(13, 500)(big) - (big / 500 * 13 + big % 500 * 13 / 500) <= 1);
+    static assert(scale!(13, 500)(big) == 46_800_000_000_000_013);
+    assert(scale!(13, 500)(big) == 46_800_000_000_000_013);
+    assert(scale!(13, 500)(-cast(long)big) == -46_800_000_000_000_013);
+    assert(123_456_789L - nsecs_to_ticks(ticks_to_nsecs(123_456_789L)) <= 1);
+    static foreach (r; [[125, 2], [2, 125], [500, 13], [13, 500], [25, 22], [22, 25], [1, 1000]])
+    {
+        for (ulong x = 0; x < 1UL << 50; x = x < 100_000 ? x + 1 : x * 3 + 7)
+            assert(scale!(r[0], r[1])(x) == x * r[0] / r[1]);
+    }
 
     assert(random_delay(Duration.zero) == Duration.zero);
     foreach (_; 0 .. 100)

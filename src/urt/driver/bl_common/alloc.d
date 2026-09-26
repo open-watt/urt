@@ -377,10 +377,8 @@ struct Pool
     immutable(char)* name;
 }
 
-// TLSF control_t for vendor config (FL_INDEX_MAX=30, SL_INDEX_COUNT_LOG2=5,
-// rv32) sums to 3188 bytes; round to 3200. init_pools asserts the real
-// tlsf_size() fits, so a vendor bump that grows control_t fails loudly.
-enum TLSF_CONTROL_BYTES = 3200;
+// tlsf_size() at the default FL_INDEX_MAX (30 on rv32, 32 on the rv64 D0) and SL_INDEX_COUNT_LOG2=5.
+enum TLSF_CONTROL_BYTES = size_t.sizeof == 8 ? 6536 : 3064;
 
 @fast_data align(16) __gshared ubyte[TLSF_CONTROL_BYTES][num_pools] _control;
 @fast_data __gshared Pool[num_pools] _pools;

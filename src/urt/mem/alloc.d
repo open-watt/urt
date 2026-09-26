@@ -466,6 +466,8 @@ else version (Bouffalo)
     public import urt.driver.bl_common.alloc;
 else version (RP2350)
     public import urt.driver.rp2350.alloc;
+else version (MT7621)
+    public import urt.driver.mt7621.alloc;
 else version (BK7231N)
     public import urt.driver.bk7231.alloc;
 else version (BK7231T)

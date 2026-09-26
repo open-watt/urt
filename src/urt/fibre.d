@@ -1157,6 +1157,61 @@ else
             }
         }
     }
+    else version (MIPS32)
+    {
+        // o32: sp, ra, s0-s7, fp, gp. Soft-float only; hard-float would add f20-f30.
+        version (D_HardFloat)
+            static assert(false, "TODO: save f20-f30 for hard-float MIPS");
+        enum save_state_len = 12;
+
+        void co_init_stack(void* base, void* top, coentry_t entry)
+        {
+            assert(is_aligned!16(base) && is_aligned!16(top), "Stack must be aligned to 16 bytes");
+
+            void** p = cast(void**)base;
+            p[0] = cast(void*)(top - 16);   // starting sp, above it the o32 argument save area
+            p[1] = entry;                   // starting ra (entry point)
+        }
+
+        pragma(inline, false)
+        extern(C) void co_swap(cothread_t new_ctx, cothread_t old_ctx) @naked
+        {
+            asm nothrow @nogc
+            {
+                `
+                sw $sp,  0($a1)
+                sw $ra,  4($a1)
+                sw $s0,  8($a1)
+                sw $s1, 12($a1)
+                sw $s2, 16($a1)
+                sw $s3, 20($a1)
+                sw $s4, 24($a1)
+                sw $s5, 28($a1)
+                sw $s6, 32($a1)
+                sw $s7, 36($a1)
+                sw $fp, 40($a1)
+                sw $gp, 44($a1)
+                lw $sp,  0($a0)
+                lw $s0,  8($a0)
+                lw $s1, 12($a0)
+                lw $s2, 16($a0)
+                lw $s3, 20($a0)
+                lw $s4, 24($a0)
+                lw $s5, 28($a0)
+                lw $s6, 32($a0)
+                lw $s7, 36($a0)
+                lw $fp, 40($a0)
+                lw $gp, 44($a0)
+                lw $t9,  4($a0)
+                move $ra, $t9
+                jr $t9
+                `
+                : // no outputs
+                : // a0=new_ctx, a1=old_ctx (@naked, ABI handles register assignment)
+                : "memory";
+            }
+        }
+    }
     else
         static assert(false, "TODO: implement for other architectures!");
 }

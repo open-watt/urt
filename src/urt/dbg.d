@@ -88,5 +88,16 @@ else version (Xtensa)
         }
     }
 }
+else version (MIPS32)
+{
+    pragma(inline, true)
+    extern(C) void breakpoint() pure nothrow @nogc
+    {
+        debug asm pure nothrow @nogc
+        {
+            "sdbbp";
+        }
+    }
+}
 else
     static assert(0, "TODO: Unsupported architecture");

@@ -4,6 +4,8 @@ import urt.mem.alloc : MemFlags;
 
 nothrow @nogc:
 
+enum size_t min_alignment = 8;
+
 enum has_realloc  = false;
 enum has_expand   = false;
 enum has_memsize  = true;
@@ -14,7 +16,7 @@ enum has_memflags = false;
 void[] _alloc(size_t size, size_t alignment, MemFlags) pure
 {
     void* p;
-    return posix_memalign(&p, alignment <= 8 ? 8 : alignment, size) ? null : p[0 .. size];
+    return posix_memalign(&p, alignment < min_alignment ? min_alignment : alignment, size) ? null : p[0 .. size];
 }
 
 void _free(void* ptr) pure

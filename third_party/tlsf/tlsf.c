@@ -305,13 +305,24 @@ tlsf_static_assert(ALIGN_SIZE == SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
 **   simplify the implementation.
 ** - The next_free / prev_free fields are only valid if the block is free.
 */
+/*
+** The header fields a used block exposes are one ALIGN_SIZE slot each, so every block start
+** keeps ALIGN_SIZE alignment even where ALIGN_SIZE is wider than a pointer.
+*/
+#if defined (TLSF_ALIGN_SIZE_LOG2) && TLSF_ALIGN_SIZE_LOG2 == 3 && !defined (TLSF_64BIT)
+typedef unsigned long long tlsf_slot_t;
+#else
+typedef size_t tlsf_slot_t;
+#endif
+tlsf_static_assert(sizeof(tlsf_slot_t) == ALIGN_SIZE);
+
 typedef struct block_header_t
 {
 	/* Points to the previous physical block. */
-	struct block_header_t* prev_phys_block;
+	union { struct block_header_t* prev_phys_block; tlsf_slot_t prev_phys_slot; };
 
 	/* The size of this block, excluding the block header. */
-	size_t size;
+	union { size_t size; tlsf_slot_t size_slot; };
 
 	/* Next and previous free blocks. */
 	struct block_header_t* next_free;
@@ -331,19 +342,19 @@ static const size_t block_header_prev_free_bit = 1 << 1;
 ** The size of the block header exposed to used blocks is the size field.
 ** The prev_phys_block field is stored *inside* the previous free block.
 */
-static const size_t block_header_overhead = sizeof(size_t);
+static const size_t block_header_overhead = sizeof(tlsf_slot_t);
 
 /* User data starts directly after the size field in a used block. */
 static const size_t block_start_offset =
-	offsetof(block_header_t, size) + sizeof(size_t);
+	offsetof(block_header_t, size) + sizeof(tlsf_slot_t);
 
 /*
 ** A free block must be large enough to store its header minus the size of
 ** the prev_phys_block field, and no larger than the number of addressable
 ** bits for FL_INDEX.
 */
-static const size_t block_size_min = 
-	sizeof(block_header_t) - sizeof(block_header_t*);
+static const size_t block_size_min =
+	sizeof(block_header_t) - sizeof(tlsf_slot_t);
 static const size_t block_size_max = tlsf_cast(size_t, 1) << FL_INDEX_MAX;
 
 

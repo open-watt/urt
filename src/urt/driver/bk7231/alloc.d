@@ -7,6 +7,8 @@ version (BK7231N) import urt.util : align_down;
 
 nothrow @nogc:
 
+enum size_t min_alignment = 8;
+
 enum has_realloc = false;
 enum has_expand = false;
 version (BK7231N) enum has_memsize = true;
@@ -416,14 +418,18 @@ else
 
     void[] picolibc_alloc(size_t size, size_t alignment) pure
     {
-        import urt.util : align_down;
+        import urt.util : align_up, max;
 
-        size_t header_size = (void*).sizeof + alignment;
-        void* allocation = malloc(header_size + size);
+        static if (min_alignment < (void*).sizeof)
+        {
+            if (alignment < (void*).sizeof)
+                alignment = (void*).sizeof;
+        }
+        void* allocation = malloc(max(alignment, min_alignment) + size);
         if (!allocation)
             return null;
 
-        size_t address = align_down(cast(size_t)allocation + header_size, alignment);
+        size_t address = align_up(cast(size_t)allocation + min_alignment, alignment);
         (cast(void**)address)[-1] = allocation;
         return (cast(void*)address)[0 .. size];
     }

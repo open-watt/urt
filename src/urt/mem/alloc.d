@@ -170,17 +170,16 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = default_alignment
 
 private size_t reclaim_size(size_t size, size_t alignment) pure
 {
-    enum natural_alignment = size_t.sizeof;
-    if (alignment <= natural_alignment)
+    if (alignment <= min_alignment)
         return size;
-    size_t padding = alignment - natural_alignment;
+    size_t padding = alignment - min_alignment;
     return size <= size_t.max - padding ? size + padding : size_t.max;
 }
 
 unittest
 {
-    assert(reclaim_size(100, size_t.sizeof) == 100);
-    assert(reclaim_size(100, size_t.sizeof * 4) == 100 + size_t.sizeof * 3);
+    assert(reclaim_size(100, min_alignment) == 100);
+    assert(reclaim_size(100, min_alignment * 4) == 100 + min_alignment * 3);
 }
 
 private struct ReallocRetry

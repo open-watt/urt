@@ -39,6 +39,11 @@ __vector_table:
     .type   Reset_Handler, %function
     .thumb_func
 Reset_Handler:
+    /* Masked until main: the ROM bootloader can jump here with its interrupts still armed. */
+    cpsid   i
+
+    bl      sys_early
+
     ldr     r0, =_got_start
     ldr     r1, =_got_load
     ldr     r2, =_got_end
@@ -88,6 +93,7 @@ Reset_Handler:
     cmp     r4, r5
     blo     .Linit_loop
 
+    cpsie   i
     movs    r0, #0
     movs    r1, #0
     mov     r7, r0

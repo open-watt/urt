@@ -4,6 +4,7 @@ public import urt.driver.stm32.uart;
 public import urt.driver.stm32.irq;
 public import urt.driver.stm32.timer;
 
+import urt.attribute : persist, used;
 import urt.driver.uart : UartConfig, console_uart;
 
 import core.volatile;
@@ -22,7 +23,11 @@ version (STM32H7)
     enum uint rcc_gpioenr = 0xE0;
     enum uint rcc_apb1enr = 0xE8;
     enum uint rcc_apb2enr = 0xF0;
+    enum uint rcc_gpiorstr = 0x88;
+    enum uint rcc_otgfs_enr = 0xD8;         // AHB1ENR.USB2OTGFSEN
+    enum uint rcc_otgfs_bit = 27;
 
+    enum ulong system_memory = 0x1FF0_9800;
     enum ulong uid_base = 0x1FF1_E800;
     enum ulong flash_size_reg = 0x1FF1_E880;
 }
@@ -38,7 +43,11 @@ else
     enum uint rcc_gpioenr = 0x30;
     enum uint rcc_apb1enr = 0x40;
     enum uint rcc_apb2enr = 0x44;
+    enum uint rcc_gpiorstr = 0x10;
+    enum uint rcc_otgfs_enr = 0x34;         // AHB2ENR.OTGFSEN
+    enum uint rcc_otgfs_bit = 7;
 
+    enum ulong system_memory = 0x1FFF_0000;
     version (STM32F7)
     {
         enum ulong uid_base = 0x1FF0_F420;
@@ -71,6 +80,34 @@ void clock_enable(uint enr, uint bit)
 // Flash size in KB as the factory programmed it; the part number can undersell it.
 uint flash_size_kb() => volatileLoad(cast(ushort*)flash_size_reg);
 
+// Takes effect through a reset, so the ROM starts from a clean peripheral state.
+noreturn reboot_to_bootloader()
+{
+    import urt.driver.reset : system_reset;
+    _bootloader_request = bootloader_magic;
+    system_reset();
+}
+
+// Runs first from Reset_Handler, before .data, .bss or the GOT exist: registers, link-time
+// constants and @persist only. A broken image can always be recovered into the ROM from here.
+extern(C) void sys_early()
+{
+    import urt.driver.reset : ResetMark, reset_record_mark, system_reset;
+
+    // DFU's leave request jumps here without a reset, leaving the ROM's USB core and clocks live.
+    if (reg_read(rcc_base + rcc_otgfs_enr) & (1u << rcc_otgfs_bit))
+    {
+        reset_record_mark(ResetMark.deliberate);
+        system_reset();
+    }
+
+    if (_bootloader_request == bootloader_magic || dfu_button_held())
+    {
+        _bootloader_request = 0;
+        enter_system_bootloader();
+    }
+}
+
 extern(C) void sys_init()
 {
     bool on_hse = clocks_init();
@@ -90,7 +127,11 @@ extern(C) void sys_init()
 
 private:
 
+enum uint bootloader_magic = 0xB007_10AD;
+@persist @used __gshared uint _bootloader_request;
+
 extern(C) extern __gshared const ubyte __stm32_hse_hz;
+extern(C) extern __gshared const ubyte __stm32_dfu_button;
 
 uint board_hse_hz() => cast(uint)cast(size_t)&__stm32_hse_hz;
 
@@ -105,6 +146,57 @@ void put_decimal(uint value)
     }
     while (value);
     uart0_hw_puts(buf[i .. $]);
+}
+
+bool dfu_button_held()
+{
+    import urt.driver.gpio : Pull, gpio_input_init, gpio_input_read;
+
+    uint cfg = cast(uint)cast(size_t)&__stm32_dfu_button;
+    if (cfg == 0xFFFF)
+        return false;
+    uint pin = cfg & 0xFF;
+    bool active_high = (cfg & 0x100) != 0;
+
+    gpio_input_init(pin, active_high ? Pull.down : Pull.up);
+    foreach (i; 0 .. 2000)
+        asm @nogc nothrow { "nop"; }
+    bool held = gpio_input_read(pin) == active_high;
+
+    uint port_bit = 1u << (pin / 16);
+    reg_set(rcc_base + rcc_gpiorstr, port_bit);
+    reg_clear(rcc_base + rcc_gpiorstr, port_bit);
+    reg_clear(rcc_base + rcc_gpioenr, port_bit);
+    return held;
+}
+
+noreturn enter_system_bootloader()
+{
+    version (STM32H7) {} else
+    {
+        // The F4/F7 ROM expects system memory aliased at 0.
+        enum ulong syscfg_memrmp = 0x4001_3800;
+        clock_enable(rcc_apb2enr, 14);
+        reg_write(syscfg_memrmp, 1);
+    }
+
+    enum ulong scb_vtor = 0xE000_ED08;
+    reg_write(scb_vtor, cast(uint)system_memory);
+    uint sp = reg_read(system_memory);
+    uint pc = reg_read(system_memory + 4);
+    asm @nogc nothrow
+    {
+        `
+        msr   msp, %0
+        dsb
+        isb
+        cpsie i
+        bx    %1
+        `
+        : : "r" (sp), "r" (pc) : "memory";
+    }
+    for (;;)
+    {}
 }
 
 enum uint cr_hseon   = 1 << 16;

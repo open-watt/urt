@@ -7,6 +7,8 @@ import urt.time;
 // num_i2c is a compile-time upper bound used to remove unsupported backends. i2c_count() returns the actual number of usable controllers.
 version (Espressif)
     public import urt.driver.esp32.i2c;
+else version (MT7621)
+    public import urt.driver.mt7621.i2c;
 else
 {
     enum uint num_i2c = 0;
@@ -130,10 +132,11 @@ Result i2c_open(ref I2cBus bus, ubyte port, ref const I2cBusConfig config)
         if (port >= i2c_count() || config.sda_gpio == ubyte.max || config.scl_gpio == ubyte.max || config.sda_gpio == config.scl_gpio ||
             config.frequency == 0)
             return InternalResult.invalid_parameter;
-        if (bus.is_open)
+        if (bus.is_open || (_open_ports & (1u << port)))
             return InternalResult.already_exists;
         if (!i2c_hw_open(bus, port, config))
             return InternalResult.failed;
+        _open_ports |= 1u << port;
         bus.port = port;
         bus.frequency = config.frequency;
         return Result.success;
@@ -149,7 +152,10 @@ void i2c_close(ref I2cBus bus)
     static if (num_i2c != 0)
     {
         if (bus.is_open)
+        {
             i2c_hw_close(bus);
+            _open_ports &= ~(1u << bus.port);
+        }
     }
     bus.port = ubyte.max;
     bus.driver_data = null;
@@ -231,6 +237,13 @@ package bool i2c_complete(ref I2cOperation operation, I2cOperationState completi
 }
 
 
+static if (num_i2c != 0)
+{
+    static assert(num_i2c <= 32);
+    private __gshared uint _open_ports;
+}
+
+
 unittest
 {
     static assert(is(typeof(num_i2c) == uint));
@@ -255,4 +268,18 @@ unittest
     atomicStore!(MemoryOrder.release)(operation._state, I2cOperationState.pending);
     assert(!i2c_complete(operation, I2cOperationState.cancelled, I2cError.none, I2cCallbackContext.thread));
     assert(operation.state == I2cOperationState.cancelled);
+}
+
+
+// A backend nominates a bus it accepts as `test_i2c_config` for this to run on its hardware.
+static if (num_i2c != 0 && __traits(compiles, test_i2c_config))
+unittest // a controller has one owner at a time
+{
+    I2cBus a, b;
+    assert(i2c_open(a, 0, test_i2c_config));
+    assert(!i2c_open(b, 0, test_i2c_config) && !b.is_open, "a second handle opened an owned controller");
+    i2c_close(a);
+    assert(i2c_open(b, 0, test_i2c_config), "the controller did not come back after close");
+    i2c_close(b);
+    assert(_open_ports == 0);
 }

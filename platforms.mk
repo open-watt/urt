@@ -161,7 +161,6 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     PROCESSOR := arm968e-s
     # ARMv5TE silently rounds unaligned halfword stores down.
     STRICT_ALIGN := 1
-    MATTR = +strict-align
     ifeq ($(PLATFORM),bk7231n)
         TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
     endif
@@ -171,16 +170,19 @@ else ifeq ($(PLATFORM),rp2350)
     # Raspberry Pi RP2350 -- dual Cortex-M33, 150MHz, 520KB SRAM, XIP QSPI flash
     BUILDNAME := rp2350
     PROCESSOR := cortex-m33
+    STRICT_ALIGN := 0
     OS = baremetal
 else ifeq ($(PLATFORM),stm7xx)
     BUILDNAME := stm7xx
     PROCESSOR := cortex-m7
+    STRICT_ALIGN := 0
     OS = baremetal
     STM32_VARIANT = f7
     MFPU = fpv5-d16
 else ifeq ($(PLATFORM),stm4xx)
     BUILDNAME := stm4xx
     PROCESSOR := cortex-m4
+    STRICT_ALIGN := 0
     OS = baremetal
     STM32_VARIANT = f4
     MFPU = fpv4-sp-d16
@@ -719,9 +721,6 @@ ifeq ($(COMPILER),ldc)
         ifdef MATTR
             DFLAGS := $(DFLAGS) -mattr=$(MATTR)
         endif
-        ifeq ($(STRICT_ALIGN),1)
-            DFLAGS := $(DFLAGS) $(VERSION_FLAG)StrictAlign
-        endif
     else ifeq ($(ARCH),riscv64)
         DFLAGS := $(DFLAGS) -mtriple=riscv64-unknown-elf -gcc=riscv64-unknown-elf-gcc -code-model=medium
         DFLAGS := $(DFLAGS) -mattr=$(MATTR)
@@ -773,6 +772,19 @@ ifeq ($(COMPILER),ldc)
         XTENSA_TWO_STAGE := 1
     else
         $(error "Unsupported ARCH: $(ARCH)")
+    endif
+
+    # ARMv7-M and later take unaligned word and halfword LDR/STR; ARMv5 and ARMv6-M take none.
+    # No ARM core takes unaligned LDRD/STRD, LDM/STM or FP accesses, so every part must say which.
+    ifneq ($(filter arm thumb,$(ARCH)),)
+        ifeq ($(OS),baremetal)
+            ifeq ($(filter 0 1,$(STRICT_ALIGN)),)
+                $(error PLATFORM=$(PLATFORM) must declare STRICT_ALIGN := 0 or 1)
+            endif
+        endif
+        ifeq ($(STRICT_ALIGN),1)
+            DFLAGS := $(DFLAGS) -mattr=+strict-align $(VERSION_FLAG)StrictAlign
+        endif
     endif
 
     # Embedded baremetal: assemble cross-gcc flags + libc/libm/libgcc paths.

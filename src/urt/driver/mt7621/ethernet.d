@@ -1,15 +1,16 @@
 module urt.driver.mt7621.ethernet;
 
 import urt.driver.ethernet : EthernetConfig, EthLinkCallback, EthLinkEvent, EthLinkInfo, EthReadyCallback, EthRxCallback, EthRxInfo, EthSpeed;
-import urt.driver.mt7621 : mmio_read, mmio_write;
+import urt.driver.mt7621 : mmio_read, mmio_write, sysctl_base;
 import urt.system : sleep;
 import urt.time : msecs;
 
 nothrow @nogc:
 
 // GE1 fronts the MT7530: frames to and from the CPU port carry the MediaTek special tag, which this
-// driver adds and strips so callers see plain frames plus a front-port number. GE2 is not driven yet.
-enum uint num_ethernet = 1;
+// driver adds and strips in software so callers see plain frames plus a front-port number. GE2 is one port on an
+// RGMII PHY, the AR8033 whose fibre side faces the SFP cage on the hEX S; that side is 1000BASE-X only.
+enum uint num_ethernet = 2;
 enum bool has_eth_timestamp = false;
 enum bool has_eth_gigabit = true;
 enum bool has_eth_pin_select = false;
@@ -18,10 +19,10 @@ enum bool has_eth_tx_checksum = false;
 enum uint num_front_ports = 5;
 
 const(char)[] eth_hw_name(uint mac)
-    => "ge1";
+    => mac == 0 ? "ge1" : "ge2";
 
 uint eth_hw_ports(uint mac)
-    => num_front_ports;
+    => mac == 0 ? num_front_ports : 1;
 
 // Runs from sys_init, before any interface opens, so early output can already leave the box.
 void fe_init()
@@ -47,10 +48,16 @@ void fe_init()
     sleep(10.msecs);
 
     mmio_write(fe_base + gmac0_mcr, mcr_fixed_1g);
+    mmio_write(fe_base + gmac1_mcr, mcr_fixed_1g & ~mcr_force_link);
     mmio_write(fe_base + gdma1_fwd_cfg, (mmio_read(fe_base + gdma1_fwd_cfg) & 0xFFFF_0000) | gdma_special_tag | gdma_strip_crc);
+    mmio_write(fe_base + gdma2_fwd_cfg, (mmio_read(fe_base + gdma2_fwd_cfg) & 0xFFFF_0000) | gdma_strip_crc);
+    mmio_write(sysctl_base + sysc_syscfg1, mmio_read(sysctl_base + sysc_syscfg1) & ~syscfg1_ge2_mode);
+    mmio_write(sysctl_base + sysc_gpio_mode, mmio_read(sysctl_base + sysc_gpio_mode) & ~gpio_mode_rgmii2);
     mmio_write(fe_base + cdmq_ig_ctrl, mmio_read(fe_base + cdmq_ig_ctrl) | cdm_stag_en);
-    mmio_write(fe_base + cdmp_ig_ctrl, mmio_read(fe_base + cdmp_ig_ctrl) | cdm_stag_en);
-    mmio_write(fe_base + cdmp_eg_ctrl, 1);
+    // The receive side neither parses nor untags the special tag: both are one switch for every GDMA,
+    // and would take GE2's real 802.1Q headers with GE1's tag. Linux does the same with a MAC off the switch.
+    mmio_write(fe_base + cdmp_ig_ctrl, mmio_read(fe_base + cdmp_ig_ctrl) & ~cdm_stag_en);
+    mmio_write(fe_base + cdmp_eg_ctrl, 0);
 
     import urt.mem.alloc : alloc, MemFlags;
     void[] dma = alloc(dma_bytes, 32, MemFlags.dma);
@@ -118,10 +125,19 @@ void fe_init()
 
 bool eth_hw_open(uint mac, uint port, ref const EthernetConfig cfg, EthRxCallback rx, EthLinkCallback link, void* context)
 {
-    if (!_ready || !port_enable(port, true))
+    if (!_ready)
         return false;
-    _ports[port] = Port(rx, link, context);
-    if (_enabled == 1u << port)
+    immutable slot = mac == 0 ? port : ge2_slot;
+    if (mac == 1)
+    {
+        if (cfg.phy_address < 0 || cfg.phy_address > 31)
+            return false;
+        _ge2_phy = cast(ubyte)cfg.phy_address;
+    }
+    if (!port_enable(slot, true))
+        return false;
+    _ports[slot] = Port(rx, link, context);
+    if (_enabled == 1u << slot)
     {
         import urt.driver.mt7621.irq : irq_set_enable, irq_set_handler;
         irq_set_handler(fe_irq, &fe_irq_handler);
@@ -135,9 +151,10 @@ bool eth_hw_open(uint mac, uint port, ref const EthernetConfig cfg, EthRxCallbac
 // A port the switch would not isolate stays open, so the close is retried rather than reported done.
 bool eth_hw_close(uint mac, uint port)
 {
-    if (!port_enable(port, false))
+    immutable slot = mac == 0 ? port : ge2_slot;
+    if (!port_enable(slot, false))
         return false;
-    _ports[port] = Port.init;
+    _ports[slot] = Port.init;
     if (_enabled == 0)
     {
         import urt.driver.mt7621.irq : irq_clear_enable;
@@ -148,18 +165,18 @@ bool eth_hw_close(uint mac, uint port)
 }
 
 bool eth_hw_tx(uint mac, uint port, const(ubyte)[] frame, bool insert_checksum)
-    => fe_tx_tagged(frame, 1u << port);
+    => mac == 0 ? fe_tx_tagged(frame, 1u << port) : fe_tx(frame);
 
 bool eth_hw_checksum_insertable(uint mac, uint port, const(ubyte)[] frame)
     => false;
 
-// Front port n takes the base address plus n, as RouterOS numbers etherN.
+// Front port n takes the base address plus n and GE2 follows the front ports, as RouterOS numbers etherN and sfp1.
 bool eth_hw_get_hardware_address(uint mac, uint port, ref ubyte[6] address)
 {
     if (_base_mac == typeof(_base_mac).init)
         return false;
     address = _base_mac;
-    immutable low = (address[3] << 16 | address[4] << 8 | address[5]) + port;
+    immutable low = (address[3] << 16 | address[4] << 8 | address[5]) + (mac == 0 ? port : num_front_ports);
     address[3] = cast(ubyte)(low >> 16);
     address[4] = cast(ubyte)(low >> 8);
     address[5] = cast(ubyte)low;
@@ -175,6 +192,11 @@ bool eth_hw_set_promiscuous(uint mac, uint port, bool enable)
 
 bool eth_hw_get_link(uint mac, uint port, ref EthLinkInfo info)
 {
+    if (mac == 1)
+    {
+        info.speed = EthSpeed.s1000m;
+        return phy_link(info.full_duplex);
+    }
     uint pmsr;
     if (!sw_read(mt7530_pmsr(port), pmsr) || !(pmsr & pmsr_link))
         return false;
@@ -201,17 +223,16 @@ bool eth_hw_service(uint mac, size_t budget)
         immutable d2 = d[1];
         if (!(d2 & rxd2_ddone))
             break;
-        immutable len = (d2 >> 16) & 0x3FFF;
-        // The frame engine untags the special tag itself, leaving the source port in rxd3.
-        immutable source = (d[2] >> 16) & 7;
-        if (len < 14 || !(d2 & rxd2_vtag) || source >= num_front_ports)
+        uint slot;
+        ubyte[] frame = rx_frame(_rx_buf + i * rx_buf_size, (d2 >> 16) & 0x3FFF, (d[3] >> 19) & 7, slot);
+        if (frame is null)
             ++_rx_drops;
-        else if (_ports[source].rx is null)
-            ++_ports[source].drops;
+        else if (_ports[slot].rx is null)
+            ++_ports[slot].drops;
         else
         {
             EthRxInfo info;
-            _ports[source].rx(_ports[source].context, (_rx_buf + i * rx_buf_size)[0 .. len], info);
+            _ports[slot].rx(_ports[slot].context, frame, info);
         }
         d[1] = rx_buf_size << 16;
         _rx_calc = i;
@@ -225,7 +246,7 @@ bool eth_hw_service(uint mac, size_t budget)
     if (now - _links_polled >= mtime_freq_hz)
     {
         _links_polled = now;
-        poll_switch_links();
+        poll_links();
     }
 
     if (n == budget)
@@ -240,20 +261,17 @@ bool eth_hw_service(uint mac, size_t budget)
 
 uint eth_hw_take_rx_drops(uint mac, uint port)
 {
-    immutable dropped = _ports[port].drops;
-    _ports[port].drops = 0;
+    immutable slot = mac == 0 ? port : ge2_slot;
+    immutable dropped = _ports[slot].drops;
+    _ports[slot].drops = 0;
     return dropped;
 }
 
 bool fe_tx_tagged(const(ubyte)[] frame, uint port_mask)
 {
-    if (!_ready || frame.length < 14 || frame.length + 4 > tx_buf_size)
+    ubyte* f = tx_slot(frame.length + 4);
+    if (f is null)
         return false;
-    if (!tx_released(tx_desc_phys((_tx_next + tx_count - 1) % tx_count)))
-        return false;
-
-    immutable i = _tx_next;
-    ubyte* f = _tx_buf + i * tx_buf_size;
     f[0 .. 12] = frame[0 .. 12];
     uint len;
     immutable ethertype = (frame[12] << 8) | frame[13];
@@ -276,16 +294,19 @@ bool fe_tx_tagged(const(ubyte)[] frame, uint port_mask)
     }
     for (; len < 64; ++len)
         f[len] = 0;
+    return tx_submit(len, txd4_fport_gdm1);
+}
 
-    uint* d = _tx + i * 4;
-    d[0] = phys(cast(uint)f);
-    d[3] = txd4_fport_gdm1;
-    asm nothrow @nogc { "sync" ::: "memory"; }
-    d[2] = txd3_swc | (len << 16) | txd3_ls0;
-    asm nothrow @nogc { "sync" ::: "memory"; }
-    _tx_next = (i + 1) % tx_count;
-    mmio_write(fe_base + qdma_ctx_ptr, tx_desc_phys(_tx_next));
-    return tx_released(tx_desc_phys(i));
+bool fe_tx(const(ubyte)[] frame)
+{
+    ubyte* f = tx_slot(frame.length);
+    if (f is null)
+        return false;
+    f[0 .. frame.length] = frame[];
+    uint len = cast(uint)frame.length;
+    for (; len < 60; ++len)
+        f[len] = 0;
+    return tx_submit(len, txd4_fport_gdm2);
 }
 
 bool mdio_read(uint phy, uint reg, out ushort value)
@@ -312,16 +333,25 @@ enum uint fe_irq  = 3;
 enum uint gdma1_fwd_cfg   = 0x500;
 enum uint gdma1_mac_adrl  = 0x508;
 enum uint gdma1_mac_adrh  = 0x50C;
+enum uint gdma2_fwd_cfg   = 0x1500;
 enum uint cdmp_ig_ctrl    = 0x400;
 enum uint cdmp_eg_ctrl    = 0x404;
 enum uint cdmq_ig_ctrl    = 0x1400;
 enum uint gmac0_mcr       = 0x1_0100;
+enum uint gmac1_mcr       = 0x1_0200;
 enum uint phy_iac         = 0x1_0004;
 
 enum uint gdma_special_tag = 1 << 24;
 enum uint gdma_strip_crc   = 1 << 16;
 enum uint cdm_stag_en      = 1 << 0;
 enum uint mcr_fixed_1g     = 0x0105_E33B;   // max RX 1536, forced 1G full duplex with pause, TX/RX on
+enum uint mcr_force_dpx    = 1 << 1;
+enum uint mcr_force_link   = 1 << 0;
+
+enum uint sysc_syscfg1      = 0x14;
+enum uint syscfg1_ge2_mode  = 3 << 14;      // 0 is RGMII
+enum uint sysc_gpio_mode    = 0x60;
+enum uint gpio_mode_rgmii2  = 1 << 15;
 
 enum uint pdma_rx_ptr     = 0x900;
 enum uint pdma_rx_cnt     = 0x904;
@@ -369,8 +399,8 @@ enum uint txd3_owner_cpu  = 1u << 31;
 enum uint txd3_ls0        = 1 << 30;
 enum uint txd3_swc        = 1 << 14;
 enum uint txd4_fport_gdm1 = 1 << 25;
+enum uint txd4_fport_gdm2 = 2 << 25;
 enum uint rxd2_ddone      = 1u << 31;
-enum uint rxd2_vtag       = 1 << 15;
 
 enum ubyte tag_untagged  = 0;
 enum ubyte tag_tpid_8100 = 1;
@@ -417,6 +447,9 @@ enum uint phy_iac_start  = 1 << 16;
 enum uint phy_iac_write  = 1 << 18;
 enum uint phy_iac_read   = 2 << 18;
 
+// The front ports of GE1 take slots 0..4 and GE2 the slot after them.
+enum uint ge2_slot = num_front_ports;
+
 struct Port
 {
     EthRxCallback rx;
@@ -424,6 +457,29 @@ struct Port
     void* context;
     uint drops;
 }
+
+// The AR8033's fibre side: 1000BASE-X to RGMII, its registers on the fibre page, RX clock delay in the PHY.
+enum uint phy_bmcr       = 0;
+enum uint phy_bmsr       = 1;
+enum uint phy_anar       = 4;
+enum uint phy_lpa        = 5;
+enum uint phy_debug_addr = 0x1D;
+enum uint phy_debug_data = 0x1E;
+enum uint phy_chip_cfg   = 0x1F;
+
+enum ushort bmcr_aneg         = 1 << 12;
+enum ushort bmcr_power_down   = 1 << 11;
+enum ushort bmcr_restart_aneg = 1 << 9;
+enum ushort bmsr_aneg_done    = 1 << 5;
+enum ushort bmsr_link         = 1 << 2;
+enum ushort bx_full_duplex    = 1 << 5;
+enum ushort bx_pause          = 1 << 7;
+enum ushort ccr_copper_page   = 1 << 15;
+enum ushort ccr_mode_mask     = 0xF;
+enum ushort ccr_bx1000_rgmii_50 = 2;
+enum ushort ccr_bx1000_rgmii_75 = 3;
+enum ushort dbg0_rx_clk_delay = 1 << 15;
+enum ushort dbg5_tx_clk_delay = 1 << 8;
 
 __gshared ubyte[6] _base_mac;
 __gshared bool _ready;
@@ -438,7 +494,8 @@ __gshared uint _enabled;
 __gshared uint _link_up;
 __gshared uint _rx_drops;   // TODO: frames the tag attributes to no port land here and are reported nowhere.
 __gshared ulong _links_polled;
-__gshared Port[num_front_ports] _ports;
+__gshared Port[num_front_ports + 1] _ports;
+__gshared ubyte _ge2_phy;
 __gshared EthReadyCallback _ready_callback;
 
 uint phys(uint kseg0)
@@ -468,19 +525,111 @@ uint mt7530_ppbv1(uint p)
 uint mt7530_pmsr(uint p)
     => 0x3008 + p * 0x100;
 
-bool port_enable(uint port, bool enable)
+// rxd4 names the GDMA a frame came in through. A GE1 frame carries the switch's special tag where
+// its TPID would be: an indicator byte, the source port, then the TCI when the frame was tagged.
+ubyte[] rx_frame(ubyte* f, uint len, uint gdma, out uint slot)
 {
-    uint pcr;
-    if (!sw_read(mt7530_pcr(port), pcr) || !sw_write(mt7530_pcr(port), (pcr & ~pcr_matrix_mask) | (enable ? pcr_matrix(1 << cpu_port) : 0)))
+    if (gdma == 2)
+    {
+        slot = ge2_slot;
+        return len < 14 ? null : f[0 .. len];
+    }
+    if (gdma != 1 || len < 18 || f[12] > tag_tpid_88a8 || (f[13] & 7) >= num_front_ports)
+        return null;
+    slot = f[13] & 7;
+    if (f[12] == tag_untagged)
+    {
+        immutable ubyte[12] addresses = f[0 .. 12];
+        f[4 .. 16] = addresses;
+        return f[4 .. len];
+    }
+    f[12] = f[12] == tag_tpid_8100 ? 0x81 : 0x88;
+    f[13] = f[12] == 0x81 ? 0x00 : 0xA8;
+    return f[0 .. len];
+}
+
+// The frame engine owns the transmit ring; one frame is in flight at a time.
+ubyte* tx_slot(size_t bytes)
+{
+    if (!_ready || bytes < 14 || bytes > tx_buf_size || !tx_released(tx_desc_phys((_tx_next + tx_count - 1) % tx_count)))
+        return null;
+    return _tx_buf + _tx_next * tx_buf_size;
+}
+
+bool tx_submit(uint len, uint fport)
+{
+    immutable i = _tx_next;
+    uint* d = _tx + i * 4;
+    d[0] = phys(cast(uint)(_tx_buf + i * tx_buf_size));
+    d[3] = fport;
+    asm nothrow @nogc { "sync" ::: "memory"; }
+    d[2] = txd3_swc | (len << 16) | txd3_ls0;
+    asm nothrow @nogc { "sync" ::: "memory"; }
+    _tx_next = (i + 1) % tx_count;
+    mmio_write(fe_base + qdma_ctx_ptr, tx_desc_phys(_tx_next));
+    return tx_released(tx_desc_phys(i));
+}
+
+bool port_enable(uint slot, bool enable)
+{
+    if (slot == ge2_slot ? !(enable ? phy_open() : phy_close()) : !switch_port_enable(slot, enable))
         return false;
-    immutable bit = 1u << port;
+    immutable bit = 1u << slot;
     _enabled = enable ? _enabled | bit : _enabled & ~bit;
     if (!enable && (_link_up & bit))
-    {
-        _link_up &= ~bit;
-        if (_ports[port].link !is null)
-            _ports[port].link(_ports[port].context, EthLinkEvent.down);
-    }
+        set_link(slot, false, true);
+    return true;
+}
+
+bool switch_port_enable(uint port, bool enable)
+{
+    uint pcr;
+    return sw_read(mt7530_pcr(port), pcr) && sw_write(mt7530_pcr(port), (pcr & ~pcr_matrix_mask) | (enable ? pcr_matrix(1 << cpu_port) : 0));
+}
+
+// GE2's MAC is forced to what its PHY negotiated; the switch ports' link lives in the MT7530.
+void set_link(uint slot, bool up, bool full_duplex)
+{
+    immutable bit = 1u << slot;
+    _link_up = up ? _link_up | bit : _link_up & ~bit;
+    if (slot == ge2_slot)
+        mmio_write(fe_base + gmac1_mcr, (mcr_fixed_1g & ~(mcr_force_link | mcr_force_dpx)) | (up ? mcr_force_link : 0) | (full_duplex ? mcr_force_dpx : 0));
+    if (_ports[slot].link !is null)
+        _ports[slot].link(_ports[slot].context, up ? EthLinkEvent.up : EthLinkEvent.down);
+}
+
+bool phy_open()
+{
+    ushort ccr;
+    if (!mdio_read(_ge2_phy, phy_chip_cfg, ccr))
+        return false;
+    if ((ccr & ccr_mode_mask) != ccr_bx1000_rgmii_50 && (ccr & ccr_mode_mask) != ccr_bx1000_rgmii_75)
+        ccr = (ccr & ~ccr_mode_mask) | ccr_bx1000_rgmii_50;
+    return mdio_write(_ge2_phy, phy_chip_cfg, ccr & ~ccr_copper_page) &&
+           phy_debug_modify(0, dbg0_rx_clk_delay, 0) && phy_debug_modify(5, 0, dbg5_tx_clk_delay) &&
+           mdio_write(_ge2_phy, phy_anar, bx_full_duplex | bx_pause) &&
+           mdio_write(_ge2_phy, phy_bmcr, bmcr_aneg | bmcr_restart_aneg);
+}
+
+bool phy_close()
+    => mdio_write(_ge2_phy, phy_bmcr, bmcr_power_down);
+
+bool phy_debug_modify(ushort reg, ushort set, ushort clear)
+{
+    ushort v;
+    return mdio_write(_ge2_phy, phy_debug_addr, reg) && mdio_read(_ge2_phy, phy_debug_data, v) &&
+           mdio_write(_ge2_phy, phy_debug_addr, reg) && mdio_write(_ge2_phy, phy_debug_data, (v & ~clear) | set);
+}
+
+// BMSR's link bit latches low, so the second read is the live state; a link is up once negotiation has resolved it.
+bool phy_link(out bool full_duplex)
+{
+    ushort bmsr, lpa;
+    if (!mdio_read(_ge2_phy, phy_bmsr, bmsr) || !mdio_read(_ge2_phy, phy_bmsr, bmsr))
+        return false;
+    if ((bmsr & (bmsr_link | bmsr_aneg_done)) != (bmsr_link | bmsr_aneg_done) || !mdio_read(_ge2_phy, phy_lpa, lpa))
+        return false;
+    full_duplex = (lpa & bx_full_duplex) != 0;
     return true;
 }
 
@@ -500,8 +649,8 @@ bool switch_init()
     return true;
 }
 
-// TODO: the switch interrupt, instead of polling once a second.
-void poll_switch_links()
+// TODO: the switch and PHY interrupts, instead of polling once a second.
+void poll_links()
 {
     foreach (p; 0 .. num_front_ports)
     {
@@ -512,11 +661,15 @@ void poll_switch_links()
         if (!sw_read(mt7530_pmsr(p), pmsr))
             continue;
         immutable up = (pmsr & pmsr_link) != 0;
-        if (up == ((_link_up & bit) != 0))
-            continue;
-        _link_up = up ? _link_up | bit : _link_up & ~bit;
-        if (_ports[p].link !is null)
-            _ports[p].link(_ports[p].context, up ? EthLinkEvent.up : EthLinkEvent.down);
+        if (up != ((_link_up & bit) != 0))
+            set_link(p, up, true);
+    }
+    if (_enabled & (1u << ge2_slot))
+    {
+        bool full_duplex;
+        immutable up = phy_link(full_duplex);
+        if (up != ((_link_up & (1u << ge2_slot)) != 0))
+            set_link(ge2_slot, up, full_duplex);
     }
 }
 

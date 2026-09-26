@@ -1,10 +1,10 @@
-/* A part script declares MEMORY, aliases CORE_RAM (core-coupled: statics, stack) and BULK_RAM
- * (system SRAM: .ramfunc, the heap), then includes this file. DMA cannot reach F4's CCM or
+/* A part script declares MEMORY, aliases CORE_RAM (core-coupled: statics, stack, a pool) and
+ * BULK_RAM (system SRAM: .ramfunc, a pool), then includes this file. DMA cannot reach F4's CCM or
  * H7's DTCM, so DMA buffers come from the heap, never from statics. */
 
 ENTRY(Reset_Handler)
 
-EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
+EXTERN(_write _read _close _lseek _fstat _isatty _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
 PROVIDE(__stm32_hse_hz = 0);
@@ -125,7 +125,9 @@ SECTIONS
     _stack_low = _stack_top - _stack_size;
     __StackTop = _stack_top;
 
-    ASSERT(_stack_low >= _persist_end, "core RAM exhausted: static data collides with the stack")
+    __core_heap_start = _persist_end;
+    __core_heap_end   = _stack_low;
+    ASSERT(__core_heap_end >= __core_heap_start, "core RAM exhausted: static data collides with the stack")
 
     .ramfunc : ALIGN(8)
     {
@@ -137,8 +139,8 @@ SECTIONS
 
     _ramfunc_load = LOADADDR(.ramfunc);
 
-    __heap_start = _ramfunc_end;
-    __heap_end   = ORIGIN(BULK_RAM) + LENGTH(BULK_RAM);
+    __bulk_heap_start = _ramfunc_end;
+    __bulk_heap_end   = ORIGIN(BULK_RAM) + LENGTH(BULK_RAM);
 
     /DISCARD/ :
     {

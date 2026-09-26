@@ -16,9 +16,10 @@ Board facts are make variables:
 
 Each part script declares MEMORY and the CORE_RAM / BULK_RAM aliases and includes
 stm32_common.ld. CORE_RAM (F4 CCM, F7/H7 DTCM) holds statics, TLS and the stack; BULK_RAM
-(system or AXI SRAM) holds .ramfunc and the heap. The part script sizes the stack: 16 KB on the
-64 KB core-RAM parts, 32 KB on H7; a board overrides it with -L--defsym=_stack_size=N. Add a part
-by writing a new stm32_<part>.ld.
+(system or AXI SRAM) holds .ramfunc. What remains of each is a TLSF heap pool, and the H7 adds
+SRAM1-3, uncached by the MPU, as the pool for MemFlags.dma. The part script sizes the stack: 16 KB
+on the 64 KB core-RAM parts, 32 KB on H7; a board overrides it with -L--defsym=_stack_size=N. Add
+a part by writing a new stm32_<part>.ld.
 
 Setup
 -----

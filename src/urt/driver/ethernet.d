@@ -4,6 +4,8 @@ import urt.result : Result, InternalResult;
 
 version (Espressif)
     public import urt.driver.esp32.ethernet;
+else version (MT7621)
+    public import urt.driver.mt7621.ethernet;
 else
 {
     enum uint num_ethernet = 0;

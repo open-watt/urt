@@ -68,6 +68,14 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
         while (n < end)
             write_reg(base, thr, buf[n++]);
     }
+    // The hEX S has no UART header, so the netconsole is the console and takes it all; the UART gets what its
+    // FIFO has room for. Nothing is left for the caller to retry, so nothing repeats.
+    if (id == console_uart)
+    {
+        import urt.driver.mt7621.netcon : netcon_put;
+        netcon_put(cast(const(char)[])buf);
+        return buf.length;
+    }
     return n;
 }
 
@@ -89,6 +97,8 @@ ptrdiff_t uart_hw_flush(uint id)
 
 void uart0_hw_puts(const(char)[] s)
 {
+    import urt.driver.mt7621.netcon : netcon_put;
+    netcon_put(s);
     enum uint base = uart_base(console_uart);
     foreach (c; s)
     {

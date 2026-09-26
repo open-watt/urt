@@ -36,6 +36,8 @@ extern(C) void sys_init()
     import urt.exception : assert_handler;
     assert_handler = &assert_reset;
     irq_enable();
+    import urt.driver.mt7621.ethernet : fe_init;
+    fe_init();
     static if (fixed_clock)
     {
         if (cpu_hz != mtime_freq_hz)
@@ -97,6 +99,8 @@ void assert_reset(string file, size_t line, string msg)
     uart0_hw_puts(":");
     uart0_hw_puts(buf[i .. $]);
     uart0_hw_puts("\r\n");
+    import urt.driver.mt7621.netcon : netcon_flush;
+    netcon_flush();
     import urt.driver.reset : system_reset;
     system_reset();
 }

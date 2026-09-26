@@ -228,7 +228,10 @@ else version (ARM)
     version (StrictAlign)
         enum max_unaligned_scalar_access_bytes = 0;
     else
-        enum max_unaligned_scalar_access_bytes = ProcFeatures.strict_align ? 0 : 4;
+    {
+        static assert(!ProcFeatures.strict_align, "this CPU is strict-align; the platform must declare STRICT_ALIGN := 1");
+        enum max_unaligned_scalar_access_bytes = 4;
+    }
 }
 else version (RISCV64)
 {

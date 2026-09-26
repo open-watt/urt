@@ -6,26 +6,6 @@ module urt.driver.stm32.syscalls;
 
 @nogc nothrow:
 
-private extern(C) extern const void* __heap_start;
-private extern(C) extern const void* __heap_end;
-
-private __gshared void* _heap_ptr;
-
-extern(C) void* _sbrk(ptrdiff_t incr)
-{
-    if (_heap_ptr is null)
-        _heap_ptr = cast(void*)&__heap_start;
-
-    void* prev = _heap_ptr;
-    void* next = _heap_ptr + incr;
-
-    if (next > cast(void*)&__heap_end)
-        return cast(void*)-1;
-
-    _heap_ptr = next;
-    return prev;
-}
-
 extern(C) int _write(int fd, const void* buf, size_t count)
 {
     import urt.driver.stm32.uart : uart0_hw_puts;

@@ -156,6 +156,10 @@ version (STM32H7)
         while (!(reg_read(pwr_d3cr) & (1 << 13)))
         {}
 
+        clock_enable(rcc_ahb2enr, 29);                  // SRAM1
+        clock_enable(rcc_ahb2enr, 30);                  // SRAM2
+        clock_enable(rcc_ahb2enr, 31);                  // SRAM3
+
         // HSI48 feeds USB and the RNG.
         reg_set(rcc_base, 1 << 12);
         while (!(reg_read(rcc_base) & (1 << 13)))
@@ -245,6 +249,21 @@ version (STM32F4) {} else
 {
     void caches_enable()
     {
+        version (STM32H7)
+        {
+            // SRAM1-3 hold the DMA heap: normal memory, uncached, shareable, never executed.
+            // The 512 KB region covers their 288 KB.
+            enum ulong mpu_ctrl = 0xE000_ED94;
+            enum ulong mpu_rnr  = 0xE000_ED98;
+            enum ulong mpu_rbar = 0xE000_ED9C;
+            enum ulong mpu_rasr = 0xE000_EDA0;
+            reg_write(mpu_rnr, 0);
+            reg_write(mpu_rbar, 0x3000_0000);
+            reg_write(mpu_rasr, (1 << 28) | (3 << 24) | (1 << 19) | (1 << 18) | ((19 - 1) << 1) | 1);
+            reg_write(mpu_ctrl, (1 << 2) | 1);          // PRIVDEFENA, ENABLE
+            asm @nogc nothrow { "dsb sy"; "isb"; }
+        }
+
         enum ulong scb_ccr    = 0xE000_ED14;
         enum ulong scb_ccsidr = 0xE000_ED80;
         enum ulong scb_csselr = 0xE000_ED84;

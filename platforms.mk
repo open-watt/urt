@@ -559,6 +559,8 @@ ifeq ($(PLATFORM),mt7621)
 endif
 ifdef STM32_VARIANT
     DFLAGS := $(DFLAGS) -d-version=STM32 -d-version=CRuntime_Picolibc
+    # No STM32 pool reaches 1 MB; urt.driver.stm32.heap sizes the TLSF control blocks to match.
+    TLSF_DEFINES := -DTLSF_FL_INDEX_MAX=20
     ifeq ($(STM32_VARIANT),f4)
         DFLAGS := $(DFLAGS) -d-version=STM32F4
     else ifeq ($(STM32_VARIANT),f7)

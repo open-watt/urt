@@ -473,7 +473,7 @@ else version (BK7231N)
 else version (BK7231T)
     public import urt.driver.bk7231.alloc;
 else version (STM32)
-    public import urt.driver.stm32.alloc;
+    public import urt.driver.baremetal.heap;
 else version (Windows)
     public import urt.driver.windows.alloc;
 else version (Posix)

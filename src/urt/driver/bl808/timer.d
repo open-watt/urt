@@ -89,11 +89,11 @@ private __gshared void function() @nogc nothrow tick_callback = null;
 /// Set up a periodic timer interrupt.
 /// interval_us: microseconds between ticks
 /// callback: called from _timer_irq_handler (keep it short!)
-void timer_set_periodic(ulong interval_us, void function() @nogc nothrow callback)
+void timer_set_periodic(ulong period_ticks, void function() @nogc nothrow callback)
 {
     import urt.driver.bl808.irq : IrqClass, enable_irq;
 
-    tick_interval = interval_us;
+    tick_interval = period_ticks;
     tick_callback = callback;
 
     ulong now = mtime_read();

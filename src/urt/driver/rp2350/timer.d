@@ -91,17 +91,17 @@ ulong mtime_read()
     return (cast(ulong)hi << 32) | lo;
 }
 
-void timer_set_periodic(uint period_ticks, TimerCallback cb)
+void timer_set_periodic(ulong period_ticks, TimerCallback cb)
 {
     tick_callback = cb;
     // Use SysTick for periodic interrupts.
     // period_ticks is in timer ticks (microseconds at 1MHz).
     // SysTick runs from processor clock -- assume 150MHz after PLL init.
     // Convert: systick_reload = period_us * 150
-    uint reload = period_ticks * 150;
+    ulong reload = period_ticks * 150;
     if (reload > 0x00FF_FFFF)
         reload = 0x00FF_FFFF;  // SysTick is 24-bit
-    volatileStore(cast(uint*)(cast(size_t)SYST_RVR), reload);
+    volatileStore(cast(uint*)(cast(size_t)SYST_RVR), cast(uint)reload);
     volatileStore(cast(uint*)(cast(size_t)SYST_CVR), 0);
     volatileStore(cast(uint*)(cast(size_t)SYST_CSR), CSR_ENABLE | CSR_TICKINT | CSR_CLKSOURCE);
 }

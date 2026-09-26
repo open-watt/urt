@@ -93,8 +93,7 @@ void periodic_set(Duration interval, TimerCallback cb)
 {
     static if (has_mtime)
     {
-        ulong ticks = interval.as!"nsecs" * mtime_freq_hz / 1_000_000_000;
-        timer_set_periodic(cast(uint)ticks, cb);
+        timer_set_periodic(interval.ticks, cb);
     }
     else
         assert(false, "TODO: periodic_set not available");
@@ -337,8 +336,7 @@ unittest // oneshot_set fires an IRQ, handler runs, trap doesn't trash stack
     else
         irq_global_enable();
 
-    // Arm 10 ms in the future (10_000 ticks at 1 MHz mtime).
-    oneshot_set(monotonic_read() + 10_000);
+    oneshot_set(monotonic_read() + mtime_freq_hz / 100);
 
     // Bounded busy wait -- 200 ms of mtime is generous slack for a 10 ms timer.
     // volatileLoad keeps the optimizer from caching fire_count in a register;

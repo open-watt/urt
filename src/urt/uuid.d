@@ -10,7 +10,6 @@ enum GUID UUID(string s) = () { GUID g; ptrdiff_t n = g.fromString(s); assert(n 
 struct GUID
 {
 nothrow @nogc:
-align(1):
     uint data1;
     ushort data2;
     ushort data3;
@@ -88,4 +87,4 @@ align(1):
 }
 
 static assert(GUID.sizeof == 16);
-static assert(GUID.alignof == 1);
+static assert(GUID.alignof == 4);

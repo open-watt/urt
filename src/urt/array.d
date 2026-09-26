@@ -456,7 +456,7 @@ struct Array(T, size_t EmbedCount = 0)
             clear();
             if (has_allocation())
             {
-                enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+                enum prefix = T.alignof < 4 ? 4 : T.alignof;
                 array_free(ptr, T.sizeof, prefix);
             }
         }
@@ -820,7 +820,7 @@ nothrow @nogc:
             if (count <= alloc_count())
                 return;
             enum alignment = T.alignof < 4 ? 4 : T.alignof;
-            enum prefix = T.sizeof < 4 ? 4 : T.sizeof;
+            enum prefix = alignment;
 
             T* new_array = cast(T*)array_allocate(cast(uint)count, T.sizeof, alignment, prefix);
             move_emplace_all(ptr[0 .. _length], new_array[0 .. _length]);
@@ -1121,8 +1121,8 @@ pragma(inline, false)
 void* array_reserve_trivial(void* ptr, uint length, uint count, size_t traits, bool allocated) pure
 {
     size_t element_size = traits >> 2;
-    size_t prefix = element_size < 4 ? 4 : element_size;
-    void* result = array_allocate(count, element_size, 4 << (traits & 3), prefix);
+    size_t prefix = 4 << (traits & 3);
+    void* result = array_allocate(count, element_size, prefix, prefix);
     if (length)
         memcpy(result, ptr, length * element_size);
     if (allocated)
@@ -1167,7 +1167,7 @@ void array_release(void* ptr, size_t traits) pure
     if (!ptr)
         return;
     size_t element_size = traits >> 2;
-    array_free(ptr, element_size, element_size < 4 ? 4 : element_size);
+    array_free(ptr, element_size, 4 << (traits & 3));
 }
 
 void* array_reserve(void* ptr, uint length, size_t count, size_t traits) pure

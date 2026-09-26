@@ -154,31 +154,46 @@ Reset_Handler:
     .weak   NMI_Handler
     .type   NMI_Handler, %function
 NMI_Handler:
-    b       .
+    movs    r0, #2
+    b       fault_entry
 
     .thumb_func
     .weak   HardFault_Handler
     .type   HardFault_Handler, %function
 HardFault_Handler:
-    b       .
+    movs    r0, #3
+    b       fault_entry
 
     .thumb_func
     .weak   MemManage_Handler
     .type   MemManage_Handler, %function
 MemManage_Handler:
-    b       .
+    movs    r0, #4
+    b       fault_entry
 
     .thumb_func
     .weak   BusFault_Handler
     .type   BusFault_Handler, %function
 BusFault_Handler:
-    b       .
+    movs    r0, #5
+    b       fault_entry
 
     .thumb_func
     .weak   UsageFault_Handler
     .type   UsageFault_Handler, %function
 UsageFault_Handler:
-    b       .
+    movs    r0, #6
+    b       fault_entry
+
+/* EXC_RETURN bit 2 says which stack the core pushed the frame on. */
+    .thumb_func
+    .type   fault_entry, %function
+fault_entry:
+    tst     lr, #4
+    ite     eq
+    mrseq   r1, msp
+    mrsne   r1, psp
+    b       fault_report
 
     .thumb_func
     .weak   SVCall_Handler

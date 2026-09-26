@@ -54,6 +54,8 @@ import urt.sync.critical : Critical;
 @nogc nothrow:
 
 
+enum size_t min_alignment = 8;
+
 enum has_realloc  = true;
 enum has_expand   = false;
 enum has_memsize  = true;
@@ -180,7 +182,7 @@ void query_pool_stats(size_t idx, out PoolStats stats) nothrow @nogc
     stats.peak_used = p.peak_used;
 
     size_t largest = 0;
-    tlsf_walk_pool(tlsf_get_pool(p.tlsf), &walker_max_free, &largest);
+    tlsf_walk_pool(p.pool, &walker_max_free, &largest);
     stats.largest_free = largest;
 }
 
@@ -356,7 +358,6 @@ alias tlsf_walker = extern(C) void function(void* ptr, size_t size, int used, vo
 
 extern(C) tlsf_t tlsf_create(void* mem) pure;
 extern(C) pool_t tlsf_add_pool(tlsf_t tlsf, void* mem, size_t bytes) pure;
-extern(C) pool_t tlsf_get_pool(tlsf_t tlsf) pure;
 extern(C) size_t tlsf_size() pure;
 extern(C) void*  tlsf_malloc(tlsf_t tlsf, size_t bytes) pure;
 extern(C) void*  tlsf_memalign(tlsf_t tlsf, size_t alignment, size_t bytes) pure;
@@ -370,6 +371,7 @@ struct Pool
     void* base;
     size_t size;
     tlsf_t tlsf;
+    pool_t pool;
     size_t used;
     size_t peak_used;
     immutable(char)* name;
@@ -486,7 +488,7 @@ void init_pools() nothrow @nogc
     foreach (i, ref p; _pools)
     {
         p.tlsf = tlsf_create(&_control[i][0]);
-        tlsf_add_pool(p.tlsf, p.base, p.size);
+        p.pool = tlsf_add_pool(p.tlsf, p.base, p.size);
     }
 
     _initialized = true;

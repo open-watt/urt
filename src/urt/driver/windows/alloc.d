@@ -7,6 +7,8 @@ import urt.mem.alloc : MemFlags;
 nothrow @nogc:
 
 
+enum size_t min_alignment = (void*).sizeof;
+
 enum has_realloc  = true;
 enum has_expand   = true;
 enum has_memsize  = true;

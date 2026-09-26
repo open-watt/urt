@@ -4,6 +4,9 @@ import urt.mem.alloc : MemFlags;
 
 nothrow @nogc:
 
+// malloc returns max_align_t alignment, 8 on the ARM EABI
+enum size_t min_alignment = 8;
+
 enum has_realloc  = false;
 enum has_expand   = false;
 enum has_memsize  = false;
@@ -13,14 +16,18 @@ enum has_memflags = false; // TODO: TCM vs SRAM
 
 void[] _alloc(size_t size, size_t alignment, MemFlags) pure
 {
-    import urt.util : align_down;
+    import urt.util : align_up, max;
 
-    size_t header_size = (void*).sizeof + alignment;
-    void* p = malloc(header_size + size);
+    static if (min_alignment < (void*).sizeof)
+    {
+        if (alignment < (void*).sizeof)
+            alignment = (void*).sizeof;
+    }
+    void* p = malloc(max(alignment, min_alignment) + size);
     if (p is null)
         return null;
 
-    size_t allocptr = align_down(cast(size_t)p + header_size, alignment);
+    size_t allocptr = align_up(cast(size_t)p + min_alignment, alignment);
     (cast(void**)allocptr)[-1] = p;
     return (cast(void*)allocptr)[0 .. size];
 }

@@ -404,6 +404,7 @@ version (unittest)
     // calling. Distinct, grep-friendly names make the resolved symbols
     // easy to match.
 
+    pragma(inline, false)
     private void* eh_ca_layer_0(uint skip) @trusted nothrow @nogc
     {
         auto pc = caller_address(skip);
@@ -411,6 +412,7 @@ version (unittest)
         return pc;
     }
 
+    pragma(inline, false)
     private void* eh_ca_layer_1(uint skip) @trusted nothrow @nogc
     {
         auto pc = eh_ca_layer_0(skip);
@@ -418,6 +420,7 @@ version (unittest)
         return pc;
     }
 
+    pragma(inline, false)
     private void* eh_ca_layer_2(uint skip) @trusted nothrow @nogc
     {
         auto pc = eh_ca_layer_1(skip);

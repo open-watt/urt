@@ -19,6 +19,45 @@ void assert_handler(AssertHandler handler) @property nothrow @nogc @trusted
         _assert_handler = handler;
 }
 
+// Frame-pointer backtrace straight to the console; safe in fault context. frame[0] returns into
+// this function and frame[1] into its caller, so callers skip at least one.
+version (BareMetal)
+@noinline
+void write_backtrace(size_t skip) nothrow @nogc
+{
+    import urt.internal.exception : capture_trace;
+
+    void*[16] addrs = void;
+    const n = capture_trace(addrs[]);
+    if (n > skip)
+        write_trace(addrs[skip .. n]);
+}
+
+version (BareMetal)
+void write_trace(const(void*)[] addrs) nothrow @nogc
+{
+    import urt.driver.uart : uart0_puts;
+
+    if (!addrs.length)
+        return;
+    uart0_puts("Backtrace (resolve with addr2line):\n");
+    enum digits = size_t.sizeof * 2;
+    char[4 + digits + 1] hex_buf = void;
+    hex_buf[0 .. 4] = "  0x";
+    hex_buf[$ - 1] = '\n';
+    foreach (addr; addrs)
+    {
+        size_t v = cast(size_t)addr;
+        foreach_reverse (j; 4 .. 4 + digits)
+        {
+            const ubyte nib = v & 0xF;
+            hex_buf[j] = cast(char)(nib < 10 ? '0' + nib : 'a' + nib - 10);
+            v >>= 4;
+        }
+        uart0_puts(hex_buf[]);
+    }
+}
+
 
 private:
 
@@ -33,35 +72,11 @@ void urt_assert(string file, size_t line, string msg) nothrow @nogc
     version (BareMetal)
     {
         import urt.driver.uart : uart0_puts;
-        import urt.internal.exception : capture_trace;
         import urt.mem.temp : tconcat;
 
         uart0_puts(tconcat("\n*** ASSERT: ", msg, " at ", file, ':', line, '\n'));
-
-        // Skip frame[0] -- with capture_trace as a real frame (defeat_tco),
-        // its saved ra points back into urt_assert itself, which is noise.
-        // Frame[1] is the assert site inside the calling function.
-        void*[16] addrs = void;
-        const n = capture_trace(addrs[]);
-        if (n > 1)
-        {
-            uart0_puts("Backtrace (resolve with addr2line):\n");
-            enum digits = size_t.sizeof * 2;
-            char[4 + digits + 1] hex_buf = void;
-            hex_buf[0 .. 4] = "  0x";
-            hex_buf[$ - 1] = '\n';
-            foreach (addr; addrs[1 .. n])
-            {
-                size_t v = cast(size_t) addr;
-                foreach_reverse (j; 4 .. 4 + digits)
-                {
-                    const ubyte nib = v & 0xF;
-                    hex_buf[j] = cast(char)(nib < 10 ? '0' + nib : 'a' + nib - 10);
-                    v >>= 4;
-                }
-                uart0_puts(hex_buf[]);
-            }
-        }
+        // frame[2] is the assert site inside the calling function
+        write_backtrace(2);
 
         while (true) {}
     }

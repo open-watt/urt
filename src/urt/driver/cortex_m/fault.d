@@ -1,7 +1,9 @@
-module urt.driver.rp2350.fault;
+module urt.driver.cortex_m.fault;
 
 import urt.driver.reset : ResetMark, reset_record_mark, system_reset;
-import urt.driver.rp2350.uart : uart0_hw_puts;
+import urt.driver.uart : uart0_hw_puts;
+import urt.exception : write_trace;
+import urt.internal.exception : capture_trace;
 
 nothrow @nogc:
 
@@ -26,6 +28,20 @@ extern(C) void fault_report(uint vector, const(uint)* frame)
     put_reg(" bfar=", volatile_load(0xE000ED38));
     put_reg(" sp=", cast(uint)frame);
     uart0_hw_puts(" ***\r\n");
+
+    // The walk passes through this handler to EXC_RETURN; the faulting code's callers follow it.
+    void*[16] addrs = void;
+    const n = capture_trace(addrs[]);
+    size_t first = 0;
+    foreach (i, addr; addrs[0 .. n])
+    {
+        if (cast(size_t)addr >= 0xFFFF_FF00)
+        {
+            first = i + 1;
+            break;
+        }
+    }
+    write_trace(addrs[first .. n]);
     system_reset();
 }
 

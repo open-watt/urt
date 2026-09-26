@@ -78,4 +78,6 @@ Console
 -------
 
 UART1 (the 16550 at 0x1E000C00, reg-shift 2), 115200 8N1, is on pads inside the
-hEX S; no header is fitted. UART2 and UART3 are pinmuxed to GPIO on this board.
+hEX S; no header is fitted. Console output is also broadcast as UDP to port 6666
+out of every front port, from 192.168.0.248, until the platform has a network
+log sink. UART2 and UART3 are pinmuxed to GPIO on this board.

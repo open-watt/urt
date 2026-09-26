@@ -1,6 +1,7 @@
 module urt.driver.mt7621.netcon;
 
 import urt.driver.mt7621.ethernet : eth_hw_get_hardware_address, fe_tx_tagged, num_front_ports;
+import urt.endian : bigEndianToNative, nativeToBigEndian;
 
 nothrow @nogc:
 
@@ -48,8 +49,8 @@ void send(const(char)[] payload)
     ubyte* ip = f.ptr + 14;
     ip[0] = 0x45;
     ip[1] = 0;
-    put16(ip + 2, ip_len);
-    put16(ip + 4, _ip_id++);
+    ip[2 .. 4] = nativeToBigEndian(cast(ushort)ip_len);
+    ip[4 .. 6] = nativeToBigEndian(_ip_id++);
     ip[6] = 0x40;
     ip[7] = 0;
     ip[8] = 64;
@@ -60,26 +61,21 @@ void send(const(char)[] payload)
     ip[16 .. 20] = 0xFF;
     uint sum = 0;
     foreach (k; 0 .. 10)
-        sum += (ip[k * 2] << 8) | ip[k * 2 + 1];
+        sum += bigEndianToNative!ushort(ip[k * 2 .. k * 2 + 2][0 .. 2]);
     while (sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
-    put16(ip + 10, ~sum & 0xFFFF);
+    ip[10 .. 12] = nativeToBigEndian(cast(ushort)~sum);
 
     ubyte* udp = ip + 20;
-    put16(udp + 0, 6666);
-    put16(udp + 2, 6666);
-    put16(udp + 4, udp_len);
-    put16(udp + 6, 0);
+    udp[0 .. 2] = nativeToBigEndian(cast(ushort)6666);
+    udp[2 .. 4] = nativeToBigEndian(cast(ushort)6666);
+    udp[4 .. 6] = nativeToBigEndian(cast(ushort)udp_len);
+    udp[6 .. 8] = 0;
     foreach (k, c; payload)
         udp[8 + k] = c;
 
     fe_tx_tagged(f[0 .. 14 + ip_len], (1 << num_front_ports) - 1);
 }
 
-void put16(ubyte* p, uint v)
-{
-    p[0] = cast(ubyte)(v >> 8);
-    p[1] = cast(ubyte)v;
-}
 
 static immutable ubyte[4] src_ip = [192, 168, 0, 248];

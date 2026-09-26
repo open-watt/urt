@@ -93,26 +93,28 @@ struct EthRxInfo
     bool checksum_verified; // the MAC checked the IP header and TCP or UDP checksum of this frame
 }
 
-// Delivered by eth_service() for each received frame. Frame starts at the
+// Delivered by eth_service() for each frame received on the port. Frame starts at the
 // destination address, carries no FCS, and is valid only until the callback returns.
-alias EthRxCallback = void function(EthMac eth, const(ubyte)[] frame, ref const EthRxInfo info) nothrow @nogc;
+alias EthRxCallback = void function(void* context, const(ubyte)[] frame, ref const EthRxInfo info) nothrow @nogc;
 
-// Delivered by eth_service() on each link transition.
-alias EthLinkCallback = void function(EthMac eth, EthLinkEvent event) nothrow @nogc;
+// Delivered by eth_service() on each link transition of the port.
+alias EthLinkCallback = void function(void* context, EthLinkEvent event) nothrow @nogc;
 
 // Same contract as WifiReadyCallback: may fire from task or interrupt
 // context, must only signal or schedule service, never re-enter the driver.
 alias EthReadyCallback = void function() nothrow @nogc;
 
-struct EthMac
+// A MAC is a switch with eth_ports(mac) front ports, one when it is wired to a single PHY. A port
+// is what opens, sends, receives and reports link; the MAC comes up with its first and goes down
+// with its last.
+struct EthPort
 {
-    ubyte port = ubyte.max;
+    ubyte mac = ubyte.max;
+    ubyte port;
 }
 
-bool is_open(ref const EthMac eth) pure
-{
-    return eth.port != ubyte.max;
-}
+bool is_open(ref const EthPort p) pure
+    => p.mac != ubyte.max;
 
 
 void eth_set_ready_callback(EthReadyCallback cb)
@@ -121,14 +123,33 @@ void eth_set_ready_callback(EthReadyCallback cb)
         eth_hw_set_ready_callback(cb);
 }
 
-// Link events arrive asynchronously after open.
-Result eth_open(ref EthMac eth, ubyte port, ref const EthernetConfig cfg)
+// The vendor's name for the MAC (e.g. "ge1"); null where the platform does not name its MACs.
+const(char)[] eth_name(ubyte mac)
+{
+    static if (__traits(compiles, eth_hw_name(mac)))
+        return mac < num_ethernet ? eth_hw_name(mac) : null;
+    else
+        return null;
+}
+
+uint eth_ports(ubyte mac)
+{
+    static if (num_ethernet == 0)
+        return 0;
+    else
+        return mac < num_ethernet ? eth_hw_ports(mac) : 0;
+}
+
+// The MAC takes the configuration of the first port opened on it. Link events arrive asynchronously after open.
+Result eth_open(ref EthPort p, ubyte mac, ubyte port, ref const EthernetConfig cfg, EthRxCallback rx, EthLinkCallback link, void* context)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
     {
-        if (port >= num_ethernet)
+        if (p.is_open)
+            return InternalResult.already_exists;
+        if (mac >= num_ethernet || port >= eth_hw_ports(mac))
             return InternalResult.invalid_parameter;
         if (cfg.timestamp && !has_eth_timestamp)
             return InternalResult.unsupported;
@@ -136,29 +157,36 @@ Result eth_open(ref EthMac eth, ubyte port, ref const EthernetConfig cfg)
             return InternalResult.unsupported;
         if (cfg.phy_interface == EthPhyInterface.rgmii && !has_eth_gigabit)
             return InternalResult.unsupported;
-        if (!eth_hw_open(port, cfg))
+        assert(eth_hw_ports(mac) <= 32);
+        if (_open_ports[mac] & (1u << port))
+            return InternalResult.already_exists;
+        if (!eth_hw_open(mac, port, cfg, rx, link, context))
             return InternalResult.failed;
-        eth.port = port;
+        _open_ports[mac] |= 1u << port;
+        p = EthPort(mac, port);
         return Result.success;
     }
 }
 
 // On failure the handle stays open and the close is to be retried; nothing was released.
-Result eth_close(ref EthMac eth)
+Result eth_close(ref EthPort p)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
     {
-        if (!eth_hw_close(eth.port))
+        if (!p.is_open)
+            return Result.success;
+        if (!eth_hw_close(p.mac, p.port))
             return InternalResult.failed;
+        _open_ports[p.mac] &= ~(1u << p.port);
     }
-    eth.port = ubyte.max;
+    p = EthPort.init;
     return Result.success;
 }
 
 // The frame is copied before return; checksum insertion requires a zeroed TCP or UDP checksum field.
-Result eth_tx(ref EthMac eth, const(ubyte)[] frame, bool insert_checksum = false)
+Result eth_tx(ref EthPort p, const(ubyte)[] frame, bool insert_checksum = false)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
@@ -166,60 +194,60 @@ Result eth_tx(ref EthMac eth, const(ubyte)[] frame, bool insert_checksum = false
     {
         if (frame.length < 14 || frame.length > eth_max_frame)
             return InternalResult.invalid_parameter;
-        return eth_hw_tx(eth.port, frame, insert_checksum) ? Result.success : InternalResult.failed;
+        return eth_hw_tx(p.mac, p.port, frame, insert_checksum) ? Result.success : InternalResult.failed;
     }
 }
 
 // Requires a valid frame; checks hardware layout support, not protocol validity.
-bool eth_checksum_insertable(ref const EthMac eth, const(ubyte)[] frame)
+bool eth_checksum_insertable(ref const EthPort p, const(ubyte)[] frame)
 {
     static if (num_ethernet == 0)
         return false;
     else
-        return eth_hw_checksum_insertable(eth.port, frame);
+        return eth_hw_checksum_insertable(p.mac, p.port, frame);
 }
 
-// The factory address; needs no open MAC.
-Result eth_get_hardware_address(ubyte port, ref ubyte[6] address)
+// The factory address of the port; needs no open port.
+Result eth_get_hardware_address(ubyte mac, ubyte port, ref ubyte[6] address)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
     {
-        if (port >= num_ethernet)
+        if (mac >= num_ethernet || port >= eth_hw_ports(mac))
             return InternalResult.invalid_parameter;
-        return eth_hw_get_hardware_address(port, address) ? Result.success : InternalResult.failed;
+        return eth_hw_get_hardware_address(mac, port, address) ? Result.success : InternalResult.failed;
     }
 }
 
-Result eth_set_address(ref EthMac eth, ref const ubyte[6] address)
+Result eth_set_address(ref EthPort p, ref const ubyte[6] address)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
-        return eth_hw_set_address(eth.port, address) ? Result.success : InternalResult.failed;
+        return eth_hw_set_address(p.mac, p.port, address) ? Result.success : InternalResult.failed;
 }
 
-Result eth_set_promiscuous(ref EthMac eth, bool enable)
+Result eth_set_promiscuous(ref EthPort p, bool enable)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
-        return eth_hw_set_promiscuous(eth.port, enable) ? Result.success : InternalResult.failed;
+        return eth_hw_set_promiscuous(p.mac, p.port, enable) ? Result.success : InternalResult.failed;
 }
 
-// Valid once a link-up event has been delivered.
-Result eth_get_link(ref EthMac eth, ref EthLinkInfo info)
+// Valid once a link-up event has been delivered for the port.
+Result eth_get_link(ref EthPort p, ref EthLinkInfo info)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
-        return eth_hw_get_link(eth.port, info) ? Result.success : InternalResult.failed;
+        return eth_hw_get_link(p.mac, p.port, info) ? Result.success : InternalResult.failed;
 }
 
 // Forces the link when autonegotiate is false. The MAC only accepts this while
 // stopped, so the link drops and renegotiates around the change.
-Result eth_set_link_mode(ref EthMac eth, bool autonegotiate, EthSpeed speed, bool full_duplex)
+Result eth_set_link_mode(ref EthPort p, bool autonegotiate, EthSpeed speed, bool full_duplex)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
@@ -227,55 +255,45 @@ Result eth_set_link_mode(ref EthMac eth, bool autonegotiate, EthSpeed speed, boo
     {
         if (speed == EthSpeed.s1000m && !has_eth_gigabit)
             return InternalResult.unsupported;
-        return eth_hw_set_link_mode(eth.port, autonegotiate, speed, full_duplex) ? Result.success : InternalResult.failed;
+        return eth_hw_set_link_mode(p.mac, p.port, autonegotiate, speed, full_duplex) ? Result.success : InternalResult.failed;
     }
 }
 
-void eth_set_rx_callback(ref EthMac eth, EthRxCallback cb)
+// Deliver queued frames and link events of every port on the MAC in caller context; returns true
+// when work remains after budget callbacks, false for a MAC with no port open.
+bool eth_service(ubyte mac, size_t budget = 32)
 {
     static if (num_ethernet == 0)
-        assert(false, "no ethernet MAC on this platform");
+        return false;
     else
-        eth_hw_set_rx_callback(eth.port, cb);
+        return mac < num_ethernet && _open_ports[mac] != 0 && eth_hw_service(mac, budget);
 }
 
-void eth_set_link_callback(ref EthMac eth, EthLinkCallback cb)
+uint eth_take_rx_drops(ref EthPort p)
 {
     static if (num_ethernet == 0)
         assert(false, "no ethernet MAC on this platform");
     else
-        eth_hw_set_link_callback(eth.port, cb);
-}
-
-// Deliver queued frames and link events in caller context; returns true when
-// work remains after budget callbacks.
-bool eth_service(ref EthMac eth, size_t budget = 32)
-{
-    static if (num_ethernet == 0)
-        assert(false, "no ethernet MAC on this platform");
-    else
-        return eth_hw_service(eth.port, budget);
-}
-
-uint eth_take_rx_drops(ref EthMac eth)
-{
-    static if (num_ethernet == 0)
-        assert(false, "no ethernet MAC on this platform");
-    else
-        return eth_hw_take_rx_drops(eth.port);
+        return eth_hw_take_rx_drops(p.mac, p.port);
 }
 
 // The IEEE 1588 clock of the MAC. It free-runs from zero once timestamping is
 // enabled; disciplining it against a grandmaster is the protocol above this.
 static if (has_eth_timestamp)
 {
-    Result eth_get_time(ref EthMac eth, ref EthTime time)
-        => eth_hw_get_time(eth.port, time) ? Result.success : InternalResult.failed;
+    Result eth_get_time(ubyte mac, ref EthTime time)
+        => eth_hw_get_time(mac, time) ? Result.success : InternalResult.failed;
 
-    Result eth_set_time(ref EthMac eth, ref const EthTime time)
-        => eth_hw_set_time(eth.port, time) ? Result.success : InternalResult.failed;
+    Result eth_set_time(ubyte mac, ref const EthTime time)
+        => eth_hw_set_time(mac, time) ? Result.success : InternalResult.failed;
 
     // ppb is relative to the nominal clock rate.
-    Result eth_adjust_frequency(ref EthMac eth, int ppb)
-        => eth_hw_adjust_frequency(eth.port, ppb) ? Result.success : InternalResult.failed;
+    Result eth_adjust_frequency(ubyte mac, int ppb)
+        => eth_hw_adjust_frequency(mac, ppb) ? Result.success : InternalResult.failed;
 }
+
+
+private:
+
+static if (num_ethernet > 0)
+    __gshared uint[num_ethernet] _open_ports;

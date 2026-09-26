@@ -38,9 +38,12 @@ enum bool has_eth_tx_checksum = num_ethernet > 0 && emac_tx_fifo >= eth_max_fram
 static if (num_ethernet > 0):
 
 
-bool eth_hw_open(uint port, ref const EthernetConfig cfg)
+uint eth_hw_ports(uint mac)
+    => 1;
+
+bool eth_hw_open(uint mac, uint port, ref const EthernetConfig cfg, EthRxCallback rx, EthLinkCallback link, void* context)
 {
-    if (port >= num_ethernet || _opened)
+    if (mac >= num_ethernet || _opened)
         return false;
 
     ow_eth_config_t c;
@@ -64,69 +67,60 @@ bool eth_hw_open(uint port, ref const EthernetConfig cfg)
     _tx_checksum = cfg.tx_checksum;
     if (ow_eth_open(&c, &eth_rx_trampoline, &eth_link_trampoline) != 0)
         return false;
+    _rx_cb = rx;
+    _link_cb = link;
+    _context = context;
     _opened = true;
     return true;
 }
 
-bool eth_hw_close(uint port)
+bool eth_hw_close(uint mac, uint port)
 {
-    if (!is_active(port))
+    if (!is_active(mac))
         return true;
-    _rx_cb = null;
-    _link_cb = null;
     if (ow_eth_close() != 0)
         return false;
     reset_queues();
+    _rx_cb = null;
+    _link_cb = null;
     _opened = false;
     return true;
 }
 
-bool eth_hw_tx(uint port, const(ubyte)[] frame, bool insert_checksum)
-    => (insert_checksum ? eth_hw_checksum_insertable(port, frame) : is_active(port)) && ow_eth_tx(frame.ptr, cast(uint)frame.length, insert_checksum) == 0;
+bool eth_hw_tx(uint mac, uint port, const(ubyte)[] frame, bool insert_checksum)
+    => (insert_checksum ? eth_hw_checksum_insertable(mac, port, frame) : is_active(mac)) && ow_eth_tx(frame.ptr, cast(uint)frame.length, insert_checksum) == 0;
 
-bool eth_hw_checksum_insertable(uint port, const(ubyte)[] frame)
-    => is_active(port) && _tx_checksum && engine_checksums(frame);
+bool eth_hw_checksum_insertable(uint mac, uint port, const(ubyte)[] frame)
+    => is_active(mac) && _tx_checksum && engine_checksums(frame);
 
-bool eth_hw_get_hardware_address(uint port, ref ubyte[6] address)
+bool eth_hw_get_hardware_address(uint mac, uint port, ref ubyte[6] address)
 {
     return esp_read_mac(address.ptr, ESP_MAC_ETH) == ESP_OK;
 }
 
-bool eth_hw_set_address(uint port, ref const ubyte[6] address)
+bool eth_hw_set_address(uint mac, uint port, ref const ubyte[6] address)
 {
-    return is_active(port) && ow_eth_set_mac(address.ptr) == 0;
+    return is_active(mac) && ow_eth_set_mac(address.ptr) == 0;
 }
 
-bool eth_hw_set_promiscuous(uint port, bool enable)
+bool eth_hw_set_promiscuous(uint mac, uint port, bool enable)
 {
-    return is_active(port) && ow_eth_set_promiscuous(enable) == 0;
+    return is_active(mac) && ow_eth_set_promiscuous(enable) == 0;
 }
 
-bool eth_hw_get_link(uint port, ref EthLinkInfo info)
+bool eth_hw_get_link(uint mac, uint port, ref EthLinkInfo info)
 {
     int speed, full_duplex;
-    if (!is_active(port) || ow_eth_get_link(&speed, &full_duplex) != 0)
+    if (!is_active(mac) || ow_eth_get_link(&speed, &full_duplex) != 0)
         return false;
     info.speed = cast(EthSpeed)speed;
     info.full_duplex = full_duplex != 0;
     return true;
 }
 
-bool eth_hw_set_link_mode(uint port, bool autonegotiate, EthSpeed speed, bool full_duplex)
+bool eth_hw_set_link_mode(uint mac, uint port, bool autonegotiate, EthSpeed speed, bool full_duplex)
 {
-    return is_active(port) && ow_eth_set_link_mode(autonegotiate, speed, full_duplex) == 0;
-}
-
-void eth_hw_set_rx_callback(uint port, EthRxCallback cb)
-{
-    if (is_active(port))
-        _rx_cb = cb;
-}
-
-void eth_hw_set_link_callback(uint port, EthLinkCallback cb)
-{
-    if (is_active(port))
-        _link_cb = cb;
+    return is_active(mac) && ow_eth_set_link_mode(autonegotiate, speed, full_duplex) == 0;
 }
 
 void eth_hw_set_ready_callback(EthReadyCallback cb)
@@ -136,26 +130,25 @@ void eth_hw_set_ready_callback(EthReadyCallback cb)
         cb();
 }
 
-uint eth_hw_take_rx_drops(uint port)
+uint eth_hw_take_rx_drops(uint mac, uint port)
 {
-    return is_active(port) ? atomicExchange!(MemoryOrder.relaxed)(&_rx_drops, 0u) : 0;
+    return is_active(mac) ? atomicExchange!(MemoryOrder.relaxed)(&_rx_drops, 0u) : 0;
 }
 
-bool eth_hw_service(uint port, size_t budget)
+bool eth_hw_service(uint mac, size_t budget)
 {
-    if (!is_active(port))
+    if (!is_active(mac))
         return false;
     if (_servicing)
         return queues_pending();
 
     _servicing = true;
     uint generation = atomicLoad!(MemoryOrder.acquire)(_queue_generation);
-    EthMac e = EthMac(cast(ubyte)port);
     size_t serviced;
 
     while (serviced < budget && generation == atomicLoad!(MemoryOrder.acquire)(_queue_generation))
     {
-        if (!dispatch_link(e) && !dispatch_one_rx(e))
+        if (!dispatch_link() && !dispatch_one_rx())
             break;
         ++serviced;
     }
@@ -166,19 +159,19 @@ bool eth_hw_service(uint port, size_t budget)
 
 static if (has_eth_timestamp)
 {
-    bool eth_hw_get_time(uint port, ref EthTime time)
+    bool eth_hw_get_time(uint mac, ref EthTime time)
     {
-        return is_active(port) && _timestamps && ow_eth_get_time(&time.seconds, &time.nanoseconds) == 0;
+        return is_active(mac) && _timestamps && ow_eth_get_time(&time.seconds, &time.nanoseconds) == 0;
     }
 
-    bool eth_hw_set_time(uint port, ref const EthTime time)
+    bool eth_hw_set_time(uint mac, ref const EthTime time)
     {
-        return is_active(port) && _timestamps && ow_eth_set_time(time.seconds, time.nanoseconds) == 0;
+        return is_active(mac) && _timestamps && ow_eth_set_time(time.seconds, time.nanoseconds) == 0;
     }
 
-    bool eth_hw_adjust_frequency(uint port, int ppb)
+    bool eth_hw_adjust_frequency(uint mac, int ppb)
     {
-        return is_active(port) && _timestamps && ow_eth_adjust_frequency(ppb) == 0;
+        return is_active(mac) && _timestamps && ow_eth_adjust_frequency(ppb) == 0;
     }
 }
 
@@ -231,12 +224,13 @@ __gshared bool _timestamps;
 __gshared bool _tx_checksum;
 __gshared EthRxCallback _rx_cb;
 __gshared EthLinkCallback _link_cb;
+__gshared void* _context;
 shared size_t _ready_cb_bits;
 shared uint _queue_generation;
 
-bool is_active(uint port)
+bool is_active(uint mac)
 {
-    return port < num_ethernet && _opened;
+    return mac < num_ethernet && _opened;
 }
 
 // IDF hides descriptor checksum status; only classify layouts its engine covers.
@@ -277,17 +271,17 @@ void notify_ready()
         cb();
 }
 
-bool dispatch_link(EthMac eth)
+bool dispatch_link()
 {
     if (atomicExchange!(MemoryOrder.acq_rel)(&_link_changed, 0u) == 0)
         return false;
     if (_link_cb !is null)
-        _link_cb(eth, atomicLoad!(MemoryOrder.acquire)(_link_state) != 0 ? EthLinkEvent.up : EthLinkEvent.down);
+        _link_cb(_context, atomicLoad!(MemoryOrder.acquire)(_link_state) != 0 ? EthLinkEvent.up : EthLinkEvent.down);
     return true;
 }
 
 // Dequeue before callbacks: close may drain the queue.
-bool dispatch_one_rx(EthMac eth)
+bool dispatch_one_rx()
 {
     uint tail = atomicLoad!(MemoryOrder.relaxed)(_rx_tail);
     if (tail == atomicLoad!(MemoryOrder.acquire)(_rx_head))
@@ -298,7 +292,7 @@ bool dispatch_one_rx(EthMac eth)
     {
         const(ubyte)[] data = frame.buffer[0 .. frame.length];
         EthRxInfo info = EthRxInfo(frame.timestamp, frame.has_timestamp, engine_checksums(data));
-        _rx_cb(eth, data, info);
+        _rx_cb(_context, data, info);
     }
     ow_eth_free(frame.buffer);
     return true;

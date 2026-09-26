@@ -72,7 +72,8 @@ either set the next boot to the network from RouterOS:
     /system/reboot
 
 or hold the reset button through power-on until the board asks the network for
-an image. RouterBOOT boots from flash again afterwards.
+an image. RouterBOOT boots from flash again afterwards; the running image can
+also arm the next netboot itself by rewriting soft_config.
 
 Console
 -------

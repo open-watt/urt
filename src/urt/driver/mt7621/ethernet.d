@@ -26,10 +26,18 @@ uint eth_hw_ports(uint mac)
 // Runs from sys_init, before any interface opens, so early output can already leave the box.
 void fe_init()
 {
-    immutable adrh = mmio_read(fe_base + gdma1_mac_adrh);
-    immutable adrl = mmio_read(fe_base + gdma1_mac_adrl);
-    _base_mac = [cast(ubyte)(adrh >> 8), cast(ubyte)adrh, cast(ubyte)(adrl >> 24), cast(ubyte)(adrl >> 16),
-                 cast(ubyte)(adrl >> 8), cast(ubyte)adrl];
+    version (RouterBoot)
+        import urt.driver.routerboot : board_mac;
+    else
+        static bool board_mac(ref ubyte[6])
+            => false;
+    if (!board_mac(_base_mac))
+    {
+        immutable adrh = mmio_read(fe_base + gdma1_mac_adrh);
+        immutable adrl = mmio_read(fe_base + gdma1_mac_adrl);
+        _base_mac = [cast(ubyte)(adrh >> 8), cast(ubyte)adrh, cast(ubyte)(adrl >> 24), cast(ubyte)(adrl >> 16),
+                     cast(ubyte)(adrl >> 8), cast(ubyte)adrl];
+    }
 
     import urt.driver.mt7621 : sysctl_base, sysc_rstctrl;
     enum uint rst_eth_fe_ppe0 = (1 << 23) | (1 << 6) | (1u << 31);

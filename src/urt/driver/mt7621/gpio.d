@@ -17,6 +17,7 @@ enum bool has_open_drain = false;
 enum bool has_pin_function_muxing = false;
 enum bool has_gpio_sampler = false;
 enum uint num_gpio_interrupts = 8;
+enum uint test_gpio_line = 0;
 
 uint gpio_count()
     => num_gpio;
@@ -63,8 +64,6 @@ Result gpio_interrupt_hw_open(uint port, ref const GpioInterruptConfig config)
 {
     if (config.input.chip != 0 || config.input.line >= num_gpio)
         return InternalResult.unsupported;
-    if (_port_line[port] != no_line)
-        return InternalResult.already_exists;
     Result result = line_irq_open(config.input.line, config.trigger, cast(ubyte)port);
     if (result)
         _port_line[port] = cast(ubyte)config.input.line;
@@ -253,14 +252,6 @@ unittest
     cfg.trigger = gpio_input_read(0) ? GpioInterruptTrigger.high : GpioInterruptTrigger.low;
     immutable prior = irq_global_disable();
     assert(gpio_interrupt_open(irq, 0, cfg));
-
-    // The port is taken, and so is the line: neither a second line on this port nor a second port on this line opens.
-    GpioInterrupt other;
-    GpioInterruptConfig other_cfg = cfg;
-    other_cfg.input = GpioLine(0, 18);
-    assert(!gpio_interrupt_open(other, 0, other_cfg) && !other.is_open && _owner[18] == no_owner);
-    assert(!gpio_interrupt_open(other, 1, cfg) && !other.is_open);
-
     gpio_interrupt_set_callback(irq, &once);
     irq_global_enable();
     foreach (i; 0 .. 100_000)

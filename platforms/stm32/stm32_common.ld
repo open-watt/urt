@@ -1,27 +1,13 @@
-/* STM32F7 (ARM Cortex-M7) linker script
- *
- * Default memory map for STM32F746NG (Discovery board):
- *   FLASH:  1MB   at 0x08000000
- *   DTCM:   64KB  at 0x20000000 (tightly-coupled, fast, no DMA)
- *   RAM:    256KB at 0x20010000 (SRAM1 240KB + SRAM2 16KB contiguous)
- *
- * DTCM is used for stack and GOT (zero-wait-state single-cycle access).
- * Main RAM is used for .data, .bss, and heap.
- *
- * Adjust MEMORY sizes for your specific F7 variant.
- */
+/* A part script declares MEMORY, aliases CORE_RAM (core-coupled: statics, stack) and BULK_RAM
+ * (system SRAM: .ramfunc, the heap), then includes this file. DMA cannot reach F4's CCM or
+ * H7's DTCM, so DMA buffers come from the heap, never from statics. */
 
 ENTRY(Reset_Handler)
 
 EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
-MEMORY
-{
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1M
-    DTCM  (rwx) : ORIGIN = 0x20000000, LENGTH = 64K
-    RAM   (rwx) : ORIGIN = 0x20010000, LENGTH = 256K
-}
+PROVIDE(__stm32_hse_hz = 0);
 
 SECTIONS
 {
@@ -71,79 +57,88 @@ SECTIONS
         *(.ARM.extab* .gnu.linkonce.armextab.*)
     } > FLASH
 
-    /* GOT in DTCM for fast access -- LMA in FLASH, copied at startup */
     .got : ALIGN(4)
     {
-        _got_load  = LOADADDR(.got);
         _got_start = .;
         *(.got .got.*)
         *(.got.plt)
         _got_end = .;
-    } > DTCM AT > FLASH
+    } > CORE_RAM AT > FLASH
 
-    /* Initialized data -- LMA in FLASH, copied to RAM at startup */
+    _got_load = LOADADDR(.got);
+
     .data : ALIGN(4)
     {
         _data_start = .;
         *(.data .data.*)
+        . = ALIGN(4);
         _data_end = .;
-    } > RAM AT > FLASH
+    } > CORE_RAM AT > FLASH
 
     _data_load = LOADADDR(.data);
     __ram_load_addr = _data_load;
     __ram_data_start__ = _data_start;
     __ram_data_end__ = _data_end;
 
-    /* @fast_data lands here on F7 -- DTCM for zero-wait access, LMA in FLASH,
-     * copied to DTCM at startup. Without an explicit home this is an orphan
-     * with LMA in RAM, which makes objcopy span flash..RAM and emit a
-     * multi-hundred-MB .bin. */
-    .dtcm_data : ALIGN(4)
-    {
-        _dtcm_data_start = .;
-        *(.dtcm_data .dtcm_data.*)
-        _dtcm_data_end = .;
-    } > DTCM AT > FLASH
-
-    _dtcm_data_load = LOADADDR(.dtcm_data);
-
-    /* Thread-local initialized data in DTCM -- LMA in FLASH */
     .tdata : ALIGN(4)
     {
         _tdata_start = .;
         *(.tdata .tdata.*)
+        . = ALIGN(4);
         _tdata_end = .;
-    } > DTCM AT > FLASH
+    } > CORE_RAM AT > FLASH
 
     _tdata_load = LOADADDR(.tdata);
 
-    /* Thread-local zero-initialized data */
     .tbss (NOLOAD) : ALIGN(4)
     {
         _tbss_start = .;
         *(.tbss .tbss.*)
+        . = ALIGN(4);
         _tbss_end = .;
-    } > DTCM
+    } > CORE_RAM
 
-    /* Zero-initialized data */
+    /* The thread pointer sits 8 bytes (the ARM TCB) below the TLS block, rounded down to the
+     * block alignment: lld places each thread-local at tp + 8 + ((block - 8) mod align). */
+    _tls_base = ((SIZEOF(.tdata) ? ADDR(.tdata) : ADDR(.tbss)) - 8) & ~(MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)) - 1);
+
     .bss (NOLOAD) : ALIGN(4)
     {
         __bss_start__ = .;
         _bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
+        . = ALIGN(4);
         _bss_end = .;
         __bss_end__ = .;
-    } > RAM
+    } > CORE_RAM
 
-    /* Heap grows up from end of BSS in RAM */
-    __heap_start = _bss_end;
-    __heap_end   = ORIGIN(RAM) + LENGTH(RAM);
+    /* @persist: never zeroed or loaded; prior contents survive a reset. */
+    .persist (NOLOAD) : ALIGN(8)
+    {
+        *(.persist .persist.*)
+        . = ALIGN(8);
+        _persist_end = .;
+    } > CORE_RAM
 
-    /* Stack at top of DTCM (fast access) */
-    _stack_top = ORIGIN(DTCM) + LENGTH(DTCM);
-    _stack_low = ORIGIN(DTCM);
+    _stack_top = ORIGIN(CORE_RAM) + LENGTH(CORE_RAM);
+    _stack_low = _stack_top - _stack_size;
     __StackTop = _stack_top;
+
+    ASSERT(_stack_low >= _persist_end, "core RAM exhausted: static data collides with the stack")
+
+    .ramfunc : ALIGN(8)
+    {
+        _ramfunc_start = .;
+        *(.ramfunc .ramfunc.*)
+        . = ALIGN(8);
+        _ramfunc_end = .;
+    } > BULK_RAM AT > FLASH
+
+    _ramfunc_load = LOADADDR(.ramfunc);
+
+    __heap_start = _ramfunc_end;
+    __heap_end   = ORIGIN(BULK_RAM) + LENGTH(BULK_RAM);
 
     /DISCARD/ :
     {

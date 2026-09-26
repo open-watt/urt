@@ -472,9 +472,7 @@ else version (BK7231N)
     public import urt.driver.bk7231.alloc;
 else version (BK7231T)
     public import urt.driver.bk7231.alloc;
-else version (STM32F4)
-    public import urt.driver.stm32.alloc;
-else version (STM32F7)
+else version (STM32)
     public import urt.driver.stm32.alloc;
 else version (Windows)
     public import urt.driver.windows.alloc;

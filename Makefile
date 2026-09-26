@@ -35,7 +35,7 @@ ifeq ($(CONFIG),unittest)
   else ifeq ($(PLATFORM),rp2350)
     BAREMETAL_LD := platforms/rp2350/rp2350.ld
   else ifdef STM32_VARIANT
-    BAREMETAL_LD := platforms/stm32/stm32_$(STM32_VARIANT).ld
+    BAREMETAL_LD := $(STM32_LD)
   else ifeq ($(PLATFORM),mt7621)
     BAREMETAL_LD := platforms/mt7621/mt7621.ld
     DFLAGS := $(DFLAGS) -L--defsym=__ram_size=64M
@@ -124,7 +124,7 @@ endif
 
 FLAGSTAMP = $(OBJDIR)/build.flags
 
-$(TARGET): $(BAREMETAL_OBJS) $(VENDOR_OBJS) $(URT_SOURCES) $(BAREMETAL_LD) \
+$(TARGET): $(BAREMETAL_OBJS) $(VENDOR_OBJS) $(URT_SOURCES) $(BAREMETAL_LD) $(BAREMETAL_LD_DEPS) \
     $(if $(RAM_IMAGE),$(RAM_IMAGE_PACKER))
 	mkdir -p $(OBJDIR) $(TARGETDIR)
 ifeq ($(COMPILER),ldc)
@@ -155,7 +155,7 @@ endif
 
 CI_PLATFORMS := \
     esp32 esp32-s2 esp32-s3 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2 esp32-p4 \
-    bl618 bk7231n bk7231t rp2350 stm4xx stm7xx bl808-d0 bl808-m0
+    bl618 bk7231n bk7231t rp2350 stm32f4 stm32f7 stm32h7 bl808-d0 bl808-m0
 
 # Optional host regression: make check-invariants CONFIG=debug COMPILER=ldc
 .PHONY: check-invariants

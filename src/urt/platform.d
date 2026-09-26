@@ -39,6 +39,7 @@ else version (RP2350)       enum string Platform = "RP2350";
 else version (MT7621)       enum string Platform = "MT7621";
 else version (STM32F4)      enum string Platform = "STM32F4";
 else version (STM32F7)      enum string Platform = "STM32F7";
+else version (STM32H7)      enum string Platform = "STM32H7";
 else version (Windows)      enum string Platform = "Windows";
 else version (linux)        enum string Platform = "Linux";
 else version (Darwin)       enum string Platform = "macOS";

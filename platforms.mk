@@ -5,7 +5,7 @@
 # Anything that depends on which SoC/core/toolchain we're targeting lives here.
 #
 # Inputs (set by caller before include):
-#   PLATFORM   - SoC/board (esp32-s3, bl808, bl618, bk7231n, rp2350, stm4xx, ...)
+#   PLATFORM   - SoC/board (esp32-s3, bl808, bl618, bk7231n, rp2350, stm32h7, ...)
 #                or OS name (windows, linux, ubuntu, freebsd) for host builds.
 #                Auto-detected from `uname` if undefined.
 #   PROCESSOR  - CPU core (e907, c906, lx7, cortex-m33, ...). Usually derived
@@ -15,6 +15,8 @@
 #   COMPILER   - dmd | ldc | gdc. Auto-promoted to ldc for cross-compile.
 #   URT_SRCDIR - path to URT's src/ tree. Default `src` (URT in-tree); outer
 #                projects set this to e.g. `third_party/urt/src`.
+#   STM32_PART, STM32_HSE_HZ
+#              - STM32 board facts: memory map (platforms/stm32/stm32_<part>.ld) and HSE crystal.
 #   CPU_HZ     - the CPU clock, for a part that can only measure it and a board
 #                that fixes it (MT7621). Optional; without it the driver measures.
 #
@@ -34,7 +36,7 @@
 #
 # Caller still owns (NOT set here -- these are app-specific):
 #   - BAREMETAL_LD: linker script (app memory map lives in the consumer's
-#                   platforms/<x>/ld/*.ld tree).
+#                   platforms/<x>/ld/*.ld tree). BAREMETAL_LD_DEPS lists what it INCLUDEs.
 #   - `-J` string-imports for app config dirs (consumer's platforms/<x>/).
 #   - Vendor SDK roots and blob paths (BK_SDK_ROOT, ESP_PROJECT_DIR, ...).
 #   - Final link/objcopy/packaging (containers, .bin, flashing, OTA).
@@ -172,19 +174,29 @@ else ifeq ($(PLATFORM),rp2350)
     PROCESSOR := cortex-m33
     STRICT_ALIGN := 0
     OS = baremetal
-else ifeq ($(PLATFORM),stm7xx)
-    BUILDNAME := stm7xx
+else ifeq ($(PLATFORM),stm32h7)
+    BUILDNAME := stm32h7
+    PROCESSOR := cortex-m7
+    STRICT_ALIGN := 0
+    OS = baremetal
+    STM32_VARIANT = h7
+    STM32_PART ?= h743vi
+    MFPU = fpv5-d16
+else ifeq ($(PLATFORM),stm32f7)
+    BUILDNAME := stm32f7
     PROCESSOR := cortex-m7
     STRICT_ALIGN := 0
     OS = baremetal
     STM32_VARIANT = f7
+    STM32_PART ?= f746ng
     MFPU = fpv5-d16
-else ifeq ($(PLATFORM),stm4xx)
-    BUILDNAME := stm4xx
+else ifeq ($(PLATFORM),stm32f4)
+    BUILDNAME := stm32f4
     PROCESSOR := cortex-m4
     STRICT_ALIGN := 0
     OS = baremetal
     STM32_VARIANT = f4
+    STM32_PART ?= f407vg
     MFPU = fpv4-sp-d16
 else ifeq ($(PLATFORM),mt7621)
     # MediaTek MT7621A -- dual MIPS 1004Kc (2 VPEs each), 880MHz, no FPU. RAM-resident ELF
@@ -551,6 +563,16 @@ ifdef STM32_VARIANT
         DFLAGS := $(DFLAGS) -d-version=STM32F4
     else ifeq ($(STM32_VARIANT),f7)
         DFLAGS := $(DFLAGS) -d-version=STM32F7
+    else ifeq ($(STM32_VARIANT),h7)
+        DFLAGS := $(DFLAGS) -d-version=STM32H7
+    endif
+    STM32_LD_DIR := $(URT_ROOT)platforms/stm32
+    STM32_LD := $(STM32_LD_DIR)/stm32_$(STM32_PART).ld
+    BAREMETAL_LD_DEPS := $(STM32_LD) $(STM32_LD_DIR)/stm32_common.ld
+    DFLAGS := $(DFLAGS) -L-L$(STM32_LD_DIR)
+    # The HSE crystal in Hz rides in as a link-time constant; 0 runs on HSI.
+    ifdef STM32_HSE_HZ
+        DFLAGS := $(DFLAGS) -L--defsym=__stm32_hse_hz=$(STM32_HSE_HZ)
     endif
 endif
 ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)

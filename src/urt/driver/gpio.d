@@ -46,6 +46,8 @@ else version (Beken)
     public import urt.driver.bk7231.gpio;
 else version (Espressif)
     public import urt.driver.esp32.gpio;
+else version (STM32)
+    public import urt.driver.stm32.gpio;
 else version (linux)
     public import urt.driver.posix.gpio;
 else version (MT7621)

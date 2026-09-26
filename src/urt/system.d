@@ -5,6 +5,9 @@ import urt.processor;
 import urt.string.ascii : is_numeric;
 import urt.time;
 
+version (Bouffalo)     version = TlsfHeap;
+else version (BK7231N) version = TlsfHeap;
+
 version (Espressif)
 {
     enum uint MALLOC_CAP_8BIT      = 1 << 2;
@@ -187,9 +190,9 @@ SystemInfo get_sysinfo()
         }
 
     }
-    else version (Beken)
+    else version (BK7231T)
     {
-        import urt.driver.bk7231.alloc : fast_heap_stats, sram_heap_stats;
+        import urt.driver.bk7231.alloc : sram_heap_stats;
 
         size_t total, used, peak, largest;
         sram_heap_stats(total, used, peak, largest);
@@ -198,17 +201,6 @@ SystemInfo get_sysinfo()
         r.pools[0].used = used;
         r.pools[0].peak_used = peak;
         r.pools[0].largest_free = largest;
-
-        version (BK7231N)
-        {
-            fast_heap_stats(total, used, peak, largest);
-            r.pools[1].name = "DTCM";
-            r.pools[1].total = total;
-            r.pools[1].used = used;
-            r.pools[1].peak_used = peak;
-            r.pools[1].largest_free = largest;
-        }
-
     }
     else version (MT7621)
     {
@@ -225,11 +217,12 @@ SystemInfo get_sysinfo()
         r.pools[0].peak_used = peak;
         r.pools[0].largest_free = largest;
     }
-    else version (Bouffalo)
+    else version (TlsfHeap)
     {
-        import urt.driver.bl_common.alloc : num_pools, query_pool_stats, PoolStats;
+        import urt.driver.baremetal.heap : num_pools, query_pool_stats, PoolStats;
         import urt.string : c_string;
 
+        static assert(num_pools <= MaxMemoryPools);
         foreach (i; 0 .. num_pools)
         {
             PoolStats s;

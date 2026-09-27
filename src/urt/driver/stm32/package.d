@@ -1,108 +1,270 @@
-// STM32 platform package (ARM Cortex-M4/M7)
-//
-// Provides sys_init() as the single entry point for all
-// hardware initialization. Called from start.S before main().
-//
-// At reset, STM32 runs on HSI at 16 MHz (no PLL).
-// sys_init brings up USART1 for console output and SysTick.
-// PLL configuration for full-speed operation is not yet implemented.
 module urt.driver.stm32;
 
 public import urt.driver.stm32.uart;
 public import urt.driver.stm32.irq;
 public import urt.driver.stm32.timer;
 
-import urt.driver.uart : UartConfig;
+import urt.driver.uart : UartConfig, console_uart;
+
 import core.volatile;
 
 @nogc nothrow:
 
-private extern(C) void __register_frame_info(const void*, void*);
-private extern(C) extern const ubyte __eh_frame_start;
-private ubyte[48] __eh_frame_object;
-
-// RCC base and clock enable registers (same for F4 and F7)
-enum ulong RCC_BASE     = 0x40023800;
-enum ulong RCC_AHB1ENR  = 0x30;
-enum ulong RCC_APB2ENR  = 0x44;
-
-// GPIO base addresses
-enum ulong GPIOA_BASE   = 0x40020000;
-
-// GPIO register offsets
-enum ulong GPIO_MODER   = 0x00;
-enum ulong GPIO_OSPEEDR = 0x08;
-enum ulong GPIO_AFRH    = 0x24;
-
-// SCB registers for cache control (F7 only)
-enum ulong SCB_CCR      = 0xE000ED14;
-enum ulong ICIALLU      = 0xE000EF50;
-
-private void mmio_write(ulong addr, uint val)
+version (STM32H7)
 {
-    volatileStore(cast(uint*)addr, val);
+    enum uint sysclk_hz = 400_000_000;
+    enum uint hclk_hz   = 200_000_000;
+    enum uint pclk1_hz  = 100_000_000;
+    enum uint pclk2_hz  = 100_000_000;
+
+    enum ulong rcc_base = 0x5802_4400;
+    enum uint rcc_ahb2enr = 0xDC;
+    enum uint rcc_gpioenr = 0xE0;
+    enum uint rcc_apb1enr = 0xE8;
+    enum uint rcc_apb2enr = 0xF0;
+
+    enum ulong uid_base = 0x1FF1_E800;
+    enum ulong flash_size_reg = 0x1FF1_E880;
 }
-
-private uint mmio_read(ulong addr)
+else
 {
-    return volatileLoad(cast(uint*)addr);
-}
+    enum uint sysclk_hz = 168_000_000;
+    enum uint hclk_hz   = 168_000_000;
+    enum uint pclk1_hz  = 42_000_000;
+    enum uint pclk2_hz  = 84_000_000;
 
-private void mmio_set(ulong addr, uint bits)
-{
-    volatileStore(cast(uint*)addr, volatileLoad(cast(uint*)addr) | bits);
-}
-
-private void mmio_rmw(ulong addr, uint clear_mask, uint set_bits)
-{
-    immutable val = volatileLoad(cast(uint*)addr);
-    volatileStore(cast(uint*)addr, (val & ~clear_mask) | set_bits);
-}
-
-extern(C) void sys_init()
-{
-    __register_frame_info(&__eh_frame_start, &__eh_frame_object);
-
-    // Enable GPIOA clock (AHB1ENR bit 0)
-    mmio_set(RCC_BASE + RCC_AHB1ENR, 1 << 0);
-
-    // Enable USART1 clock (APB2ENR bit 4)
-    mmio_set(RCC_BASE + RCC_APB2ENR, 1 << 4);
-
-    // Configure PA9 (USART1_TX) and PA10 (USART1_RX) as AF7
-    // MODER: bits 19:18 = 0b10 (PA9 AF), bits 21:20 = 0b10 (PA10 AF)
-    mmio_rmw(GPIOA_BASE + GPIO_MODER,
-        (3u << 18) | (3u << 20),
-        (2u << 18) | (2u << 20));
-
-    // OSPEEDR: high speed for PA9/PA10
-    mmio_set(GPIOA_BASE + GPIO_OSPEEDR, (3u << 18) | (3u << 20));
-
-    // AFRH: PA9 bits 7:4 = 7 (AF7), PA10 bits 11:8 = 7 (AF7)
-    mmio_rmw(GPIOA_BASE + GPIO_AFRH,
-        (0xFu << 4) | (0xFu << 8),
-        (7u << 4) | (7u << 8));
-
-    // Init UART0 (USART1) at default baud for early console
-    uart_hw_init(0, UartConfig.init);
-
-    uart0_hw_puts("STM32: sys_init\r\n");
+    enum ulong rcc_base = 0x4002_3800;
+    enum uint rcc_ahb2enr = 0x34;
+    enum uint rcc_gpioenr = 0x30;
+    enum uint rcc_apb1enr = 0x40;
+    enum uint rcc_apb2enr = 0x44;
 
     version (STM32F7)
     {
-        // Enable instruction cache (D-cache needs DMA coherence handling)
-        asm @nogc nothrow { "dsb sy"; "isb"; }
-        mmio_write(ICIALLU, 0);
-        asm @nogc nothrow { "dsb sy"; "isb"; }
-        mmio_set(SCB_CCR, 1 << 17);
-        asm @nogc nothrow { "dsb sy"; "isb"; }
-        uart0_hw_puts("STM32F7: I-cache enabled\r\n");
+        enum ulong uid_base = 0x1FF0_F420;
+        enum ulong flash_size_reg = 0x1FF0_F442;
+    }
+    else
+    {
+        enum ulong uid_base = 0x1FFF_7A10;
+        enum ulong flash_size_reg = 0x1FFF_7A22;
+    }
+}
+
+// Timers on APB1 run at twice PCLK1 whenever the APB1 prescaler divides.
+enum uint apb1_timer_hz = pclk1_hz * 2;
+
+uint reg_read(ulong addr) => volatileLoad(cast(uint*)addr);
+void reg_write(ulong addr, uint value) { volatileStore(cast(uint*)addr, value); }
+void reg_set(ulong addr, uint bits) { reg_write(addr, reg_read(addr) | bits); }
+void reg_clear(ulong addr, uint bits) { reg_write(addr, reg_read(addr) & ~bits); }
+void reg_rmw(ulong addr, uint clear, uint set) { reg_write(addr, (reg_read(addr) & ~clear) | set); }
+
+// The read back covers the RCC erratum: a peripheral touched right after its clock is enabled
+// may miss the first access.
+void clock_enable(uint enr, uint bit)
+{
+    reg_set(rcc_base + enr, 1u << bit);
+    reg_read(rcc_base + enr);
+}
+
+// Flash size in KB as the factory programmed it; the part number can undersell it.
+uint flash_size_kb() => volatileLoad(cast(ushort*)flash_size_reg);
+
+extern(C) void sys_init()
+{
+    bool on_hse = clocks_init();
+    version (STM32F4) {} else
+        caches_enable();
+
+    uart_hw_init(console_uart, UartConfig.init);
+    uart0_hw_puts("STM32: ");
+    put_decimal(sysclk_hz / 1_000_000);
+    uart0_hw_puts(on_hse ? " MHz from HSE, " : " MHz from HSI, ");
+    put_decimal(flash_size_kb());
+    uart0_hw_puts(" KB flash\r\n");
+
+    mtime_init();
+}
+
+
+private:
+
+extern(C) extern __gshared const ubyte __stm32_hse_hz;
+
+uint board_hse_hz() => cast(uint)cast(size_t)&__stm32_hse_hz;
+
+void put_decimal(uint value)
+{
+    char[10] buf = void;
+    size_t i = buf.length;
+    do
+    {
+        buf[--i] = cast(char)('0' + value % 10);
+        value /= 10;
+    }
+    while (value);
+    uart0_hw_puts(buf[i .. $]);
+}
+
+enum uint cr_hseon   = 1 << 16;
+enum uint cr_hserdy  = 1 << 17;
+enum uint cr_pllon   = 1 << 24;
+enum uint cr_pllrdy  = 1 << 25;
+
+enum uint hse_timeout = 500_000;
+
+bool hse_start()
+{
+    uint hse = board_hse_hz();
+    if (hse == 0)
+        return false;
+    reg_set(rcc_base, cr_hseon);
+    foreach (i; 0 .. hse_timeout)
+    {
+        if (reg_read(rcc_base) & cr_hserdy)
+            return true;
+    }
+    reg_clear(rcc_base, cr_hseon);
+    return false;
+}
+
+version (STM32H7)
+{
+    bool clocks_init()
+    {
+        enum ulong pwr_base   = 0x5802_4800;
+        enum ulong pwr_csr1   = pwr_base + 0x04;
+        enum ulong pwr_cr3    = pwr_base + 0x0C;
+        enum ulong pwr_d3cr   = pwr_base + 0x18;
+        enum ulong flash_acr  = 0x5200_2000;
+
+        enum ulong rcc_cfgr     = rcc_base + 0x10;
+        enum ulong rcc_d1cfgr   = rcc_base + 0x18;
+        enum ulong rcc_d2cfgr   = rcc_base + 0x1C;
+        enum ulong rcc_d3cfgr   = rcc_base + 0x20;
+        enum ulong rcc_pllckselr = rcc_base + 0x28;
+        enum ulong rcc_pllcfgr  = rcc_base + 0x2C;
+        enum ulong rcc_pll1divr = rcc_base + 0x30;
+
+        // LDO supply; clearing SCUEN locks the configuration until the next power-on.
+        reg_write(pwr_cr3, 1 << 1);
+        while (!(reg_read(pwr_csr1) & (1 << 13)))
+        {}
+
+        reg_rmw(pwr_d3cr, 3 << 14, 3 << 14);        // VOS1
+        while (!(reg_read(pwr_d3cr) & (1 << 13)))
+        {}
+
+        // HSI48 feeds USB and the RNG.
+        reg_set(rcc_base, 1 << 12);
+        while (!(reg_read(rcc_base) & (1 << 13)))
+        {}
+
+        // PLL1 reference must sit in 4..8 MHz for the wide-range VCO.
+        uint src = 0;
+        uint ref_hz = 4_000_000;
+        uint divm = 64_000_000 / ref_hz;
+        uint hse = board_hse_hz();
+        if ((hse % 5_000_000 == 0 || hse % 4_000_000 == 0) && hse_start())
+        {
+            src = 2;
+            ref_hz = hse % 5_000_000 == 0 ? 5_000_000 : 4_000_000;
+            divm = hse / ref_hz;
+        }
+        enum uint vco_hz = 800_000_000;
+        reg_write(rcc_pllckselr, (divm << 4) | src);
+        reg_write(rcc_pllcfgr, (1 << 16) | (1 << 17) | (1 << 18) | (2 << 2));
+        reg_write(rcc_pll1divr, ((vco_hz / ref_hz - 1) << 0) | ((2 - 1) << 9) | ((8 - 1) << 16) | ((2 - 1) << 24));
+        reg_set(rcc_base, cr_pllon);
+        while (!(reg_read(rcc_base) & cr_pllrdy))
+        {}
+
+        // VOS1, 200 MHz AXI: 2 wait states, WRHIGHFREQ 2.
+        reg_write(flash_acr, 2 | (2 << 4));
+        while ((reg_read(flash_acr) & 0x3F) != (2 | (2 << 4)))
+        {}
+
+        reg_write(rcc_d1cfgr, (0b1000 << 0) | (0b100 << 4));    // HPRE /2, D1PPRE /2
+        reg_write(rcc_d2cfgr, (0b100 << 4) | (0b100 << 8));     // D2PPRE1 /2, D2PPRE2 /2
+        reg_write(rcc_d3cfgr, 0b100 << 4);                      // D3PPRE /2
+
+        reg_rmw(rcc_cfgr, 7, 3);
+        while (((reg_read(rcc_cfgr) >> 3) & 7) != 3)
+        {}
+        return src != 0;
+    }
+}
+else
+{
+    bool clocks_init()
+    {
+        enum ulong pwr_cr     = 0x4000_7000;
+        enum ulong flash_acr  = 0x4002_3C00;
+        enum ulong rcc_pllcfgr = rcc_base + 0x04;
+        enum ulong rcc_cfgr    = rcc_base + 0x08;
+
+        clock_enable(rcc_apb1enr, 28);                  // PWR
+        reg_set(pwr_cr, 3 << 14);                       // regulator scale 1
+
+        // PLL reference 1 MHz; VCO 336 MHz; /2 for SYSCLK, /7 for the 48 MHz USB/RNG clock.
+        uint pllm = 16;
+        uint src = 0;
+        uint hse = board_hse_hz();
+        if (hse % 1_000_000 == 0 && hse >= 4_000_000 && hse <= 26_000_000 && hse_start())
+        {
+            pllm = hse / 1_000_000;
+            src = 1 << 22;
+        }
+        reg_write(rcc_pllcfgr, pllm | (336 << 6) | (0 << 16) | src | (7 << 24));
+        reg_set(rcc_base, cr_pllon);
+        while (!(reg_read(rcc_base) & cr_pllrdy))
+        {}
+
+        version (STM32F7)
+            enum uint acr = 5 | (1 << 8) | (1 << 9);                // PRFTEN, ARTEN
+        else
+            enum uint acr = 5 | (1 << 8) | (1 << 9) | (1 << 10);    // PRFTEN, ICEN, DCEN
+        reg_write(flash_acr, acr);
+        while ((reg_read(flash_acr) & 0xF) != 5)
+        {}
+
+        // AHB /1, APB1 /4, APB2 /2, then switch to the PLL.
+        reg_rmw(rcc_cfgr, (0xF << 4) | (7 << 10) | (7 << 13), (0b101 << 10) | (0b100 << 13));
+        reg_rmw(rcc_cfgr, 3, 2);
+        while (((reg_read(rcc_cfgr) >> 2) & 3) != 2)
+        {}
+        return src != 0;
     }
 
-    // SysTick: 20 Hz tick (50ms)
-    // HSI = 16 MHz, AHB prescaler = 1 at reset
-    // Reload = 16_000_000 / 20 - 1 = 799_999
-    timer_init(799_999);
+    // A spare PLLQ output: RNG and USB need exactly 48 MHz, which HSI cannot promise.
+    static assert(336_000_000 / 7 == 48_000_000);
+}
 
-    uart0_hw_puts("STM32: ready\r\n");
+version (STM32F4) {} else
+{
+    void caches_enable()
+    {
+        enum ulong scb_ccr    = 0xE000_ED14;
+        enum ulong scb_ccsidr = 0xE000_ED80;
+        enum ulong scb_csselr = 0xE000_ED84;
+        enum ulong scb_iciallu = 0xE000_EF50;
+        enum ulong scb_dcisw  = 0xE000_EF60;
+
+        asm @nogc nothrow { "dsb sy"; "isb"; }
+        reg_write(scb_iciallu, 0);
+
+        reg_write(scb_csselr, 0);
+        asm @nogc nothrow { "dsb sy"; }
+        uint ccsidr = reg_read(scb_ccsidr);
+        uint sets = ((ccsidr >> 13) & 0x7FFF) + 1;
+        uint ways = ((ccsidr >> 3) & 0x3FF) + 1;
+        foreach (set; 0 .. sets)
+            foreach (way; 0 .. ways)
+                reg_write(scb_dcisw, (way << 30) | (set << 5));
+
+        asm @nogc nothrow { "dsb sy"; }
+        reg_set(scb_ccr, (1 << 16) | (1 << 17));
+        asm @nogc nothrow { "dsb sy"; "isb"; }
+    }
 }

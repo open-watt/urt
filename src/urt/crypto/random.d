@@ -50,6 +50,11 @@ Result crypto_random_bytes(ubyte[] dst)
         import urt.driver.rp2350.trng : trng_read;
         return trng_read(dst) ? Result.success : InternalResult.failed;
     }
+    else version (STM32)
+    {
+        import urt.driver.stm32.trng : trng_read;
+        return trng_read(dst) ? Result.success : InternalResult.failed;
+    }
     else
         return InternalResult.unsupported;
 }

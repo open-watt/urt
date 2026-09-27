@@ -1,7 +1,7 @@
 // STM32 interrupt controller driver
 //
 // Cortex-M4/M7 use the standard ARM NVIC (Nested Vectored Interrupt Controller).
-// STM32F4xx has up to 82 peripheral interrupts, STM32F7xx up to 98.
+// Peripheral interrupts: F4 82, F7 98, H7 150.
 module urt.driver.stm32.irq;
 
 @nogc nothrow:
@@ -11,12 +11,14 @@ enum bool has_nvic = true;
 enum bool has_clic = false;
 enum bool has_per_irq_control = true;
 enum bool has_irq_priority = true;
-enum bool has_wait_for_interrupt = false;
+enum bool has_wait_for_interrupt = true;
 enum bool has_irq_diagnostics = false;
 enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 
-version (STM32F7)
+version (STM32H7)
+    enum uint irq_max = 150;
+else version (STM32F7)
     enum uint irq_max = 98;
 else
     enum uint irq_max = 82;
@@ -60,6 +62,39 @@ bool irq_enable()
     return (primask & 1) == 0;
 }
 
+// Any interrupt serviced since the last wait ends this one at once, so a wake that lands between
+// a waiter's check and here is never slept through. Masked, a pending interrupt still ends wfi.
+void wait_for_interrupt()
+{
+    bool was_enabled = irq_disable();
+    if (!_woke)
+    {
+        asm @nogc nothrow { "dsb sy" ::: "memory"; }
+        asm @nogc nothrow { "wfi" ::: "memory"; }
+    }
+    _woke = false;
+    if (was_enabled)
+        irq_enable();
+}
+
+enum IrqClass : uint
+{
+    timer,
+}
+
+// The timer class is TIM5's line, which also carries mtime's upper word, so it stays enabled.
+bool enable_irq(IrqClass)
+{
+    import urt.driver.stm32.timer : tim5_irq;
+    return irq_set_enable(tim5_irq);
+}
+
+bool disable_irq(IrqClass)
+{
+    import urt.driver.stm32.timer : tim5_irq;
+    return irq_clear_enable(tim5_irq);
+}
+
 bool irq_set_enable(uint irq_num)
 {
     immutable reg = irq_num / 32;
@@ -95,6 +130,7 @@ void irq_set_priority(uint irq_num, ubyte priority)
 alias IrqHandler = void function(uint irq) @nogc nothrow;
 
 __gshared IrqHandler[irq_max] _handlers;
+private __gshared bool _woke;
 
 // Install a handler for a peripheral IRQ (0..irq_max-1). Returns the previous.
 // The flash vector table routes every peripheral vector at _nvic_dispatch,
@@ -124,4 +160,5 @@ extern(C) void _nvic_dispatch()
         if (h !is null)
             h(irq);
     }
+    _woke = true;
 }

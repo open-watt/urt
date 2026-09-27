@@ -1,129 +1,82 @@
-/* STM32 (ARM Cortex-M4/M7) startup
- *
- * Shared between STM32F4xx and STM32F7xx. The assembler receives
- * -mcpu=cortex-m4 or -mcpu=cortex-m7 from the Makefile, so no
- * .cpu directive here.
- *
- * Boot flow:
- *   1. Cortex-M reads vector table from flash: initial SP + Reset_Handler
- *   2. Reset_Handler runs:
- *      a. Copy .got from flash to RAM
- *      b. Copy .data from flash to RAM
- *      c. Zero .bss
- *      d. Enable FPU (CP10 + CP11)
- *      e. Call sys_init (clock, GPIO, UART, cache)
- *      f. Run .init_array (D module constructors)
- *      g. Call main
+/* STM32 (ARM Cortex-M4/M7) startup, shared by the F4, F7 and H7 families.
+ * The assembler receives -mcpu from the Makefile, so no .cpu directive here.
  */
 
     .syntax unified
     .thumb
 
-/* ================================================================
- * Vector table -- placed at start of FLASH
- * Cortex-M reads entry 0 as initial SP, entry 1 as Reset_Handler
- * ================================================================ */
     .section .vector_table, "a"
     .global __vector_table
     .type   __vector_table, %object
 __vector_table:
-    .word   _stack_top          /*  0: Initial stack pointer */
-    .word   Reset_Handler       /*  1: Reset */
-    .word   NMI_Handler         /*  2: NMI */
-    .word   HardFault_Handler   /*  3: Hard fault */
-    .word   MemManage_Handler   /*  4: MPU fault */
-    .word   BusFault_Handler    /*  5: Bus fault */
-    .word   UsageFault_Handler  /*  6: Usage fault */
-    .word   0                   /*  7: Reserved */
-    .word   0                   /*  8: Reserved */
-    .word   0                   /*  9: Reserved */
-    .word   0                   /* 10: Reserved */
-    .word   SVCall_Handler      /* 11: SVCall */
-    .word   DebugMon_Handler    /* 12: Debug monitor */
-    .word   0                   /* 13: Reserved */
-    .word   PendSV_Handler      /* 14: PendSV */
-    .word   SysTick_Handler     /* 15: SysTick */
+    .word   _stack_top
+    .word   Reset_Handler
+    .word   NMI_Handler
+    .word   HardFault_Handler
+    .word   MemManage_Handler
+    .word   BusFault_Handler
+    .word   UsageFault_Handler
+    .word   0
+    .word   0
+    .word   0
+    .word   0
+    .word   SVCall_Handler
+    .word   DebugMon_Handler
+    .word   0
+    .word   PendSV_Handler
+    .word   SysTick_Handler
 
-    /* IRQ 0-97 (98 entries covers both F4 82 and F7 98 IRQs). Every
-     * peripheral vector routes to _nvic_dispatch, which recovers the IRQ from
-     * IPSR and calls the handler registered via irq_set_handler. */
-    .rept 98
+    /* 150 covers H7; F4 has 82 and F7 98. Every peripheral vector routes to _nvic_dispatch,
+     * which recovers the IRQ from IPSR and calls the handler registered via irq_set_handler. */
+    .rept 150
     .word   _nvic_dispatch
     .endr
 
     .size __vector_table, . - __vector_table
 
-/* ================================================================
- * Reset handler
- * ================================================================ */
     .section .text, "ax"
     .global Reset_Handler
     .type   Reset_Handler, %function
     .thumb_func
 Reset_Handler:
-
-    /* -- Copy .got from flash (LMA) to RAM (VMA) -- */
     ldr     r0, =_got_start
     ldr     r1, =_got_load
     ldr     r2, =_got_end
-    cmp     r0, r1
-    beq     .Lgot_done
-    b       .Lgot_check
-.Lgot_copy:
-    ldm     r1!, {r3}
-    stm     r0!, {r3}
-.Lgot_check:
-    cmp     r0, r2
-    blo     .Lgot_copy
-.Lgot_done:
+    bl      copy_words
 
-    /* -- Copy .data from flash to RAM -- */
     ldr     r0, =_data_start
     ldr     r1, =_data_load
     ldr     r2, =_data_end
-    b       .Ldata_check
-.Ldata_copy:
-    ldm     r1!, {r3}
-    stm     r0!, {r3}
-.Ldata_check:
-    cmp     r0, r2
-    blo     .Ldata_copy
+    bl      copy_words
 
-    /* -- Copy .dtcm_data from flash to DTCM (F7; empty no-op on F4) -- */
-    ldr     r0, =_dtcm_data_start
-    ldr     r1, =_dtcm_data_load
-    ldr     r2, =_dtcm_data_end
-    b       .Ldtcm_check
-.Ldtcm_copy:
-    ldm     r1!, {r3}
-    stm     r0!, {r3}
-.Ldtcm_check:
-    cmp     r0, r2
-    blo     .Ldtcm_copy
+    ldr     r0, =_tdata_start
+    ldr     r1, =_tdata_load
+    ldr     r2, =_tdata_end
+    bl      copy_words
 
-    /* -- Zero .bss -- */
+    ldr     r0, =_ramfunc_start
+    ldr     r1, =_ramfunc_load
+    ldr     r2, =_ramfunc_end
+    bl      copy_words
+
+    ldr     r0, =_tbss_start
+    ldr     r2, =_tbss_end
+    bl      zero_words
+
     ldr     r0, =_bss_start
     ldr     r2, =_bss_end
-    movs    r3, #0
-    b       .Lbss_check
-.Lbss_zero:
-    stm     r0!, {r3}
-.Lbss_check:
-    cmp     r0, r2
-    blo     .Lbss_zero
+    bl      zero_words
 
-    /* -- Enable FPU (CP10 + CP11 full access) -- */
-    ldr     r0, =0xE000ED88     /* CPACR */
+    /* CP10 + CP11 full access */
+    ldr     r0, =0xE000ED88
     ldr     r1, [r0]
     orr     r1, r1, #(0xF << 20)
     str     r1, [r0]
     dsb
     isb
 
-    /* -- Platform init (clock, GPIO, UART, cache) -- */
     bl      sys_init
 
-    /* -- Run .init_array (D module constructors) -- */
     ldr     r4, =__init_array_start
     ldr     r5, =__init_array_end
     b       .Linit_check
@@ -140,16 +93,36 @@ Reset_Handler:
     mov     r7, r0
     bl      main
 
-    /* If main returns, spin */
 .Lhalt:
     wfi
     b       .Lhalt
 
     .size Reset_Handler, . - Reset_Handler
 
-/* ================================================================
- * Default exception/interrupt handlers (weak, overridable)
- * ================================================================ */
+/* r0 = dst, r1 = src, r2 = dst end; word aligned. Clobbers r0, r1, r3. */
+    .thumb_func
+    .type   copy_words, %function
+copy_words:
+    b       2f
+1:  ldr     r3, [r1], #4
+    str     r3, [r0], #4
+2:  cmp     r0, r2
+    blo     1b
+    bx      lr
+    .size copy_words, . - copy_words
+
+/* r0 = dst, r2 = dst end; word aligned. Clobbers r0, r3. */
+    .thumb_func
+    .type   zero_words, %function
+zero_words:
+    movs    r3, #0
+    b       2f
+1:  str     r3, [r0], #4
+2:  cmp     r0, r2
+    blo     1b
+    bx      lr
+    .size zero_words, . - zero_words
+
     .thumb_func
     .weak   NMI_Handler
     .type   NMI_Handler, %function
@@ -217,22 +190,13 @@ PendSV_Handler:
     .weak   SysTick_Handler
     .type   SysTick_Handler, %function
 SysTick_Handler:
-    b       .
+    bx      lr
 
-    .thumb_func
-    .weak   Default_Handler
-    .type   Default_Handler, %function
-Default_Handler:
-    b       .
-
-/* ================================================================
- * __aeabi_read_tp -- ARM EABI thread pointer for TLS access
- * Single-threaded bare-metal: return fixed pointer to .tdata
- * ================================================================ */
+/* Single-threaded bare metal: one static TLS block. */
     .global __aeabi_read_tp
     .type   __aeabi_read_tp, %function
     .thumb_func
 __aeabi_read_tp:
-    ldr     r0, =_tdata_start
+    ldr     r0, =_tls_base
     bx      lr
     .size   __aeabi_read_tp, . - __aeabi_read_tp

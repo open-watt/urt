@@ -77,20 +77,21 @@ version (ESP32_C2)      enum persist = section(".noinit");      // no RTC memory
 else version (Espressif) enum persist = section(".rtc_noinit");
 else version (Bouffalo) enum persist = section(".hbn_ram");
 else version (RP2350)   enum persist = section(".persist");
+else version (STM32)    enum persist = section(".persist");
 else version (Beken)    enum persist = section(".persist");
 else                    enum persist;
 
 version (Espressif)     enum bool has_persist = true;
 else version (Bouffalo) enum bool has_persist = true;
 else version (RP2350)   enum bool has_persist = true;
+else version (STM32)    enum bool has_persist = true;
 else version (Beken)    enum bool has_persist = true;
 else                    enum bool has_persist = false;
 
 // @fast_data - data in the fastest available RAM (TCM/DTCM/SRAM).
 // Use sparingly: these regions are small and shared with stack/GOT.
 // Only meaningful on platforms with distinct fast/slow data regions.
-version (STM32F7)       enum fast_data = section(".dtcm_data");
-else version (Bouffalo) enum fast_data = section(".sram_data");
+version (Bouffalo)      enum fast_data = section(".sram_data");
 else version (Beken)    enum fast_data = section(".dtcm_data");
 else                    enum fast_data;
 

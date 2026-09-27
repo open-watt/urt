@@ -1,0 +1,15 @@
+/* STM32H743xI: 2 MB flash, 128 KB DTCM, 512 KB AXI SRAM. SRAM1-4 and ITCM are unused. */
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 2M
+    DTCM  (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+    AXI   (rwx) : ORIGIN = 0x24000000, LENGTH = 512K
+}
+
+REGION_ALIAS("CORE_RAM", DTCM);
+REGION_ALIAS("BULK_RAM", AXI);
+
+PROVIDE(_stack_size = 32K);
+
+INCLUDE stm32_common.ld

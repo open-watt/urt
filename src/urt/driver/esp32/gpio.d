@@ -10,9 +10,8 @@
 // actual SOC_GPIO_PIN_COUNT for the active chip variant.
 module urt.driver.esp32.gpio;
 
-import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
 import urt.attribute : critical;
-import urt.driver.gpio : DriveMode, GpioCallbackContext, GpioInterrupt, GpioInterruptCallback, GpioInterruptConfig, GpioInterruptTrigger, Pull;
+import urt.driver.gpio : DriveMode, GpioInterruptConfig, Pull;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
@@ -72,37 +71,24 @@ Result gpio_interrupt_hw_open(uint port, ref const GpioInterruptConfig config)
     return ow_gpio_interrupt_open(port, config.input.line, cast(uint)config.trigger) == 0 ? Result.success : InternalResult.failed;
 }
 
-void gpio_interrupt_hw_set_callback(uint port, GpioInterruptCallback callback)
+void gpio_interrupt_hw_listen(uint port, bool on)
 {
-    if (callback is null)
-    {
-        ow_gpio_interrupt_set_callback(port, null);
-        atomicStore!(MemoryOrder.release)(_interrupt_callbacks[port], 0);
-    }
-    else
-    {
-        atomicStore!(MemoryOrder.release)(_interrupt_callbacks[port], cast(size_t)callback);
-        ow_gpio_interrupt_set_callback(port, &gpio_interrupt);
-    }
+    ow_gpio_interrupt_set_callback(port, on ? &gpio_interrupt : null);
 }
 
-void gpio_interrupt_hw_close(uint port)
+void gpio_interrupt_hw_close(uint port, uint line)
 {
-    gpio_interrupt_hw_set_callback(port, null);
+    ow_gpio_interrupt_set_callback(port, null);
     ow_gpio_interrupt_close(port);
 }
 
 
 private:
 
-shared size_t[num_gpio_interrupts] _interrupt_callbacks;
-
 @critical extern(C) bool gpio_interrupt(uint port) nothrow @nogc
 {
-    if (port >= num_gpio_interrupts)
-        return false;
-    GpioInterruptCallback callback = cast(GpioInterruptCallback)atomicLoad!(MemoryOrder.acquire)(_interrupt_callbacks[port]);
-    return callback !is null ? callback(GpioInterrupt(cast(ubyte)port), GpioCallbackContext.interrupt) : false;
+    import urt.driver.gpio : gpio_interrupt_dispatch;
+    return gpio_interrupt_dispatch(port);
 }
 
 extern(C) alias OwGpioInterruptCallback = bool function(uint port) nothrow @nogc;

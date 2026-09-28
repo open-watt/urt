@@ -37,7 +37,8 @@
 // implicit chip (chip == 0), line is the offset on it.
 module urt.driver.gpio;
 
-import urt.atomic : MemoryOrder, atomicLoad, atomicOp;
+import urt.atomic : MemoryOrder, atomicLoad, atomicOp, atomicStore;
+import urt.attribute : critical;
 import urt.result : InternalResult, Result;
 
 version (Bouffalo)
@@ -158,7 +159,9 @@ void gpio_interrupt_set_callback(ref GpioInterrupt interrupt, GpioInterruptCallb
     else
     {
         assert(interrupt.is_open, "GPIO interrupt is not open");
-        gpio_interrupt_hw_set_callback(interrupt.port, callback);
+        atomicStore!(MemoryOrder.release)(_callbacks[interrupt.port], cast(size_t)callback);
+        static if (__traits(compiles, gpio_interrupt_hw_listen(0u, true)))
+            gpio_interrupt_hw_listen(interrupt.port, callback !is null);
     }
 }
 
@@ -168,11 +171,21 @@ void gpio_interrupt_close(ref GpioInterrupt interrupt)
     {
         if (interrupt.is_open)
         {
-            gpio_interrupt_hw_close(interrupt.port);
+            atomicStore!(MemoryOrder.release)(_callbacks[interrupt.port], 0);
+            gpio_interrupt_hw_close(interrupt.port, _port_lines[interrupt.port].line);
             atomicOp!"&="(_open_ports, ~(1u << interrupt.port));
         }
     }
     interrupt = GpioInterrupt();
+}
+
+// Called by the backend's interrupt for an open port.
+@critical bool gpio_interrupt_dispatch(uint port)
+{
+    if (port >= num_gpio_interrupts)
+        return false;
+    auto callback = cast(GpioInterruptCallback)atomicLoad!(MemoryOrder.acquire)(_callbacks[port]);
+    return callback !is null && callback(GpioInterrupt(cast(ubyte)port), GpioCallbackContext.interrupt);
 }
 
 enum GpioDrainStatus : ubyte
@@ -200,15 +213,6 @@ nothrow @nogc:
 }
 
 
-static if (num_gpio_interrupts != 0)
-{
-    static assert(num_gpio_interrupts <= 32);
-    // A callback may close its port from the ISR while the foreground opens another.
-    private shared uint _open_ports;
-    private __gshared GpioLine[num_gpio_interrupts] _port_lines;
-}
-
-
 unittest
 {
     static assert(is(typeof(num_gpio) == uint));
@@ -228,25 +232,71 @@ unittest
 
     // gpio_count() is callable on every backend (returns 0 on fallback).
     gpio_count();
+
+    // A backend nominates a free input-capable line as `test_gpio_line` for these to run on its hardware.
+    static if (num_gpio_interrupts != 0 && __traits(compiles, test_gpio_line))
+    {
+        GpioInterruptConfig cfg;
+        cfg.input = GpioLine(0, test_gpio_line);
+        cfg.trigger = GpioInterruptTrigger.rising;
+
+        {
+            GpioInterruptConfig other = cfg;
+            other.input.line = (test_gpio_line + 1) % num_gpio;
+
+            GpioInterrupt a, b;
+            assert(gpio_interrupt_open(a, 0, cfg));
+            assert(!gpio_interrupt_open(b, 0, other) && !b.is_open, "a second line opened on an owned port");
+            assert(!gpio_interrupt_open(b, 1, cfg) && !b.is_open, "a second port opened on an owned line");
+            gpio_interrupt_close(a);
+            assert(gpio_interrupt_open(b, 0, cfg), "the port did not come back after close");
+            gpio_interrupt_close(b);
+            assert(atomicLoad(_open_ports) == 0);
+        }
+
+        {
+            import core.volatile : volatileLoad;
+            import urt.driver.irq : irq_global_disable, irq_global_enable, irq_global_set;
+
+            __gshared uint fires;
+            __gshared GpioInterrupt irq;
+            static bool once(GpioInterrupt, GpioCallbackContext)
+            {
+                gpio_interrupt_close(irq);
+                ++fires;
+                return false;
+            }
+
+            fires = 0;
+            gpio_input_init(test_gpio_line);
+            GpioInterruptConfig held = cfg;
+            held.trigger = gpio_input_read(test_gpio_line) ? GpioInterruptTrigger.high : GpioInterruptTrigger.low;
+            immutable prior = irq_global_disable();
+            assert(gpio_interrupt_open(irq, 0, held));
+            gpio_interrupt_set_callback(irq, &once);
+            irq_global_enable();
+            foreach (_; 0 .. 100_000)
+            {
+                if (volatileLoad(&fires))
+                    break;
+            }
+            irq_global_set(prior);
+            assert(volatileLoad(&fires) == 1, "an interrupt on the level the line holds was not delivered once");
+            assert(!irq.is_open && atomicLoad(_open_ports) == 0, "closing from the callback left the port open");
+
+            GpioInterrupt again;
+            assert(gpio_interrupt_open(again, 0, cfg), "closing from the callback left the line owned");
+            gpio_interrupt_close(again);
+        }
+    }
 }
 
 
-// A backend nominates a free input-capable line as `test_gpio_line` for this to run on its hardware.
-static if (num_gpio_interrupts != 0 && __traits(compiles, test_gpio_line))
-unittest // an interrupt port and a line each have one owner at a time
-{
-    GpioInterruptConfig cfg;
-    cfg.input = GpioLine(0, test_gpio_line);
-    cfg.trigger = GpioInterruptTrigger.rising;
-    GpioInterruptConfig other = cfg;
-    other.input.line = (test_gpio_line + 1) % num_gpio;
+private:
 
-    GpioInterrupt a, b;
-    assert(gpio_interrupt_open(a, 0, cfg));
-    assert(!gpio_interrupt_open(b, 0, other) && !b.is_open, "a second line opened on an owned port");
-    assert(!gpio_interrupt_open(b, 1, cfg) && !b.is_open, "a second port opened on an owned line");
-    gpio_interrupt_close(a);
-    assert(gpio_interrupt_open(b, 0, cfg), "the port did not come back after close");
-    gpio_interrupt_close(b);
-    assert(atomicLoad(_open_ports) == 0);
-}
+static assert(num_gpio_interrupts <= 32);
+
+// A callback may close its port from the ISR while the foreground opens another.
+shared uint _open_ports;
+__gshared GpioLine[num_gpio_interrupts] _port_lines;
+shared size_t[num_gpio_interrupts] _callbacks;

@@ -2,8 +2,7 @@
 // line takes its group from the peripheral; the groups urt itself runs on are refused.
 module urt.driver.mt7621.gpio;
 
-import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
-import urt.driver.gpio : DriveMode, GpioCallbackContext, GpioInterrupt, GpioInterruptCallback, GpioInterruptConfig, GpioInterruptTrigger, Pull;
+import urt.driver.gpio : DriveMode, GpioInterruptConfig, GpioInterruptTrigger, Pull, gpio_interrupt_dispatch;
 import urt.driver.irq : irq_handler_set;
 import urt.driver.mt7621 : mmio_read, mmio_write, sysctl_base;
 import urt.driver.mt7621.irq : irq_disable, irq_enable, irq_set_enable;
@@ -65,22 +64,12 @@ Result gpio_interrupt_hw_open(uint port, ref const GpioInterruptConfig config)
 {
     if (config.input.chip != 0 || config.input.line >= num_gpio)
         return InternalResult.unsupported;
-    Result result = line_irq_open(config.input.line, config.trigger, cast(ubyte)port);
-    if (result)
-        _port_line[port] = cast(ubyte)config.input.line;
-    return result;
+    return line_irq_open(config.input.line, config.trigger, cast(ubyte)port);
 }
 
-void gpio_interrupt_hw_set_callback(uint port, GpioInterruptCallback callback)
+void gpio_interrupt_hw_close(uint port, uint line)
 {
-    atomicStore!(MemoryOrder.release)(_callbacks[port], cast(size_t)callback);
-}
-
-void gpio_interrupt_hw_close(uint port)
-{
-    gpio_interrupt_hw_set_callback(port, null);
-    if (_port_line[port] != no_line)
-        line_irq_close(_port_line[port]);
+    line_irq_close(line);
 }
 
 // Owners below link_owner are GpioInterrupt ports; link_owner | slot is an event link.
@@ -116,8 +105,6 @@ void line_irq_close(uint line)
     foreach (r; triggers)
         reg_set(r, line, false);
     mmio_write(bank(stat, line), bit(line));
-    if (_owner[line] < link_owner)
-        _port_line[_owner[line]] = no_line;
     _owner[line] = no_owner;
     if (prior)
         irq_enable();
@@ -140,7 +127,6 @@ enum uint llvl  = 0x80;
 enum uint stat  = 0x90;
 
 enum ubyte no_owner = 0xFF;
-enum ubyte no_line = 0xFF;
 
 enum uint sysc_gpio_mode = 0x60;
 
@@ -167,8 +153,6 @@ static immutable Group[12] groups = [
 ];
 
 __gshared ubyte[num_gpio] _owner = no_owner;
-__gshared ubyte[num_gpio_interrupts] _port_line = no_line;
-shared size_t[num_gpio_interrupts] _callbacks;
 __gshared bool _irq_hooked;
 
 uint bank(uint reg, uint pin)
@@ -219,49 +203,8 @@ void gpio_irq_handler(uint)
                 link_fire(owner & ~link_owner);
             }
             else
-            {
-                auto cb = cast(GpioInterruptCallback)atomicLoad!(MemoryOrder.acquire)(_callbacks[owner]);
-                if (cb !is null)
-                    cb(GpioInterrupt(owner), GpioCallbackContext.interrupt);
-            }
+                gpio_interrupt_dispatch(owner);
         }
     }
 }
 
-
-unittest
-{
-    import core.volatile : volatileLoad;
-    import urt.driver.gpio : GpioLine, gpio_interrupt_close, gpio_interrupt_open, gpio_interrupt_set_callback, is_open;
-    import urt.driver.irq : irq_global_disable, irq_global_enable, irq_global_set;
-
-    // GPIO0 has no pin group, so it is a plain line on every board; interrupting on the level it holds must fire.
-    __gshared uint fires;
-    __gshared GpioInterrupt irq;
-    fires = 0;
-    static bool once(GpioInterrupt, GpioCallbackContext) @nogc nothrow
-    {
-        gpio_interrupt_close(irq);
-        ++fires;
-        return false;
-    }
-
-    immutable was_output = (mmio_read(bank(ctrl, 0)) & bit(0)) != 0;
-    gpio_input_init(0);
-    GpioInterruptConfig cfg;
-    cfg.input = GpioLine(0, 0);
-    cfg.trigger = gpio_input_read(0) ? GpioInterruptTrigger.high : GpioInterruptTrigger.low;
-    immutable prior = irq_global_disable();
-    assert(gpio_interrupt_open(irq, 0, cfg));
-    gpio_interrupt_set_callback(irq, &once);
-    irq_global_enable();
-    foreach (i; 0 .. 100_000)
-    {
-        if (volatileLoad(&fires))
-            break;
-    }
-    irq_global_set(prior);
-    reg_set(ctrl, 0, was_output);
-    assert(volatileLoad(&fires) == 1, "GPIO interrupt not delivered through the GIC");
-    assert(!irq.is_open && _port_line[0] == no_line && _owner[0] == no_owner, "closing from the callback left the port or line owned");
-}

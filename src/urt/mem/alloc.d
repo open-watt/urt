@@ -1,7 +1,7 @@
 module urt.mem.alloc;
 
 import urt.mem;
-import urt.util : is_power_of_2;
+import urt.util : is_aligned, is_power_of_2;
 
 version (Tiny) {} else
     version = MemoryThreats;
@@ -496,6 +496,25 @@ unittest
     mem = realloc(mem, 64);
     assert(mem !is null);
     assert((cast(ubyte*)mem.ptr)[0] == 0xAB);
+    free(mem);
+
+    // realloc keeps the requested alignment, whether the block moves or shrinks in place
+    mem = alloc(64, 64);
+    (cast(ubyte[])mem)[] = 0x5A;
+    void[] neighbour = alloc(64);
+    mem = realloc(mem, 2048, 64);
+    assert(mem.ptr && is_aligned(mem.ptr, 64), "a moving realloc lost the requested alignment");
+    foreach (b; (cast(ubyte[])mem)[0 .. 64])
+        assert(b == 0x5A);
+    free(mem);
+    free(neighbour);
+
+    mem = alloc(64, 8);
+    (cast(ubyte[])mem)[] = 0xA5;
+    mem = realloc(mem, 32, 64);
+    assert(mem.ptr && is_aligned(mem.ptr, 64), "a shrinking realloc kept a block short of the requested alignment");
+    foreach (b; cast(ubyte[])mem)
+        assert(b == 0xA5);
     free(mem);
 
     // expand

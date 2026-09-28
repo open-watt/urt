@@ -117,10 +117,15 @@ SECTIONS
     /* @persist: never zeroed or loaded; prior contents survive a reset. */
     .persist (NOLOAD) : ALIGN(8)
     {
+        _persist_start = .;
         *(.persist .persist.*)
         . = ALIGN(8);
         _persist_end = .;
     } > SRAM
+
+    /* The reset record lives in watchdog SCRATCH0-3, which survive every reset but power-on; the
+     * boot ROM's reboot parameters use SCRATCH4-7. */
+    __reset_record = 0x400d800c;
 
     _stack_size = 32K;
 

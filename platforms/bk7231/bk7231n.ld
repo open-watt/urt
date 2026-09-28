@@ -181,6 +181,7 @@ SECTIONS
     /* @persist: never zeroed or loaded; prior contents survive a reset. */
     .persist (NOLOAD) : ALIGN(8)
     {
+        _persist_start = .;
         *(.persist .persist.*)
         . = ALIGN(8);
         _persist_end = .;
@@ -199,7 +200,9 @@ SECTIONS
     ASSERT(_fast_heap_end >= _fast_heap_start, "DTCM data and stacks overlap")
 
     __heap_start = _persist_end;
-    __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM);
+    /* The reset record takes the last 16 bytes of SRAM, where no build moves it. */
+    __reset_record = ORIGIN(SRAM) + LENGTH(SRAM) - 16;
+    __heap_end   = __reset_record;
     ASSERT(__heap_end - __heap_start >= 32K, "static data has squeezed the heap below 32K")
     _stack_low = _stack_bottom;
     __StackTop = _stack_top;

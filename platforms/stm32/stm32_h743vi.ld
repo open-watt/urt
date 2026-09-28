@@ -17,4 +17,7 @@ __dma_heap_end   = ORIGIN(D2SRAM) + LENGTH(D2SRAM);
 
 PROVIDE(_stack_size = 32K);
 
+/* The reset record lives in backup SRAM, where neither a build nor the ROM bootloader moves it. */
+__reset_record = 0x38800000;
+
 INCLUDE stm32_common.ld

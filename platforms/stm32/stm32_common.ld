@@ -117,6 +117,7 @@ SECTIONS
     /* @persist: never zeroed or loaded; prior contents survive a reset. */
     .persist (NOLOAD) : ALIGN(8)
     {
+        _persist_start = .;
         *(.persist .persist.*)
         . = ALIGN(8);
         _persist_end = .;

@@ -8,13 +8,38 @@ nothrow @nogc:
 // A `running` mark left in place means the run ended without reaching a handler: a watchdog or hang.
 enum ResetMark : ubyte
 {
-    none,           // no valid record: RAM was lost, or the platform has no retained memory
+    none,           // no valid record: retained memory was lost, or the platform has none
     running,
     deliberate,
     crashed,
+    updated,        // the record was left by another build: a firmware update
 }
 
 enum bool has_reset_record = has_persist;
+
+// Runs before anything reads @persist: another build's record reads `updated`, its floating @persist is zeroed.
+void reset_record_begin()
+{
+    static if (has_reset_record)
+    {
+        import core.volatile : volatileLoad, volatileStore;
+        import urt.build : build_id;
+        import urt.hash : fnv1a;
+
+        enum uint build = fnv1a(cast(const(ubyte)[])build_id);
+        immutable uint layout = persist_layout();
+        ResetRecord* r = record();
+        immutable uint old_build = volatileLoad(&r.build);
+        if (old_build == build && volatileLoad(&r.layout) == layout)
+            return;
+
+        zero_floating_persist(r);
+        if (r.valid && old_build != build)
+            r.set(ResetMark.updated, [0, 0]);
+        volatileStore(&r.build, build);
+        volatileStore(&r.layout, layout);
+    }
+}
 
 // The previous run's mark. The first call stamps this run as running; later ones repeat the
 // answer, so boot order between callers does not matter.
@@ -25,11 +50,13 @@ ResetMark reset_record_take()
         if (!_taken)
         {
             _taken = true;
+            reset_record_begin();
             ResetRecord* r = record();
-            _mark = r.valid ? cast(ResetMark)r.mark : ResetMark.none;
+            _mark = r.valid ? r.mark : ResetMark.none;
             if (_mark == ResetMark.none)
-                r.scratch[] = 0;
-            r.set(ResetMark.running);
+                r.set(ResetMark.running, [0, 0]);
+            else
+                r.set(ResetMark.running);
         }
         return _mark;
     }
@@ -90,13 +117,24 @@ noreturn system_reset()
     {}
 }
 
-// Two bytes that ride with the record: kept while RAM is kept, zeroed when it was lost.
-ubyte[] reset_record_scratch()
+// Two bytes that ride with the record, zeroed when retained memory was lost or another build took over.
+ubyte[2] reset_record_scratch()
 {
     static if (has_reset_record)
-        return record().scratch[];
+        return RecordWord(record()).scratch;
     else
-        return null;
+        return [0, 0];
+}
+
+void reset_record_scratch(ubyte[2] value)
+{
+    static if (has_reset_record)
+    {
+        ResetRecord* r = record();
+        RecordWord w = RecordWord(r);
+        w.scratch = value;
+        w.store(r);
+    }
 }
 
 
@@ -107,25 +145,78 @@ static if (has_reset_record)
     __gshared bool _taken;
     __gshared ResetMark _mark;
 
+    // Every field is a whole word, and every access a whole-word volatile load or store: the record
+    // may live in ECC RAM that drops a partial write at reset, or in peripheral registers.
     struct ResetRecord
     {
     nothrow @nogc:
         enum uint magic_value = 0x5453_5257; // "WRST"
 
         uint magic;
-        ubyte mark;
-        ubyte check;
-        ubyte[2] scratch;
+        uint word;          // RecordWord: mark, check, scratch
+        uint build;         // fnv1a of the build_id that last took the record
+        uint layout;        // persist_layout() of that build
 
-        bool valid() const => magic == magic_value && check == cast(ubyte)~mark && mark <= ResetMark.crashed;
+        bool valid() const
+        {
+            import core.volatile : volatileLoad;
+            RecordWord w = RecordWord(&this);
+            return volatileLoad(cast(uint*)&magic) == magic_value && w.check == cast(ubyte)~w.mark && w.mark <= ResetMark.updated;
+        }
+
+        ResetMark mark() const => cast(ResetMark)RecordWord(&this).mark;
 
         void set(ResetMark m)
         {
-            mark = m;
-            check = cast(ubyte)~m;
-            magic = magic_value;
+            RecordWord w = RecordWord(&this);
+            w.mark = m;
+            w.check = cast(ubyte)~m;
+            w.store(&this);
+            store_magic();
+        }
+
+        void set(ResetMark m, ubyte[2] scratch)
+        {
+            RecordWord w;
+            w.mark = m;
+            w.check = cast(ubyte)~m;
+            w.scratch = scratch;
+            w.store(&this);
+            store_magic();
+        }
+
+        private void store_magic()
+        {
+            import core.volatile : volatileStore;
+            volatileStore(&magic, magic_value);
         }
     }
+
+    union RecordWord
+    {
+    nothrow @nogc:
+        struct
+        {
+            ubyte mark;
+            ubyte check;
+            ubyte[2] scratch;
+        }
+        uint word;
+
+        this(const(ResetRecord)* r)
+        {
+            import core.volatile : volatileLoad;
+            word = volatileLoad(cast(uint*)&r.word);
+        }
+
+        void store(ResetRecord* r) const
+        {
+            import core.volatile : volatileStore;
+            volatileStore(&r.word, word);
+        }
+    }
+
+    static assert(ResetRecord.sizeof == 16);
 
     version (Bouffalo)
     {
@@ -136,9 +227,57 @@ static if (has_reset_record)
         else               enum size_t record_address = hbn_top - ResetRecord.sizeof;
         ResetRecord* record() => cast(ResetRecord*)record_address;
     }
-    else
+    else version (Espressif)
     {
+        // IDF lays out RTC memory, so the record floats with the image and the stamps guard it.
         @persist @used __gshared ResetRecord _record;
         ResetRecord* record() => &_record;
+    }
+    else
+    {
+        // The linker script pins it where every build agrees.
+        extern(C) extern __gshared ResetRecord __reset_record;
+        ResetRecord* record() => &__reset_record;
+    }
+
+    version (ESP32_C2)
+        extern(C) extern __gshared ubyte _noinit_start, _noinit_end;
+    else version (Espressif)
+        extern(C) extern __gshared ubyte _rtc_noinit_start, _rtc_noinit_end;
+    else version (Bouffalo) {}
+    else
+        extern(C) extern __gshared ubyte _persist_start, _persist_end;
+
+    ubyte[] floating_persist()
+    {
+        version (ESP32_C2)
+            return (&_noinit_start)[0 .. &_noinit_end - &_noinit_start];
+        else version (Espressif)
+            return (&_rtc_noinit_start)[0 .. &_rtc_noinit_end - &_rtc_noinit_start];
+        else version (Bouffalo)
+            return null;    // the BL808 cores share HBN RAM, so neither may zero it; hbn.d validates its own
+        else
+            return (&_persist_start)[0 .. &_persist_end - &_persist_start];
+    }
+
+    uint persist_layout()
+    {
+        import urt.hash : fnv1a;
+        ubyte[] p = floating_persist();
+        size_t[2] bounds = [cast(size_t)p.ptr, p.length];
+        return fnv1a(cast(const(ubyte)[])bounds[]);
+    }
+
+    void zero_floating_persist(const(ResetRecord)* keep)
+    {
+        ubyte[] p = floating_persist();
+        size_t at = cast(const(ubyte)*)keep - p.ptr;
+        if (at < p.length)
+        {
+            p[0 .. at] = 0;
+            p[at + ResetRecord.sizeof .. $] = 0;
+        }
+        else
+            p[] = 0;
     }
 }

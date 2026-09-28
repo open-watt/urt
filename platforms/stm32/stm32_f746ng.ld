@@ -12,4 +12,7 @@ REGION_ALIAS("BULK_RAM", SRAM);
 
 PROVIDE(_stack_size = 16K);
 
+/* The reset record lives in backup SRAM, where neither a build nor the ROM bootloader moves it. */
+__reset_record = 0x40024000;
+
 INCLUDE stm32_common.ld

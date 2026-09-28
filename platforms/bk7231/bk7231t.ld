@@ -179,6 +179,7 @@ SECTIONS
     /* @persist: never zeroed or loaded; prior contents survive a reset. */
     .persist (NOLOAD) : ALIGN(8)
     {
+        _persist_start = .;
         *(.persist .persist.*)
         . = ALIGN(8);
         _persist_end = .;
@@ -188,7 +189,9 @@ SECTIONS
     _abt_stack_size   = 1K;
     _und_stack_size   = 1K;
 
-    _stack_top    = ORIGIN(SRAM) + LENGTH(SRAM);
+    /* The reset record takes the last 16 bytes of SRAM, where no build moves it. */
+    __reset_record = ORIGIN(SRAM) + LENGTH(SRAM) - 16;
+    _stack_top    = __reset_record;
     _stack_bottom = _stack_top - _stack_size;
     _abt_stack_start = _stack_bottom - _abt_stack_size;
     _und_stack_start = _abt_stack_start - _und_stack_size;

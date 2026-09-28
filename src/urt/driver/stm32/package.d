@@ -93,7 +93,10 @@ noreturn reboot_to_bootloader()
 // constants and @persist only. A broken image can always be recovered into the ROM from here.
 extern(C) void sys_early()
 {
-    import urt.driver.reset : ResetMark, reset_record_mark, system_reset;
+    import urt.driver.reset : ResetMark, reset_record_begin, reset_record_mark, system_reset;
+
+    backup_sram_enable();
+    reset_record_begin();
 
     // DFU's leave request jumps here without a reset, leaving the ROM's USB core and clocks live.
     if (reg_read(rcc_base + rcc_otgfs_enr) & (1u << rcc_otgfs_bit))
@@ -169,6 +172,24 @@ bool dfu_button_held()
     reg_clear(rcc_base + rcc_gpiorstr, port_bit);
     reg_clear(rcc_base + rcc_gpioenr, port_bit);
     return held;
+}
+
+// The reset record lives in backup SRAM: its clock, and write access to the backup domain.
+void backup_sram_enable()
+{
+    version (STM32H7)
+    {
+        enum ulong pwr_cr1 = 0x5802_4800;
+        reg_set(pwr_cr1, 1 << 8);                   // DBP
+        clock_enable(rcc_gpioenr, 28);              // AHB4ENR.BKPRAMEN
+    }
+    else
+    {
+        enum ulong pwr_cr = 0x4000_7000;
+        clock_enable(rcc_apb1enr, 28);              // PWR
+        reg_set(pwr_cr, 1 << 8);                    // DBP
+        clock_enable(rcc_gpioenr, 18);              // AHB1ENR.BKPSRAMEN
+    }
 }
 
 noreturn enter_system_bootloader()
@@ -353,6 +374,10 @@ version (STM32F4) {} else
             reg_write(mpu_rnr, 0);
             reg_write(mpu_rbar, 0x3000_0000);
             reg_write(mpu_rasr, (1 << 28) | (3 << 24) | (1 << 19) | (1 << 18) | ((19 - 1) << 1) | 1);
+            // Backup SRAM holds the reset record: a write-back line would still be dirty at reset.
+            reg_write(mpu_rnr, 1);
+            reg_write(mpu_rbar, 0x3880_0000);
+            reg_write(mpu_rasr, (1 << 28) | (3 << 24) | (1 << 19) | (1 << 18) | ((12 - 1) << 1) | 1);
             reg_write(mpu_ctrl, (1 << 2) | 1);          // PRIVDEFENA, ENABLE
             asm @nogc nothrow { "dsb sy"; "isb"; }
         }

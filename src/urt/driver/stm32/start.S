@@ -42,6 +42,11 @@ Reset_Handler:
     /* Masked until main: the ROM bootloader can jump here with its interrupts still armed. */
     cpsid   i
 
+    ldr     r0, =_stack_low
+    mov     r2, sp
+    ldr     r3, =0xa5a5a5a5
+    bl      fill_words
+
     bl      sys_early
 
     ldr     r0, =_got_start
@@ -117,16 +122,20 @@ copy_words:
     bx      lr
     .size copy_words, . - copy_words
 
-/* r0 = dst, r2 = dst end; word aligned. Clobbers r0, r3. */
+/* r0 = dst, r2 = dst end, r3 = fill word (fill_words only); word aligned. Clobbers r0, r3. */
     .thumb_func
     .type   zero_words, %function
 zero_words:
     movs    r3, #0
+    .thumb_func
+    .type   fill_words, %function
+fill_words:
     b       2f
 1:  str     r3, [r0], #4
 2:  cmp     r0, r2
     blo     1b
     bx      lr
+    .size fill_words, . - fill_words
     .size zero_words, . - zero_words
 
     .thumb_func

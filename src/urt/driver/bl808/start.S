@@ -126,6 +126,15 @@ _start:
     j       .Lcopy_tdata
 .Ltdata_done:
 
+    la      t0, _stack_low
+    li      t1, 0xa5a5a5a5
+.Lstack_paint:
+    bgeu    t0, sp, .Lstack_done
+    sw      t1, 0(t0)
+    addi    t0, t0, 4
+    j       .Lstack_paint
+.Lstack_done:
+
     /* Zero .tbss in SRAM (TLS zero-initialized data) */
     la      t0, _tbss_start
     la      t1, _tbss_end

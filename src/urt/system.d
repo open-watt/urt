@@ -30,6 +30,7 @@ version (Espressif)
         size_t heap_caps_get_free_size(uint caps);
         size_t heap_caps_get_minimum_free_size(uint caps);
         size_t heap_caps_get_largest_free_block(uint caps);
+        void ow_main_stack_stats(size_t* size, size_t* peak);
     }
 }
 
@@ -88,6 +89,8 @@ struct SystemInfo
     string processor;
     string build;
     MemoryPool[MaxMemoryPools] pools;  // unused slots have total == 0
+    ulong stack_size;   // main stack capacity (0 if unknown)
+    ulong stack_peak;   // deepest main stack use since boot
     Duration uptime;
 }
 
@@ -198,6 +201,42 @@ SystemInfo get_sysinfo()
         }
     }
 
+    version (Windows)
+    {
+        version (X86_64) alias read_tib = __readgsqword;
+        else alias read_tib = __readfsdword;
+
+        const size_t high = cast(size_t)read_tib(NT_TIB.StackBase.offsetof);
+        const size_t limit = cast(size_t)read_tib(NT_TIB.StackLimit.offsetof);
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery(cast(void*)limit, &mbi, mbi.sizeof))
+            r.stack_size = high - cast(size_t)mbi.AllocationBase;
+        r.stack_peak = stack_depth(limit, high, 0);
+    }
+    else version (linux)
+    {
+        import core.sys.posix.sys.resource : getrlimit, rlimit, RLIMIT_STACK, RLIM_INFINITY;
+
+        rlimit rl = void;
+        if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+            r.stack_size = rl.rlim_cur;
+        size_t low, high;
+        if (stack_mapping(low, high))
+            r.stack_peak = stack_depth(low, high, 0);
+    }
+    else version (Espressif)
+    {
+        size_t size, peak;
+        ow_main_stack_stats(&size, &peak);
+        r.stack_size = size;
+        r.stack_peak = peak;
+    }
+    else version (BareMetal)
+    {
+        r.stack_size = cast(size_t)&_stack_top - cast(size_t)&_stack_low;
+        r.stack_peak = stack_depth(cast(size_t)&_stack_low, cast(size_t)&_stack_top, stack_paint);
+    }
+
     static if (!hosted)
         r.uptime = get_app_time();
 
@@ -282,6 +321,12 @@ unittest
         writelnf("  {0}: {1}kb used / {2}kb total (peak {3}kb)",
             p.name, p.used / 1024, p.total / 1024, p.peak_used / 1024);
     }
+    writelnf("  stack: {0} / {1}", info.stack_peak, info.stack_size);
+
+    version (Windows)
+        assert(info.stack_peak > 0 && info.stack_peak <= info.stack_size);
+    else version (linux)
+        assert(info.stack_peak > 0 && (info.stack_size == 0 || info.stack_peak <= info.stack_size));
 }
 
 
@@ -294,6 +339,22 @@ enum cpu_counter_buckets = 16;
 
 __gshared @fast_data uint[16] g_cpu_time;
 __gshared @fast_data ubyte g_bucket = 0;
+
+size_t stack_depth(size_t low, size_t high, uint untouched)
+{
+    const(uint)* p = cast(const(uint)*)low;
+    while (cast(size_t)p < high && *p == untouched)
+        ++p;
+    return high - cast(size_t)p;
+}
+
+version (BareMetal)
+{
+    enum uint stack_paint = 0xa5a5a5a5; // start.S paints [_stack_low, sp) with this at reset
+
+    extern(C) extern __gshared ubyte _stack_low;
+    extern(C) extern __gshared ubyte _stack_top;
+}
 
 version (Bouffalo)
 {
@@ -379,11 +440,54 @@ version (linux)
         }
         return 0;
     }
+
+    bool stack_mapping(out size_t low, out size_t high) nothrow @nogc
+    {
+        import urt.conv : parse_uint;
+        import urt.file : File, open, read, close, FileOpenMode;
+        import urt.mem : memmove;
+        import urt.string : endsWith;
+
+        File f;
+        if (!f.open("/proc/self/maps", FileOpenMode.ReadExisting))
+            return false;
+        scope (exit) f.close();
+
+        char[4096] buf = void;
+        size_t len = 0;
+        while (true)
+        {
+            size_t n;
+            if (!f.read(buf[len .. $], n) || n == 0)
+                return false;
+            len += n;
+
+            size_t line = 0;
+            foreach (i; 0 .. len)
+            {
+                if (buf[i] != '\n')
+                    continue;
+                const(char)[] text = buf[line .. i];
+                line = i + 1;
+                if (!text.endsWith("[stack]"))
+                    continue;
+                size_t taken;
+                low = cast(size_t)text.parse_uint(&taken, 16);
+                high = cast(size_t)text[taken + 1 .. $].parse_uint(null, 16);
+                return true;
+            }
+            if (line == 0 && len == buf.length)
+                return false;
+            memmove(buf.ptr, buf.ptr + line, len - line);
+            len -= line;
+        }
+    }
 }
 
 version (Windows)
 {
-    import urt.internal.sys.windows.winbase : GlobalMemoryStatusEx, GetCurrentProcess, MEMORYSTATUSEX;
+    import urt.internal.sys.windows.winbase : GlobalMemoryStatusEx, GetCurrentProcess, MEMORYSTATUSEX, VirtualQuery;
+    import urt.internal.sys.windows.winnt : MEMORY_BASIC_INFORMATION;
 
     struct PROCESS_MEMORY_COUNTERS
     {

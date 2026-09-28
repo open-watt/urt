@@ -9,6 +9,7 @@
 #include "esp_partition.h"
 #endif
 #include "esp_heap_caps.h"
+#include "esp_task.h"
 #include "nvs_flash.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -18,6 +19,15 @@
 #endif
 
 extern int main(int argc, char **argv);
+
+static TaskHandle_t main_task;
+
+void ow_main_stack_stats(size_t *size, size_t *peak)
+{
+    // IDF's StackType_t is a byte, so the high-water mark is in bytes.
+    *size = ESP_TASK_MAIN_STACK;
+    *peak = ESP_TASK_MAIN_STACK - uxTaskGetStackHighWaterMark(main_task);
+}
 
 void ow_watchdog_feed(void)
 {
@@ -60,6 +70,7 @@ static void ow_heap_alloc_failed(size_t size, uint32_t caps, const char *functio
 
 void app_main(void)
 {
+    main_task = xTaskGetCurrentTaskHandle();
     heap_caps_register_failed_alloc_callback(&ow_heap_alloc_failed);
 
     // Initialize NVS -- required by WiFi for calibration data storage.

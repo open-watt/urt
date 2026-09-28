@@ -108,6 +108,14 @@ _start:
     la      $sp, _stack_top
     la      $gp, _gp
 
+    la      $t0, _stack_low
+    li      $t2, 0xa5a5a5a5
+1:  beq     $t0, $sp, 2f
+    nop
+    sw      $t2, 0($t0)
+    b       1b
+    addiu   $t0, $t0, 4
+2:
     la      $t0, _bss_start
     la      $t1, _bss_end
 1:  beq     $t0, $t1, 2f

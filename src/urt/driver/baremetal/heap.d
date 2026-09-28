@@ -127,6 +127,12 @@ extern(C) void* malloc_internal(size_t size) => malloc(size);
 pragma(mangle, "__malloc_free")
 extern(C) void free_internal(void* ptr) { free(ptr); }
 
+// newlib's own stdio and reent code allocate through these, which would otherwise bring in its sbrk heap.
+extern(C) void* _malloc_r(void*, size_t size) => malloc(size);
+extern(C) void _free_r(void*, void* ptr) { free(ptr); }
+extern(C) void* _calloc_r(void*, size_t count, size_t size) => calloc(count, size);
+extern(C) void* _realloc_r(void*, void* ptr, size_t size) => realloc(ptr, size);
+
 
 private:
 

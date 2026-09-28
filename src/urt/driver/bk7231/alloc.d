@@ -9,7 +9,7 @@ version (BK7231N)
     public import urt.driver.baremetal.heap;
     import urt.driver.bk7231.heap : sram;
 
-    // The vendor SDK allocates through FreeRTOS and newlib's reentrant entry points.
+    // The vendor SDK allocates through FreeRTOS's entry points.
     extern(C) void* pvPortMalloc(size_t size) => malloc(size ? size : uint.sizeof);
     extern(C) void vPortFree(void* ptr) { free(ptr); }
     extern(C) void* pvPortRealloc(void* ptr, size_t size) => realloc(ptr, size);
@@ -27,11 +27,6 @@ version (BK7231N)
         query_pool_stats(sram, s);
         return s.total - s.peak_used;
     }
-
-    extern(C) void* _malloc_r(void*, size_t size) => malloc(size);
-    extern(C) void _free_r(void*, void* ptr) { free(ptr); }
-    extern(C) void* _calloc_r(void*, size_t count, size_t size) => calloc(count, size);
-    extern(C) void* _realloc_r(void*, void* ptr, size_t size) => realloc(ptr, size);
 }
 else
 {

@@ -25,6 +25,8 @@ __gshared uint cpu_hz;
 
 extern(C) void sys_init()
 {
+    import urt.driver.mt7621.heap : dma_window_init;
+    dma_window_init();
     cpu_hz = cpu_rate();
     import urt.driver.mt7621.watchdog : wdt_stop;
     wdt_stop();

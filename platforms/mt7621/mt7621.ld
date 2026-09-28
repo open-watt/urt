@@ -77,15 +77,21 @@ SECTIONS
     } > RAM
 
     _stack_size = 64K;
+    _dma_size = 4M;
 
     /* __ram_size comes from the board (--defsym); RAM above is only the KSEG0 ceiling. The 4K page
-       below the stack is write-watched, so an overflow faults instead of reaching the heap. */
+       below the stack is write-watched, so an overflow faults instead of reaching the dma window. */
     _stack_top = 0x80000000 + __ram_size;
     _stack_low = _stack_top - _stack_size;
     _stack_guard = _stack_low - 4K;
 
+    /* The dma window is exported only by its KSEG1 address; see urt.driver.mt7621.heap. */
+    _dma_low = _stack_guard - _dma_size;
+    __dma_heap_start = _dma_low + 0x20000000;
+    __dma_heap_end   = _stack_guard + 0x20000000;
+
     __heap_start = ALIGN(_bss_end, 16);
-    __heap_end   = _stack_guard;
+    __heap_end   = _dma_low;
     ASSERT(__heap_end > __heap_start, "image does not fit the board's RAM")
 
     /DISCARD/ :

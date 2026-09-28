@@ -26,6 +26,9 @@
 module urt.driver.bl808.timer;
 
 import core.volatile;
+import urt.driver.riscv.clint : mtimecmp_write;
+
+public import urt.driver.riscv.csr : mcycle_read, mtime_read;
 
 @nogc nothrow:
 
@@ -33,9 +36,8 @@ import core.volatile;
 // Hardware addresses
 // ================================================================
 
-private enum ulong CORET_BASE    = 0xE400_0000;
-private enum ulong MTIMECMPL0    = CORET_BASE + 0x4000;
-private enum ulong MTIMECMPH0    = CORET_BASE + 0x4004;
+// T-Head C906 CLINT: mtimecmp for hart 0 at the standard offset.
+private enum size_t mtimecmp = 0xE400_4000;
 
 private enum ulong HBN_BASE      = 0x2000_F000;
 private enum ulong HBN_CTL       = HBN_BASE + 0x00;
@@ -57,42 +59,12 @@ enum bool has_mcycle = true;
 enum bool has_timer_compare = true;
 
 // ================================================================
-// Time reading
-// ================================================================
-
-/// Read the monotonic mtime counter via rdtime.
-/// Does not stop during WFI, unaffected by clock scaling.
-ulong mtime_read()
-{
-    ulong t;
-    asm @nogc nothrow { "rdtime %0" : "=r" (t); }
-    return t;
-}
-
-/// Read CPU cycle counter (for profiling, NOT timekeeping).
-/// Stops during WFI, rate changes with clock scaling.
-ulong mcycle_read()
-{
-    ulong c;
-    asm @nogc nothrow { "rdcycle %0" : "=r" (c); }
-    return c;
-}
-
-// ================================================================
 // Compare (mtimecmp)
 // ================================================================
 
-// The compare is level-sensitive, so a deadline already passed raises at once.
 void timer_compare_arm(ulong deadline)
 {
-    auto lo = cast(uint*)MTIMECMPL0;
-    auto hi = cast(uint*)MTIMECMPH0;
-
-    // Write 0xFFFFFFFF to high first to prevent spurious fire
-    volatileStore(hi, 0xFFFF_FFFF);
-    volatileStore(lo, cast(uint)(deadline & 0xFFFF_FFFF));
-    volatileStore(hi, cast(uint)(deadline >> 32));
-
+    mtimecmp_write(mtimecmp, deadline);
     enum ulong mie_mtie = 1 << 7;
     asm nothrow @nogc { "csrs mie, %0" :: "r" (mie_mtie); }
 }

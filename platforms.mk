@@ -462,6 +462,11 @@ endif
 ifneq ($(filter cortex-m%,$(PROCESSOR)),)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/cortex_m" -type f -name '*.d')
 endif
+ifneq ($(filter riscv riscv64,$(ARCH)),)
+  ifeq ($(OS),baremetal)
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/riscv" -type f -name '*.d')
+  endif
+endif
 ifeq ($(PLATFORM),rp2350)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/rp2350" -type f -name '*.d')
 endif

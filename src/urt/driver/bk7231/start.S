@@ -48,6 +48,16 @@ Reset_Handler:
     bl      bk_init_mode_stacks
     ldr     sp, =_stack_top
 
+    ldr     r0, =_stack_low
+    mov     r2, sp
+    ldr     r3, =0xa5a5a5a5
+    b       .Lstack_check
+.Lstack_paint:
+    str     r3, [r0], #4
+.Lstack_check:
+    cmp     r0, r2
+    blo     .Lstack_paint
+
     ldr     r0, =_got_start
     ldr     r1, =_got_load
     ldr     r2, =_got_end

@@ -87,6 +87,16 @@ Reset_Handler:
     cmp     r0, r2
     blo     .Ltdata_copy
 
+    ldr     r0, =_stack_low
+    mov     r2, sp
+    ldr     r3, =0xa5a5a5a5
+    b       .Lstack_check
+.Lstack_paint:
+    stm     r0!, {r3}
+.Lstack_check:
+    cmp     r0, r2
+    blo     .Lstack_paint
+
     ldr     r0, =_tbss_start
     ldr     r2, =_tbss_end
     movs    r3, #0

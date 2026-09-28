@@ -112,6 +112,15 @@ _start:
     bltu    a0, a2, .Ltdata_copy
 .Ltdata_done:
 
+    la      a0, _stack_low
+    li      t0, 0xa5a5a5a5
+    bgeu    a0, sp, .Lstack_done
+.Lstack_paint:
+    sw      t0, 0(a0)
+    addi    a0, a0, 4
+    bltu    a0, sp, .Lstack_paint
+.Lstack_done:
+
     la      a0, _tbss_start
     la      a2, _tbss_end
     bgeu    a0, a2, .Ltbss_done

@@ -1002,12 +1002,15 @@ endif
 OBJDIR    ?= obj/$(BUILDNAME)_$(CONFIG)
 TARGETDIR ?= bin/$(BUILDNAME)_$(CONFIG)
 
-# CPU_HZ reaches D as the string import "cpu_hz", rewritten only when it changes.
+# Build facts reach D as string imports from BUILD_CONFIG_DIR, each rewritten only when it changes:
+# "build_id", the consuming project's revision, and "cpu_hz" where a board fixes its clock.
+BUILD_ID ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)
+BUILD_CONFIG_DIR := $(OBJDIR)/config
+$(shell mkdir -p $(BUILD_CONFIG_DIR) && [ "$$(cat $(BUILD_CONFIG_DIR)/build_id 2>/dev/null)" = "$(BUILD_ID)" ] || printf '%s' '$(BUILD_ID)' > $(BUILD_CONFIG_DIR)/build_id)
 ifdef CPU_HZ
-    CPU_HZ_DIR := $(OBJDIR)/config
-    $(shell mkdir -p $(CPU_HZ_DIR) && [ "$$(cat $(CPU_HZ_DIR)/cpu_hz 2>/dev/null)" = "$(CPU_HZ)" ] || printf '%s' '$(CPU_HZ)' > $(CPU_HZ_DIR)/cpu_hz)
-    DFLAGS := $(DFLAGS) -J=$(CPU_HZ_DIR)
+    $(shell [ "$$(cat $(BUILD_CONFIG_DIR)/cpu_hz 2>/dev/null)" = "$(CPU_HZ)" ] || printf '%s' '$(CPU_HZ)' > $(BUILD_CONFIG_DIR)/cpu_hz)
 endif
+DFLAGS := $(DFLAGS) -J=$(BUILD_CONFIG_DIR)
 
 # Bouffalo vendor C deps: paths, $(VENDOR_OBJS), compile rules and -L/-I.
 # Consumers just link $(VENDOR_OBJS); the per-blob lists stay private.

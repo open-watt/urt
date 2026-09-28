@@ -1,5 +1,6 @@
 module urt.system;
 
+import urt.build : build_id;
 import urt.platform;
 import urt.processor;
 import urt.string.ascii : is_numeric;
@@ -85,6 +86,7 @@ struct SystemInfo
 {
     string os_name;
     string processor;
+    string build;
     MemoryPool[MaxMemoryPools] pools;  // unused slots have total == 0
     Duration uptime;
 }
@@ -96,6 +98,7 @@ SystemInfo get_sysinfo()
     else enum hosted = false;
 
     SystemInfo r;
+    r.build = build_id;
     version (MT7621)
     {
         import urt.driver.mt7621 : chip_id;

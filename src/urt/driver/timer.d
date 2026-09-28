@@ -75,6 +75,21 @@ void periodic_stop()
         assert(false, "TODO: periodic_stop not available");
 }
 
+// Waiting
+
+// Poll done() once per pass until it holds (true) or mtime reaches deadline (false), halted between passes
+// where the platform can wake on a deadline and spinning otherwise. ulong.max waits without a deadline.
+static if (has_mtime)
+{
+    bool timer_wait(alias done)(ulong deadline)
+    {
+        static if (has_timer_compare && has_wait_for_interrupt)
+            return wait_until!(done, mtime_read, timer_wake_at, irq_wait)(deadline);
+        else
+            return wait_until!(done, mtime_read, (ulong) {}, () {})(deadline);
+    }
+}
+
 // One-shot
 
 static if (has_timer_compare)
@@ -103,15 +118,6 @@ static if (has_timer_compare)
         {
             _schedule.wake = deadline;
             rearm();
-        }
-    }
-
-    static if (has_wait_for_interrupt)
-    {
-        // Returns once mtime reaches deadline, halted in between.
-        void timer_sleep_until(ulong deadline)
-        {
-            sleep_until!(mtime_read, timer_wake_at, irq_wait)(deadline);
         }
     }
 
@@ -247,11 +253,18 @@ unittest
             s.fire(clock, tick, shot);
         }
 
+        __gshared uint polls;
+        static bool never() { ++polls; return false; }
+        static bool third() => ++polls == 3;
+
         s = Schedule();
         s.wake = 50;
         clock = 0;
-        sleep_until!(now, wake_at, wait)(100);
-        assert(clock == 100, "an earlier wake cut the sleep short");
+        assert(!wait_until!(never, now, wake_at, wait)(100) && clock == 100, "an earlier wake cut the wait short");
+
+        static void step() { ++clock; }
+        clock = polls = 0;
+        assert(wait_until!(third, now, wake_at, step)(100) && polls == 3 && clock == 2, "done was polled past its success");
     }
 
     static if (has_timer_compare)
@@ -378,13 +391,16 @@ nothrow @nogc:
 }
 
 // An earlier wake empties the slot when it fires, so the wake is re-armed before every halt.
-void sleep_until(alias now, alias wake_at, alias wait)(ulong deadline)
+bool wait_until(alias done, alias now, alias wake_at, alias halt)(ulong deadline)
 {
-    while (now() < deadline)
+    while (!done())
     {
+        if (now() >= deadline)
+            return false;
         wake_at(deadline);
-        wait();
+        halt();
     }
+    return true;
 }
 
 static if (has_timer_compare)

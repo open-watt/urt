@@ -31,7 +31,7 @@
 #   BAREMETAL_NM         - cross-nm path
 #   BAREMETAL_CFLAGS     - cross-gcc cflags (mcpu/march/mabi/mfpu)
 #   RAM_IMAGE_PACKER     - generic raw/deflate RAM-image post-link tool
-#   BAREMETAL_LIBC/M/GCC - resolved newlib/picolibc/libgcc archive paths
+#   BAREMETAL_LIBC/M/GCC - resolved picolibc/libgcc archive paths
 #   ESPRESSIF_PATH, ESPRESSIF_XTENSA_BIN, ESPRESSIF_RISCV32_BIN
 #   XTENSA_TWO_STAGE, ESPRESSIF_LLC, XTENSA_MATTR
 #
@@ -871,11 +871,16 @@ ifeq ($(COMPILER),ldc)
           BAREMETAL_CFLAGS := -march=$(MARCH) -mabi=$(MABI)
         endif
         BAREMETAL_LIBGCC ?= $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-libgcc-file-name)
-        # picolibc/newlib via --specs=picolibc.specs first, then plain gcc, then multilib fallback
+        # picolibc and nothing else: urt's C bindings follow its ABI (CRuntime_Picolibc). Debian makes it
+        # the sysroot; Ubuntu keeps it outside, where --print-file-name finds newlib instead.
         PICOLIBC_MULTIDIR := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-multi-directory 2>/dev/null)
         ifndef BAREMETAL_LIBC
-        BAREMETAL_LIBC   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libc.a))
-        BAREMETAL_LIBM   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        PICOLIBC_ROOT    := $(patsubst %/include/picolibc.h,%,$(firstword $(wildcard $(addsuffix /include/picolibc.h,/usr/lib/picolibc/$(BAREMETAL_GCC:-gcc=) $(abspath $(dir $(filter /%,$(shell $(BAREMETAL_GCC) --print-file-name=picolibc.specs 2>/dev/null)))..)))))
+        BAREMETAL_LIBC   := $(if $(PICOLIBC_ROOT),$(wildcard $(PICOLIBC_ROOT)/lib/$(PICOLIBC_MULTIDIR)/libc.a))
+        BAREMETAL_LIBM   := $(if $(PICOLIBC_ROOT),$(wildcard $(PICOLIBC_ROOT)/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        ifeq ($(BAREMETAL_LIBC),)
+          $(error No picolibc for $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS); install picolibc, or set BAREMETAL_LIBC and BAREMETAL_LIBM)
+        endif
         endif
         # Vendor C deps (tlsf, mbedtls shim) include hosted headers (assert.h,
         # string.h). A bare cross-gcc (CI's gcc-<arch>) only finds those via

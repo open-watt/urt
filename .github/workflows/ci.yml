@@ -110,14 +110,12 @@ jobs:
         with:
           compiler: ldc
 
-      # arm links newlib's libc.a through the gcc-arm-none-eabi-lib alternative, so newlib
-      # is explicit here; its libstdc++-arm-none-eabi-newlib recommend (463MB) is not linked.
       - name: Install ARM cross-toolchain
         if: matrix.target.toolchain == 'arm'
         uses: ./.github/actions/apt-install
         with:
           key: arm-none-eabi
-          packages: gcc-arm-none-eabi picolibc-arm-none-eabi libnewlib-arm-none-eabi
+          packages: gcc-arm-none-eabi picolibc-arm-none-eabi
 
       - name: Install RISC-V cross-toolchain
         if: matrix.target.toolchain == 'riscv'

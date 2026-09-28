@@ -1,8 +1,7 @@
 // Unified baremetal interrupt controller driver
 //
-// Normalizes the IRQ API across RISC-V PLIC, ARM NVIC, Beken ICU, etc.
-// Platform drivers export capabilities; the baremetal layer re-exports
-// them and provides a uniform function surface.
+// Backends export the controller primitives; this module owns range checks, the per-line
+// handler table and dispatch. A backend's trap path calls irq_dispatch() with the line number.
 module urt.driver.irq;
 
 version (BL808_M0)
@@ -23,13 +22,9 @@ else version (Espressif)
     public import urt.driver.esp32.irq;
 else
 {
-    enum bool has_plic = false;
-    enum bool has_nvic = false;
-    enum bool has_clic = false;
     enum bool has_per_irq_control = false;
     enum bool has_irq_priority = false;
     enum bool has_wait_for_interrupt = false;
-    enum bool has_irq_diagnostics = false;
     enum bool has_global_irq_state = false;
     enum bool has_smp = false;
     enum uint irq_max = 0;
@@ -56,9 +51,7 @@ alias IrqHandler = void function(uint irq) nothrow @nogc;
 // platforms always report "true" so IrqGuard pairs enter/exit cleanly.
 bool irq_global_disable()
 {
-    static if (has_plic || has_clic)
-        return disable_interrupts();
-    else static if (irq_max > 0)
+    static if (irq_max > 0)
         return irq_disable();
     else
         assert(false, "no IRQ controller");
@@ -68,9 +61,7 @@ bool irq_global_disable()
 // can report it; see irq_global_disable() for the FreeRTOS caveat.
 bool irq_global_enable()
 {
-    static if (has_plic || has_clic)
-        return enable_interrupts();
-    else static if (irq_max > 0)
+    static if (irq_max > 0)
         return irq_enable();
     else
         assert(false, "no IRQ controller");
@@ -105,16 +96,11 @@ IrqGuard irq_critical()
 
 // Per-IRQ control
 
-// Enable a specific peripheral interrupt. Returns previous state.
+// Enable a specific peripheral interrupt. Returns previous state; a line out of range reports off.
 bool irq_line_enable(uint irq)
 {
     static if (has_per_irq_control)
-    {
-        static if (has_plic)
-            return enable_irq(irq);
-        else
-            return irq_set_enable(irq);
-    }
+        return irq < irq_max && irq_set_enable(irq);
     else
         assert(false, "no per-IRQ control");
 }
@@ -123,49 +109,67 @@ bool irq_line_enable(uint irq)
 bool irq_line_disable(uint irq)
 {
     static if (has_per_irq_control)
-    {
-        static if (has_plic)
-            return disable_irq(irq);
-        else
-            return irq_clear_enable(irq);
-    }
+        return irq < irq_max && irq_clear_enable(irq);
     else
         assert(false, "no per-IRQ control");
 }
 
-// Set priority for a peripheral interrupt (0 = highest).
+// 0 is the most urgent, 255 the least; every level still delivers.
 void irq_line_set_priority(uint irq, ubyte priority)
 {
     static if (has_irq_priority)
-        irq_set_priority(irq, priority);
+    {
+        if (irq < irq_max)
+            irq_set_priority(irq, priority);
+    }
     else
         assert(false, "no IRQ priority support");
+}
+
+// Raise a line from software, as if its source had fired. The pend holds until delivered or unpended.
+static if (__traits(compiles, irq_set_pending(0u)))
+{
+    void irq_line_pend(uint irq)
+    {
+        if (irq < irq_max)
+            irq_set_pending(irq);
+    }
+}
+
+static if (__traits(compiles, irq_clear_pending(0u)))
+{
+    void irq_line_unpend(uint irq)
+    {
+        if (irq < irq_max)
+            irq_clear_pending(irq);
+    }
 }
 
 // Handler registration
 
 // Install an interrupt handler. Returns the previous handler for chaining.
-// PLIC delivers all external IRQs through a single line, so handlers are
-// installed globally and the platform's claim/complete protocol routes to
-// them.
-static if (has_plic)
+IrqHandler irq_handler_set(uint irq, IrqHandler handler)
 {
-    IrqHandler irq_handler_set(IrqHandler handler)
+    if (irq >= _handlers.length)
+        return null;
+    IrqHandler prev = _handlers[irq];
+    _handlers[irq] = handler;
+    static if (__traits(compiles, irq_hw_attach(irq)))
     {
-        return irq_set_handler(handler);
+        if (handler)
+            irq_hw_attach(irq);
     }
+    return prev;
 }
 
-// CLIC (and NVIC) maintains per-IRQ vectors. Each line gets its own handler;
-// the dispatcher reads mcause / IPSR to pick which one to call.
-// Beken's ICU has no vector table, but its vendor dispatcher registers per-line
-// handlers, so gate on the backend actually providing the two-argument form.
-static if (has_clic || has_nvic || __traits(compiles, irq_set_handler(uint.init, IrqHandler.init)))
+// Called by the backend's trap path, in interrupt context.
+void irq_dispatch(uint irq)
 {
-    IrqHandler irq_handler_set(uint irq, IrqHandler handler)
-    {
-        return irq_set_handler(irq, handler);
-    }
+    if (irq >= _handlers.length)
+        return;
+    IrqHandler h = _handlers[irq];
+    if (h !is null)
+        h(irq);
 }
 
 // Power management
@@ -179,156 +183,154 @@ void irq_wait()
         assert(false, "WFI not available");
 }
 
-// Diagnostics
 
-static if (has_irq_diagnostics)
+unittest
 {
-    ref uint irq_total_count()
+    static assert(!has_per_irq_control || irq_max > 0);
+    static assert(!has_irq_priority || has_per_irq_control);
+
+    static if (irq_max > 0 && has_global_irq_state)
     {
-        return irq_count;
-    }
-
-    uint[] irq_hit_histogram()
-    {
-        return irq_histogram[];
-    }
-}
-
-
-// ====================================================================
-// Tests
-// ====================================================================
-//
-// The desktop unittest binary has irq_max == 0 so every body below stays
-// behind `static if (irq_max > 0)` and is gated out -- only the capability
-// cross-asserts run there. On embedded unittest builds (rare; embedded
-// targets are CONFIG=release by policy) these exercise the live CSR / MMIO
-// surface and the trap entry path.
-
-unittest // capability cross-consistency
-{
-    static if (has_plic) static assert(has_per_irq_control);
-    static if (has_nvic) static assert(has_per_irq_control);
-    static if (has_clic) static assert(has_per_irq_control);
-    static if (has_irq_diagnostics) static assert(irq_max > 0);
-    // Diagnostics requires per-IRQ dispatch -- you can't increment a
-    // histogram if there's no per-line tag at trap entry.
-    static if (has_irq_diagnostics)
-        static assert(has_plic || has_clic || has_nvic);
-}
-
-static if (irq_max > 0 && has_global_irq_state)
-unittest // global enable/disable reports prior state symmetrically
-{
-    bool original = irq_global_disable();
-    bool now = irq_global_disable();
-    assert(!now, "second disable must observe MIE off");
-
-    irq_global_enable();
-    bool en = irq_global_enable();
-    assert(en, "second enable must observe MIE on");
-
-    irq_global_set(original);
-}
-
-static if (irq_max > 0 && has_global_irq_state)
-unittest // IrqGuard restores prior state across both polarities
-{
-    irq_global_enable();
-    {
-        auto guard = irq_critical();
-        bool inside = irq_global_disable();
-        assert(!inside, "inside the guarded region, IRQs must remain off");
-    }
-    bool after_on = irq_global_disable();
-    assert(after_on, "guard must re-enable when entered with IRQs on");
-
-    irq_global_disable();
-    {
-        auto guard = irq_critical();
-    }
-    bool after_off = irq_global_disable();
-    assert(!after_off, "guard must leave IRQs off when entered with IRQs off");
-}
-
-static if (irq_max > 0)
-unittest // IrqGuard nests cleanly (covers FreeRTOS recursive-mux platforms too)
-{
-    auto outer = irq_critical();
-    {
-        auto inner = irq_critical();
         {
-            auto innermost = irq_critical();
+            bool original = irq_global_disable();
+            assert(!irq_global_disable(), "second disable must observe IRQs off");
+            irq_global_enable();
+            assert(irq_global_enable(), "second enable must observe IRQs on");
+            irq_global_set(original);
+        }
+
+        {
+            bool original = irq_global_enable();
+            {
+                auto guard = irq_critical();
+                assert(!irq_global_disable(), "inside the guarded region, IRQs must remain off");
+            }
+            assert(irq_global_disable(), "guard must re-enable when entered with IRQs on");
+            {
+                auto guard = irq_critical();
+            }
+            assert(!irq_global_disable(), "guard must leave IRQs off when entered with IRQs off");
+            irq_global_set(original);
         }
     }
-    // If destruction order or recursion accounting were wrong, a platform
-    // using a counted spinlock (ESP32 portMUX) would assert internally.
+
+    static if (irq_max > 0)
+    {{
+        // A counted critical section (ESP32 portMUX) asserts internally if nesting is mis-accounted.
+        auto outer = irq_critical();
+        {
+            auto inner = irq_critical();
+            {
+                auto innermost = irq_critical();
+            }
+        }
+    }}
+
+    static if (has_per_irq_control)
+    {
+        enum uint slot = irq_max - 1;
+
+        {
+            irq_line_disable(slot);
+            assert(!irq_line_enable(slot), "freshly cleared slot must report off");
+            assert(irq_line_enable(slot), "re-enable must report on");
+            assert(irq_line_disable(slot), "disable after enable must report on");
+            assert(!irq_line_enable(slot), "re-enable after disable must report off");
+            irq_line_disable(slot);
+        }
+
+        {
+            enum uint bad = irq_max + 1024;
+            assert(!irq_line_enable(bad) && !irq_line_disable(bad), "out-of-range must be reported as 'was off'");
+            assert(irq_handler_set(bad, null) is null);
+        }
+
+        {
+            static void a(uint) {}
+            static void b(uint) {}
+
+            IrqHandler prior = irq_handler_set(slot, &a);
+            scope (exit) irq_handler_set(slot, prior);
+            assert(irq_handler_set(slot, &b) is &a, "swap must surface the most recent install");
+            assert(irq_handler_set(slot, null) is &b);
+        }
+    }
+
+    // A backend nominates two lines no source drives as `test_irq_lines` for this to run on its hardware.
+    static if (__traits(compiles, irq_line_pend(0u)) && __traits(compiles, test_irq_lines))
+    {
+        import core.volatile : volatileLoad;
+
+        __gshared uint[2] calls;
+        __gshared uint[2] seen;
+        static void count(uint irq)
+        {
+            irq_line_unpend(irq);
+            immutable i = irq == test_irq_lines[1];
+            ++calls[i];
+            seen[i] = irq;
+        }
+        static void settle()
+        {
+            foreach (_; 0 .. 100_000)
+                volatileLoad(&calls[0]);
+        }
+
+        enum uint a = test_irq_lines[0], b = test_irq_lines[1];
+        calls = 0;
+        seen = ~0u;
+        IrqHandler prior_a = irq_handler_set(a, &count);
+        IrqHandler prior_b = irq_handler_set(b, &count);
+        immutable was_global = irq_global_disable();
+        immutable was_a = irq_line_enable(a);
+        immutable was_b = irq_line_enable(b);
+        scope (exit)
+        {
+            irq_global_disable();
+            irq_line_unpend(a);
+            irq_line_unpend(b);
+            if (!was_a)
+                irq_line_disable(a);
+            if (!was_b)
+                irq_line_disable(b);
+            irq_handler_set(a, prior_a);
+            irq_handler_set(b, prior_b);
+            irq_global_set(was_global);
+        }
+
+        irq_global_enable();
+        irq_line_pend(a);
+        settle();
+        assert(volatileLoad(&calls[0]) == 1 && calls[1] == 0 && seen[0] == a, "a pended line was not delivered once to its own handler");
+        irq_line_pend(b);
+        settle();
+        assert(calls[0] == 1 && volatileLoad(&calls[1]) == 1 && seen[1] == b, "the second line did not route to its own handler");
+
+        irq_line_disable(a);
+        irq_line_pend(a);
+        settle();
+        assert(volatileLoad(&calls[0]) == 1, "a disabled line was delivered");
+        irq_line_unpend(a);
+        irq_line_enable(a);
+
+        irq_global_disable();
+        irq_line_pend(a);
+        settle();
+        assert(volatileLoad(&calls[0]) == 1, "a line was delivered with IRQs globally off");
+        irq_line_unpend(a);
+
+        static if (has_irq_priority)
+        {
+            irq_line_set_priority(a, 255);
+            irq_global_enable();
+            irq_line_pend(a);
+            settle();
+            assert(volatileLoad(&calls[0]) == 2, "the least urgent priority was not delivered");
+        }
+    }
 }
 
-static if (irq_max > 0 && has_per_irq_control)
-unittest // per-IRQ enable / disable round-trip on an unwired slot
-{
-    enum uint slot = irq_max - 1;
 
-    // Coerce to a known-off baseline first; some platform setters return
-    // void rather than the previous state.
-    irq_line_disable(slot);
+private:
 
-    bool was = irq_line_enable(slot);
-    assert(!was, "freshly cleared slot must report off");
-
-    bool en = irq_line_enable(slot);
-    assert(en, "re-enable must report on");
-
-    bool dis = irq_line_disable(slot);
-    assert(dis, "disable after enable must report on");
-
-    bool again = irq_line_enable(slot);
-    assert(!again, "re-enable after disable must report off");
-
-    irq_line_disable(slot);
-}
-
-static if (irq_max > 0 && has_per_irq_control)
-unittest // out-of-range per-IRQ calls must not crash or touch foreign memory
-{
-    enum uint bad = irq_max + 1024;
-    bool e = irq_line_enable(bad);
-    bool d = irq_line_disable(bad);
-    assert(!e && !d, "out-of-range must be reported as 'was off'");
-}
-
-// Handler tables: only CLIC/NVIC expose per-line install. PLIC has a single
-// global dispatcher so its irq_handler_set has a different signature.
-static if (irq_max > 0 && (has_clic || has_nvic))
-unittest // handler registration swap reports the just-installed handler
-{
-    static void a(uint) {}
-    static void b(uint) {}
-
-    enum uint slot = 7; // timer line on RISC-V; harmless on ARM unittest
-
-    IrqHandler prior = irq_handler_set(slot, &a);
-    scope (exit) irq_handler_set(slot, prior);
-
-    IrqHandler swap1 = irq_handler_set(slot, &b);
-    assert(swap1 is &a, "swap must surface the most recent install");
-
-    IrqHandler swap2 = irq_handler_set(slot, null);
-    assert(swap2 is &b);
-}
-
-static if (irq_max > 0 && has_irq_diagnostics)
-unittest // diagnostics expose the expected geometry and read stably
-{
-    uint[] hist = irq_hit_histogram();
-    assert(hist.length == irq_max,
-           "histogram length must mirror irq_max");
-
-    // The counter is __gshared and only mutated from _irq_dispatch; reading
-    // it twice with IRQs off must yield identical values.
-    auto guard = irq_critical();
-    uint a = irq_total_count();
-    uint b = irq_total_count();
-    assert(a == b, "diagnostics counter wobbled with IRQs disabled");
-}
+__gshared IrqHandler[has_per_irq_control ? irq_max : 0] _handlers;

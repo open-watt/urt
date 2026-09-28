@@ -55,7 +55,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 {
     import urt.driver.bl808_m0.bl_ops : bl_ops_task_create;
     import urt.driver.uart : uart0_puts;
-    import urt.driver.bl618.irq : irq_set_handler, irq_set_enable;
+    import urt.driver.irq : irq_handler_set, irq_line_enable;
     import urt.driver.bl618.timer : mtime_read;
 
     if (port != 0)
@@ -98,10 +98,10 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 
     ipc_emb2app_unmask_set(IPC_IRQ_E2A_ALL);
 
-    irq_set_handler(70, &_wifi_mac_irq_thunk);
-    irq_set_handler(79, &_wifi_ipc_irq_thunk);
-    irq_set_enable(70);
-    irq_set_enable(79);
+    irq_handler_set(70, &_wifi_mac_irq_thunk);
+    irq_handler_set(79, &_wifi_ipc_irq_thunk);
+    irq_line_enable(70);
+    irq_line_enable(79);
 
     {
         byte[14] zero_offset = 0;
@@ -195,7 +195,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 
 void wifi_hw_close(ubyte port)
 {
-    import urt.driver.bl618.irq : irq_clear_enable, irq_clear_pending, irq_set_handler;
+    import urt.driver.irq : irq_handler_set, irq_line_disable, irq_line_unpend;
 
     if (_bl_hw.vif_index_sta >= 0)
     {
@@ -209,12 +209,12 @@ void wifi_hw_close(ubyte port)
         _bl_hw.vif_index_ap = -1;
     }
 
-    irq_clear_enable(70);
-    irq_clear_enable(79);
-    irq_clear_pending(70);
-    irq_clear_pending(79);
-    irq_set_handler(70, null);
-    irq_set_handler(79, null);
+    irq_line_disable(70);
+    irq_line_disable(79);
+    irq_line_unpend(70);
+    irq_line_unpend(79);
+    irq_handler_set(70, null);
+    irq_handler_set(79, null);
     ipc_emb2app_unmask_set(0);
     ipc_emb2app_ack_clear(0xFFFFFFFF);
     if (_bl_hw.ipc_env !is null)

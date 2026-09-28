@@ -12,6 +12,7 @@ import urt.driver.irq : irq_init, irq_global_enable;
 import urt.driver.timer;
 import urt.driver.bl_common.exception : exception_init;
 import urt.driver.bl_common.trng;
+import urt.time : dur;
 
 @nogc nothrow:
 
@@ -43,7 +44,7 @@ extern(C) void sys_init()
     // point any irq_line_enable will actually deliver.
     irq_global_enable();
 
-    timer_set_periodic(50_000, &tick_stub);
+    periodic_set(dur!"msecs"(50), &tick_stub);
 
     uart0_hw_puts(chip_name ~ ": ready\n");
 }

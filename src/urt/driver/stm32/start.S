@@ -27,7 +27,7 @@ __vector_table:
     .word   SysTick_Handler
 
     /* 150 covers H7; F4 has 82 and F7 98. Every peripheral vector routes to _nvic_dispatch,
-     * which recovers the IRQ from IPSR and calls the handler registered via irq_set_handler. */
+     * which recovers the IRQ from IPSR and hands it to urt.driver.irq's dispatch. */
     .rept 150
     .word   _nvic_dispatch
     .endr

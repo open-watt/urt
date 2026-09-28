@@ -4,8 +4,9 @@ module urt.driver.mt7621.gpio;
 
 import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
 import urt.driver.gpio : DriveMode, GpioCallbackContext, GpioInterrupt, GpioInterruptCallback, GpioInterruptConfig, GpioInterruptTrigger, Pull;
+import urt.driver.irq : irq_handler_set;
 import urt.driver.mt7621 : mmio_read, mmio_write, sysctl_base;
-import urt.driver.mt7621.irq : irq_disable, irq_enable, irq_set_enable, irq_set_handler;
+import urt.driver.mt7621.irq : irq_disable, irq_enable, irq_set_enable;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
@@ -101,7 +102,7 @@ Result line_irq_open(uint line, GpioInterruptTrigger trigger, ubyte owner)
     reg_set(llvl, line, trigger == GpioInterruptTrigger.low);
     if (!_irq_hooked)
     {
-        irq_set_handler(gpio_irq, &gpio_irq_handler);
+        irq_handler_set(gpio_irq, &gpio_irq_handler);
         irq_set_enable(gpio_irq);
         _irq_hooked = true;
     }

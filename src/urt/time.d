@@ -1373,8 +1373,6 @@ package(urt) void init_clock()
     }
     else version (Embedded)
     {
-        timer_init();
-
         static if (has_rtc)
         {
             rtc_enable();

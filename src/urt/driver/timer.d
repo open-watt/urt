@@ -1,7 +1,13 @@
+// Unified timer driver
+//
+// A backend with a hardware compare (has_timer_compare) exports timer_compare_arm(deadline), which raises the
+// timer interrupt once mtime reaches the deadline, at once if it already has, and disarms on ulong.max. Its
+// interrupt calls timer_compare_fired(). This module schedules the periodic tick, the one-shot and wakes on that compare.
+// A backend without one provides its own timer_set_periodic.
 module urt.driver.timer;
 
+import urt.driver.irq : has_wait_for_interrupt, irq_critical, irq_global_enable, irq_global_set, irq_wait;
 import urt.time : Duration, dur;
-import urt.driver.irq : has_clic, has_per_irq_control;
 
 version (BL808_M0)
     public import urt.driver.bl618.timer;
@@ -25,8 +31,7 @@ else
     enum bool has_mtime = false;
     enum bool has_rtc = false;
     enum bool has_mcycle = false;
-    enum bool has_timer_stop = false;
-    enum bool has_oneshot_timer = false;
+    enum bool has_timer_compare = false;
 }
 
 nothrow @nogc:
@@ -38,118 +43,88 @@ alias TimerCallback = void function() nothrow @nogc;
 // Driver API
 // ====================================================================
 
-// Lifecycle
-
-void timer_init()
-{
-    if (_init_refcount++ == 0)
-    {
-        version (Beken)
-            timer_hw_init();
-    }
-}
-
-void timer_deinit()
-{
-    assert(_init_refcount > 0);
-    if (--_init_refcount == 0)
-    {
-        static if (has_timer_stop)
-            periodic_stop();
-        static if (has_rtc)
-            rtc_stop();
-        // TODO: disable timer IRQs at the interrupt controller level
-    }
-}
-
-// Monotonic clock
-
-// Read the monotonic tick counter. Units are platform-specific;
-// use mtime_freq_hz to convert to real time.
-static if (has_mtime)
-    alias monotonic_read = mtime_read;
-else
-{
-    ulong monotonic_read()
-    {
-        assert(false, "monotonic_read not available");
-    }
-}
-
-// Read CPU cycle counter (for profiling, NOT timekeeping).
-// Stops during WFI, rate changes with clock scaling.
-static if (has_mcycle)
-    alias cycle_read = mcycle_read;
-else
-{
-    ulong cycle_read()
-    {
-        assert(false, "cycle_read not available");
-    }
-}
-
 // Periodic tick
 
-// Set up a periodic timer interrupt at the given interval.
+// Call cb every interval, from interrupt context. A late tick keeps the phase; ticks missed outright are dropped.
 void periodic_set(Duration interval, TimerCallback cb)
 {
-    static if (has_mtime)
+    static if (has_timer_compare)
     {
-        timer_set_periodic(interval.ticks, cb);
+        auto guard = irq_critical();
+        _schedule.period = interval.ticks;
+        _schedule.tick = cb;
+        _schedule.next_tick = mtime_read() + _schedule.period;
+        rearm();
     }
+    else static if (has_mtime)
+        timer_set_periodic(interval.ticks, cb);
     else
         assert(false, "TODO: periodic_set not available");
 }
 
-// Stop the periodic timer.
 void periodic_stop()
 {
-    static if (has_timer_stop)
-        timer_stop();
+    static if (has_timer_compare)
+    {
+        auto guard = irq_critical();
+        _schedule.period = 0;
+        _schedule.tick = null;
+        rearm();
+    }
     else
         assert(false, "TODO: periodic_stop not available");
 }
 
-// One-shot wakeup
+// One-shot
 
-// Schedule a one-shot interrupt at the given absolute tick value.
-// Used by sleep() to wake from WFI.
-void oneshot_set(ulong tick_value)
+static if (has_timer_compare)
 {
-    static if (has_oneshot_timer)
-        mtimecmp_write_oneshot(tick_value);
-    else
-        assert(false, "TODO: oneshot_set not available");
-}
-
-// RTC (battery-backed real-time counter)
-
-// Enable the RTC counter. Does not reset it.
-void rtc_start()
-{
-    static if (has_rtc)
-        rtc_enable();
-    else
-        assert(false, "TODO: rtc_start not available");
-}
-
-// Disable and reset the RTC counter to zero.
-void rtc_stop()
-{
-    static if (has_rtc)
-        rtc_reset();
-    else
-        assert(false, "TODO: rtc_stop not available");
-}
-
-// Read the RTC tick counter.
-static if (has_rtc)
-    alias rtc_now = rtc_read;
-else
-{
-    ulong rtc_now()
+    // Call cb once, from interrupt context, when mtime reaches deadline; one already passed fires at once.
+    // Replaces any one-shot still pending.
+    void oneshot_set(ulong deadline, TimerCallback cb)
     {
-        assert(false, "TODO: rtc_now not available");
+        auto guard = irq_critical();
+        _schedule.oneshot_deadline = deadline;
+        _schedule.oneshot = cb;
+        rearm();
+    }
+
+    void oneshot_cancel()
+    {
+        oneshot_set(ulong.max, null);
+    }
+
+    // Take a timer interrupt once mtime reaches deadline. An earlier wake already armed stands, so a waiter
+    // may wake early and must re-arm.
+    void timer_wake_at(ulong deadline)
+    {
+        auto guard = irq_critical();
+        if (deadline < _schedule.wake)
+        {
+            _schedule.wake = deadline;
+            rearm();
+        }
+    }
+
+    static if (has_wait_for_interrupt)
+    {
+        // Returns once mtime reaches deadline, halted in between.
+        void timer_sleep_until(ulong deadline)
+        {
+            sleep_until!(mtime_read, timer_wake_at, irq_wait)(deadline);
+        }
+    }
+
+    // Called by the backend's compare interrupt.
+    void timer_compare_fired()
+    {
+        TimerCallback tick, shot;
+        _schedule.fire(mtime_read(), tick, shot);
+        rearm();
+        if (tick)
+            tick();
+        if (shot)
+            shot();
     }
 }
 
@@ -179,208 +154,245 @@ static if (has_rtc)
 }
 
 
-// ====================================================================
-// Tests
-// ====================================================================
-//
-// Most of these are gated by capability flags so they collapse to no-ops
-// on platforms that don't support the underlying surface (desktop, in
-// particular, runs only the cross-asserts and the refcount test).
-
-unittest // capability cross-consistency
+unittest
 {
-    static assert(mtime_freq_hz > 0 || !has_mtime,
-                  "has_mtime requires a known mtime frequency");
-    static assert(!has_mcycle || has_mtime,
-                  "mcycle without mtime makes no sense in this codebase");
-    static assert(!has_timer_stop || has_mtime,
-                  "stoppable periodic implies an mtime source");
-}
+    static assert(mtime_freq_hz > 0 || !has_mtime, "has_mtime requires a known mtime frequency");
+    static assert(!has_mcycle || has_mtime, "mcycle without mtime makes no sense in this codebase");
+    static assert(!has_timer_compare || has_mtime, "a compare needs an mtime to compare against");
 
-unittest // timer_init / timer_deinit refcount balances
-{
-    timer_init();
-    timer_init();
-    timer_deinit();
-    timer_deinit();
-    // If the refcount underflowed, the next timer_init would re-init the
-    // hardware redundantly; if it leaked, the matching deinit above would
-    // assert(_init_refcount > 0). Reaching this line means neither happened.
-}
+    static if (has_mtime)
+    {{
+        ulong start = mtime_read();
+        assert(mtime_read() >= start, "mtime went backwards");
+        ulong observed = start;
+        foreach (_; 0 .. 1_000_000)
+        {
+            observed = mtime_read();
+            if (observed > start)
+                break;
+        }
+        assert(observed > start, "mtime did not advance within 1M reads");
+    }}
 
-static if (has_mtime)
-unittest // monotonic_read is non-decreasing and actually advances
-{
-    timer_init();
-    scope (exit) timer_deinit();
+    static if (has_mcycle)
+    {{
+        ulong start = mcycle_read();
+        ulong observed = start;
+        foreach (_; 0 .. 10_000)
+        {
+            observed = mcycle_read();
+            if (observed > start)
+                break;
+        }
+        assert(observed > start, "cycle counter is stuck");
+    }}
 
-    ulong t1 = monotonic_read();
-    ulong t2 = monotonic_read();
-    assert(t2 >= t1, "monotonic_read went backwards");
+    static if (has_rtc)
+    {{
+        rtc_enable();
+        ulong r = rtc_read();
+        assert(rtc_read() >= r, "the RTC went backwards");
+    }}
 
-    // Spin until the clock advances or we exhaust the budget. A clock that
-    // never advances is a more useful failure mode than a flake.
-    ulong start = monotonic_read();
-    ulong observed = start;
-    foreach (_; 0 .. 1_000_000)
     {
-        observed = monotonic_read();
-        if (observed > start)
-            break;
-    }
-    assert(observed > start, "monotonic_read did not advance within 1M reads");
-}
+        static void a() {}
+        static void b() {}
+        TimerCallback tick, shot;
 
-static if (has_mcycle)
-unittest // cycle_read advances within a busy spin
-{
-    ulong c1 = cycle_read();
-    ulong c2 = cycle_read();
-    assert(c2 >= c1);
+        Schedule s;
+        s.period = 10;
+        s.next_tick = 10;
+        s.tick = &a;
+        s.fire(35, tick, shot);
+        assert(tick is &a && s.next_tick == 40, "a late tick lost its phase");
+        s.fire(40, tick, shot);
+        assert(tick is &a && s.next_tick == 50);
+        s.fire(45, tick, shot);
+        assert(tick is null && s.next_tick == 50, "a tick fired before its deadline");
 
-    ulong start = cycle_read();
-    ulong observed = start;
-    foreach (_; 0 .. 10_000)
-    {
-        observed = cycle_read();
-        if (observed > start)
-            break;
-    }
-    assert(observed > start, "cycle counter is stuck");
-}
+        s = Schedule();
+        s.oneshot_deadline = 100;
+        s.oneshot = &b;
+        s.wake = 200;
+        assert(s.deadline() == 100);
+        s.fire(100, tick, shot);
+        assert(shot is &b && s.oneshot is null && s.wake == 200, "a wait disturbed the pending one-shot");
+        assert(s.deadline() == 200);
+        s.fire(200, tick, shot);
+        assert(shot is null && s.wake == ulong.max && s.deadline() == ulong.max);
 
-static if (has_oneshot_timer)
-unittest // oneshot_set arm and cancel don't crash
-{
-    timer_init();
-    scope (exit) timer_deinit();
-
-    ulong now = monotonic_read();
-    // Arm well in the future so the fire-and-handler path is exercised by
-    // the periodic test below, not here.
-    oneshot_set(now + cast(ulong)mtime_freq_hz * 60);
-    oneshot_set(ulong.max);
-}
-
-// Light-weight sanity check that periodic_set / periodic_stop don't crash.
-// We can't easily assert delivery here because periodic_set is a platform-
-// specific helper -- some platforms (BL618 during M0 bring-up) leave the
-// IRQ enable commented out so the callback won't fire. The oneshot-based
-// trap-entry test below covers delivery via the common API.
-static if (has_mtime && has_timer_stop)
-unittest // periodic_set / periodic_stop are safe to call back-to-back
-{
-    timer_init();
-    scope (exit) timer_deinit();
-
-    periodic_set(dur!"msecs"(50), () @nogc nothrow {});
-    periodic_stop();
-}
-
-// The big integration test: arm a oneshot, install a handler at the timer
-// line, spin until it fires, verify the trap path doesn't corrupt the
-// stack frame and the diagnostics counter increments. Built entirely on
-// the common irq+timer API surface -- no platform helpers.
-//
-// Gated on has_clic because on CLIC the machine-timer cause arrives as
-// ordinary IRQ line 7 through the per-line dispatch table, which is what
-// irq_handler_set targets. PLIC routes the timer trap through its own
-// path (start.S _trap_mtimer), so installing a handler at line 7 wouldn't
-// reach it. NVIC's SysTick is a system exception, not a peripheral IRQ.
-static if (has_mtime && has_oneshot_timer && has_clic && has_per_irq_control)
-unittest // oneshot_set fires an IRQ, handler runs, trap doesn't trash stack
-{
-    import urt.driver.irq : irq_handler_set, irq_line_enable, irq_line_disable,
-                            irq_global_enable, irq_global_set,
-                            has_global_irq_state, has_irq_diagnostics,
-                            IrqHandler;
-    import core.volatile : volatileLoad;
-    static if (has_irq_diagnostics)
-        import urt.driver.irq : irq_total_count;
-
-    timer_init();
-    scope (exit) timer_deinit();
-
-    // RISC-V machine-timer cause; standard across every CLIC platform.
-    enum uint timer_line = 7;
-
-    __gshared uint fire_count;
-    fire_count = 0;
-
-    static void handler(uint) @nogc nothrow
-    {
-        ++fire_count;
-        oneshot_set(ulong.max); // disarm so the trap doesn't keep re-firing
+        s = Schedule();
+        s.wake = 50;
+        s.oneshot_deadline = 100;
+        s.oneshot = &b;
+        s.fire(50, tick, shot);
+        assert(shot is null && s.oneshot is &b && s.deadline() == 100, "a wake consumed the one-shot");
     }
 
-    IrqHandler prior_handler = irq_handler_set(timer_line, &handler);
-    scope (exit) irq_handler_set(timer_line, prior_handler);
-
-    // Canary in the test's stack frame. If trap entry writes outside the
-    // saved frame (mis-aligned SP, wrong push count) this gets clobbered.
-    enum size_t canary_len = 256;
-    ubyte[canary_len] canary;
-    foreach (i, ref b; canary)
-        b = cast(ubyte)((i * 0x9Eu) ^ 0xA5u);
-
-    static if (has_irq_diagnostics)
-        uint prior_total = irq_total_count();
-
-    bool prior_line = irq_line_enable(timer_line);
-    scope (exit)
     {
-        if (!prior_line)
-            irq_line_disable(timer_line);
+        __gshared Schedule s;
+        __gshared ulong clock;
+        static ulong now() => clock;
+        static void wake_at(ulong deadline)
+        {
+            if (deadline < s.wake)
+                s.wake = deadline;
+        }
+        static void wait()
+        {
+            immutable deadline = s.deadline();
+            assert(deadline != ulong.max, "halted with no wake armed");
+            clock = deadline;
+            TimerCallback tick, shot;
+            s.fire(clock, tick, shot);
+        }
+
+        s = Schedule();
+        s.wake = 50;
+        clock = 0;
+        sleep_until!(now, wake_at, wait)(100);
+        assert(clock == 100, "an earlier wake cut the sleep short");
     }
 
-    static if (has_global_irq_state)
-        bool prior_global = irq_global_enable();
-    else
-        irq_global_enable();
+    static if (has_timer_compare)
+    {
+        import core.volatile : volatileLoad;
 
-    oneshot_set(monotonic_read() + mtime_freq_hz / 100);
+        __gshared uint ticks, shots;
+        static void on_tick() { ++ticks; }
+        static void on_shot() { ++shots; }
+        enum ulong ms = mtime_freq_hz / 1000;
+        static void wait(ulong duration)
+        {
+            immutable start = mtime_read();
+            while (mtime_read() - start < duration)
+            {}
+        }
 
-    // Bounded busy wait -- 200 ms of mtime is generous slack for a 10 ms timer.
-    // volatileLoad keeps the optimizer from caching fire_count in a register;
-    // monotonic_read's inline-asm rdtime doesn't carry a memory clobber, so an
-    // ordinary __gshared load can otherwise be hoisted out of the loop.
-    ulong start_mt = monotonic_read();
-    ulong budget = 200u * (cast(ulong)mtime_freq_hz / 1000u);
-    while (volatileLoad(&fire_count) == 0 && (monotonic_read() - start_mt) < budget)
-    {}
+        ulong prior_period = _schedule.period;
+        TimerCallback prior_tick = _schedule.tick;
+        immutable was_global = irq_global_enable();
+        scope (exit)
+        {
+            oneshot_cancel();
+            if (prior_tick)
+                periodic_set(Duration(prior_period), prior_tick);
+            else
+                periodic_stop();
+            irq_global_set(was_global);
+        }
 
-    static if (has_global_irq_state)
-        irq_global_set(prior_global);
+        {
+            // A trap that writes outside its saved frame clobbers the interrupted one.
+            ubyte[256] canary;
+            foreach (i, ref b; canary)
+                b = cast(ubyte)((i * 0x9Eu) ^ 0xA5u);
 
-    assert(volatileLoad(&fire_count) == 1, "oneshot_set did not deliver an IRQ");
+            ticks = 0;
+            periodic_set(dur!"usecs"(200), &on_tick);
+            wait(2 * ms);
+            periodic_stop();
+            immutable fired = volatileLoad(&ticks);
+            assert(fired >= 5, "the periodic tick fired too few times");
+            foreach (i, b; canary)
+                assert(b == cast(ubyte)((i * 0x9Eu) ^ 0xA5u), "stack clobbered across the timer interrupt");
 
-    foreach (i, b; canary)
-        assert(b == cast(ubyte)((i * 0x9Eu) ^ 0xA5u),
-               "stack canary clobbered across IRQ trap");
+            wait(ms);
+            assert(volatileLoad(&ticks) == fired, "the periodic tick fired after periodic_stop");
+        }
 
-    static if (has_irq_diagnostics)
-        assert(irq_total_count() > prior_total,
-               "diagnostics counter did not track delivered IRQ");
-}
+        {
+            shots = 0;
+            oneshot_set(mtime_read() + ms, &on_shot);
+            wait(5 * ms);
+            assert(volatileLoad(&shots) == 1, "the one-shot did not fire exactly once");
 
-static if (has_rtc)
-unittest // RTC counter non-decreasing; persistence struct accessible
-{
-    timer_init();
-    scope (exit) timer_deinit();
+            oneshot_set(mtime_read() - ms, &on_shot);
+            wait(ms);
+            assert(volatileLoad(&shots) == 2, "a one-shot deadline already passed did not fire");
 
-    rtc_start();
+            oneshot_set(mtime_read() + ms, &on_shot);
+            oneshot_cancel();
+            wait(2 * ms);
+            assert(volatileLoad(&shots) == 2, "a cancelled one-shot fired");
 
-    ulong r1 = rtc_now();
-    ulong r2 = rtc_now();
-    assert(r2 >= r1);
+            oneshot_set(mtime_read() + 2 * ms, &on_shot);
+            timer_wake_at(mtime_read() + ms);
+            timer_wake_at(mtime_read() + 3 * ms);
+            wait(4 * ms);
+            assert(volatileLoad(&shots) == 3, "a wake displaced the pending one-shot");
+        }
 
-    auto p = persistent_state();
-    assert(p !is null,
-           "persistent_state must return a valid pointer when RTC is up");
+        {
+            ticks = shots = 0;
+            periodic_set(dur!"usecs"(500), &on_tick);
+            oneshot_set(mtime_read() + 2 * ms, &on_shot);
+            wait(5 * ms);
+            periodic_stop();
+            assert(volatileLoad(&shots) == 1, "the one-shot was lost under a running periodic tick");
+            assert(volatileLoad(&ticks) >= 5, "the one-shot disturbed the periodic tick");
+        }
+    }
 }
 
 
 private:
 
-__gshared ubyte _init_refcount;
+struct Schedule
+{
+nothrow @nogc:
+    ulong period;
+    ulong next_tick;
+    ulong oneshot_deadline = ulong.max;
+    ulong wake = ulong.max;
+    TimerCallback tick;
+    TimerCallback oneshot;
+
+    ulong deadline() const
+    {
+        ulong d = period != 0 ? next_tick : ulong.max;
+        if (oneshot_deadline < d)
+            d = oneshot_deadline;
+        return wake < d ? wake : d;
+    }
+
+    // Retires everything due at now and hands back the callbacks to run.
+    void fire(ulong now, out TimerCallback tick_cb, out TimerCallback oneshot_cb)
+    {
+        if (period != 0 && now >= next_tick)
+        {
+            next_tick += period;
+            if (next_tick <= now)
+                next_tick += ((now - next_tick) / period + 1) * period;
+            tick_cb = tick;
+        }
+        if (now >= oneshot_deadline)
+        {
+            oneshot_cb = oneshot;
+            oneshot_deadline = ulong.max;
+            oneshot = null;
+        }
+        if (now >= wake)
+            wake = ulong.max;
+    }
+}
+
+// An earlier wake empties the slot when it fires, so the wake is re-armed before every halt.
+void sleep_until(alias now, alias wake_at, alias wait)(ulong deadline)
+{
+    while (now() < deadline)
+    {
+        wake_at(deadline);
+        wait();
+    }
+}
+
+static if (has_timer_compare)
+{
+    __gshared Schedule _schedule;
+
+    void rearm()
+    {
+        timer_compare_arm(_schedule.deadline());
+    }
+}

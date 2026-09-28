@@ -65,14 +65,9 @@ void sleep(Duration duration)
         static if (has_mtime)
         {
             ulong deadline = mtime_read() + duration.ticks;
-            static if (has_oneshot_timer && has_wait_for_interrupt)
+            static if (has_timer_compare && has_wait_for_interrupt)
             {
-                mtimecmp_write_oneshot(deadline);
-                auto was_enabled = enable_irq(IrqClass.timer);
-                while (mtime_read() < deadline)
-                    wait_for_interrupt();
-                if (!was_enabled)
-                    disable_irq(IrqClass.timer);
+                timer_sleep_until(deadline);
             }
             else
             {

@@ -6,16 +6,15 @@ module urt.driver.rp2350.irq;
 
 @nogc nothrow:
 
-enum bool has_plic = false;
-enum bool has_nvic = true;
-enum bool has_clic = false;
 enum bool has_per_irq_control = true;
 enum bool has_irq_priority = true;
 enum bool has_wait_for_interrupt = false;
-enum bool has_irq_diagnostics = false;
 enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 enum uint irq_max = 52;
+
+// SPAREIRQ_IRQ_0 and _1: no peripheral drives them.
+enum uint[2] test_irq_lines = [46, 47];
 
 import core.volatile;
 
@@ -85,23 +84,14 @@ void irq_set_priority(uint irq_num, ubyte priority)
     volatileStore(cast(ubyte*)(NVIC_IPR0 + irq_num), priority);
 }
 
-
-// Handler registration
-
-alias IrqHandler = void function(uint irq) @nogc nothrow;
-
-__gshared IrqHandler[irq_max] _handlers;
-
-// Install a handler for a peripheral IRQ (0..irq_max-1). Returns the previous.
-// The flash vector table routes every peripheral vector at _nvic_dispatch,
-// which recovers the active IRQ from IPSR and calls the registered handler.
-IrqHandler irq_set_handler(uint irq, IrqHandler handler)
+void irq_set_pending(uint irq_num)
 {
-    if (irq >= irq_max)
-        return null;
-    IrqHandler prev = _handlers[irq];
-    _handlers[irq] = handler;
-    return prev;
+    volatileStore(cast(uint*)(NVIC_ISPR0 + irq_num / 32 * 4), 1u << (irq_num % 32));
+}
+
+void irq_clear_pending(uint irq_num)
+{
+    volatileStore(cast(uint*)(NVIC_ICPR0 + irq_num / 32 * 4), 1u << (irq_num % 32));
 }
 
 // Common entry for every peripheral vector. A plain AAPCS function is a valid
@@ -111,13 +101,9 @@ IrqHandler irq_set_handler(uint irq, IrqHandler handler)
 // n + 16.
 extern(C) void _nvic_dispatch()
 {
+    import urt.driver.irq : irq_dispatch;
+
     uint ipsr;
     asm @nogc nothrow { "mrs %0, ipsr" : "=r" (ipsr); }
-    uint irq = ipsr - 16;
-    if (irq < irq_max)
-    {
-        IrqHandler h = _handlers[irq];
-        if (h !is null)
-            h(irq);
-    }
+    irq_dispatch(ipsr - 16);
 }

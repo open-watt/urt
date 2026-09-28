@@ -11,8 +11,7 @@ enum uint mtime_freq_hz = 1_000_000; // esp_timer_get_time returns microseconds
 enum bool has_mtime = true;
 enum bool has_rtc = true;
 enum bool has_mcycle = false;
-enum bool has_timer_stop = false;
-enum bool has_oneshot_timer = false;
+enum bool has_timer_compare = false;
 
 ulong mtime_read()
 {

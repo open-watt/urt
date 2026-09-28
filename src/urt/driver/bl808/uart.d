@@ -22,7 +22,7 @@
 module urt.driver.bl808.uart;
 
 import core.volatile;
-import urt.driver.bl808.irq;
+import urt.driver.irq : irq_disable, irq_global_set, irq_handler_set, irq_line_disable, irq_line_enable;
 
 import urt.driver.uart : Parity, StopBits, UartConfig;
 
@@ -170,8 +170,6 @@ private alias Ring = RingBuffer!512;
 private __gshared Ring[num_uarts] rx_ring;
 private __gshared Ring[num_uarts] tx_ring;
 private __gshared bool[num_uarts] uart_open_flag;
-private __gshared IrqHandler prev_irq_handler;
-private __gshared bool irq_handler_installed;
 
 // Open a UART: configure baud rate, frame format, clear FIFOs, enable TX+RX.
 // UART3 gets interrupt-driven I/O. UART0/1/2 require uart_poll().
@@ -249,15 +247,8 @@ bool uart_hw_open(uint id, UartConfig cfg)
     // UART3: set up interrupt-driven I/O
     if (id == 3)
     {
-        // Install our IRQ handler (chain with previous)
-        if (!irq_handler_installed)
-        {
-            prev_irq_handler = irq_set_handler(&uart_irq_handler);
-            irq_handler_installed = true;
-        }
-
-        // Enable UART3 PLIC IRQ
-        enable_irq(UART3_PLIC_IRQ);
+        irq_handler_set(UART3_PLIC_IRQ, &uart_irq_handler);
+        irq_line_enable(UART3_PLIC_IRQ);
 
         // Unmask RX FIFO threshold + RX timeout interrupts
         // TX FIFO interrupt is unmasked on demand when tx_ring has data
@@ -283,7 +274,7 @@ void uart_hw_close(uint id)
     reg_write(base, INT_MASK, INT_MASK_ALL);
 
     if (id == 3)
-        disable_irq(UART3_PLIC_IRQ);
+        irq_line_disable(UART3_PLIC_IRQ);
 
     auto tx_cfg = reg_read(base, UTX_CONFIG);
     auto rx_cfg = reg_read(base, URX_CONFIG);
@@ -311,9 +302,9 @@ ptrdiff_t uart_hw_read(uint id, void[] buffer)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = disable_interrupts();
+    immutable prev = irq_disable();
     auto n = rx_ring[id].read(buffer);
-    set_interrupts(prev);
+    irq_global_set(prev);
     return cast(ptrdiff_t)n;
 }
 
@@ -324,7 +315,7 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = disable_interrupts();
+    immutable prev = irq_disable();
 
     auto n = tx_ring[id].write(data);
 
@@ -339,7 +330,7 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
         reg_write(uart_base[id], INT_MASK, mask);
     }
 
-    set_interrupts(prev);
+    irq_global_set(prev);
     return cast(ptrdiff_t)n;
 }
 
@@ -349,9 +340,9 @@ ptrdiff_t uart_hw_rx_pending(uint id)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = disable_interrupts();
+    immutable prev = irq_disable();
     auto p = rx_ring[id].pending;
-    set_interrupts(prev);
+    irq_global_set(prev);
     return cast(ptrdiff_t)p;
 }
 
@@ -361,7 +352,7 @@ ptrdiff_t uart_hw_flush(uint id)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = disable_interrupts();
+    immutable prev = irq_disable();
 
     immutable p = rx_ring[id].pending;
     rx_ring[id].purge();
@@ -371,7 +362,7 @@ ptrdiff_t uart_hw_flush(uint id)
     auto fifo0 = reg_read(base, FIFO_CONFIG_0);
     reg_write(base, FIFO_CONFIG_0, fifo0 | RX_FIFO_CLR);
 
-    set_interrupts(prev);
+    irq_global_set(prev);
     return cast(ptrdiff_t)p;
 }
 
@@ -435,40 +426,33 @@ void fill_tx_fifo(uint id)
     }
 }
 
-// PLIC IRQ handler - services UART3 interrupts.
-// Chains to previous handler for non-UART IRQs.
-void uart_irq_handler(uint irq)
+void uart_irq_handler(uint)
 {
-    if (irq == UART3_PLIC_IRQ)
+    immutable base = uart_base[3];
+    immutable sts = reg_read(base, INT_STS);
+    immutable mask = reg_read(base, INT_MASK);
+    immutable active = sts & ~mask;
+
+    // RX FIFO threshold or RX timeout - drain into ring
+    if (active & (INT_URX_FIFO | INT_URX_RTO))
     {
-        immutable base = uart_base[3];
-        immutable sts = reg_read(base, INT_STS);
-        immutable mask = reg_read(base, INT_MASK);
-        immutable active = sts & ~mask;
+        drain_rx_fifo(3);
+        if (active & INT_URX_RTO)
+            reg_write(base, INT_CLEAR, INT_URX_RTO);
+    }
 
-        // RX FIFO threshold or RX timeout - drain into ring
-        if (active & (INT_URX_FIFO | INT_URX_RTO))
+    // TX FIFO has space - refill from ring
+    if (active & INT_UTX_FIFO)
+    {
+        fill_tx_fifo(3);
+        // If ring is drained, mask TX interrupt until more data arrives
+        if (tx_ring[3].empty)
         {
-            drain_rx_fifo(3);
-            if (active & INT_URX_RTO)
-                reg_write(base, INT_CLEAR, INT_URX_RTO);
-        }
-
-        // TX FIFO has space - refill from ring
-        if (active & INT_UTX_FIFO)
-        {
-            fill_tx_fifo(3);
-            // If ring is drained, mask TX interrupt until more data arrives
-            if (tx_ring[3].empty)
-            {
-                auto m = reg_read(base, INT_MASK);
-                m |= INT_UTX_FIFO;
-                reg_write(base, INT_MASK, m);
-            }
+            auto m = reg_read(base, INT_MASK);
+            m |= INT_UTX_FIFO;
+            reg_write(base, INT_MASK, m);
         }
     }
-    else if (prev_irq_handler !is null)
-        prev_irq_handler(irq);
 }
 
 

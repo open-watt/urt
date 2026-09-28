@@ -24,7 +24,7 @@ version (BL808_M0):
 
 import urt.mem.alloc : alloc, free, MemFlags;
 import urt.mem       : memset;
-import urt.driver.bl618.irq   : irq_disable, irq_enable, set_interrupts;
+import urt.driver.irq         : irq_disable, irq_enable, irq_global_set;
 import urt.driver.bl618.timer : mtime_read, mtime_freq_hz;
 import urt.fibre              : Fibre, AwakenEvent, FibreEntryFunc, ResumeHandler,
                                 yield, is_in_fibre;
@@ -174,7 +174,7 @@ uint bl_ops_enter_critical()
 
 void bl_ops_exit_critical(uint level)
 {
-    set_interrupts(level != 0);
+    irq_global_set(level != 0);
 }
 
 // Time / sleep. The blob treats "tick" values like an RTOS tick counter,

@@ -19,7 +19,7 @@ module urt.driver.bk7231.timer;
 
 import core.volatile;
 
-import urt.driver.irq : irq_set_enable, irq_set_handler;
+import urt.driver.irq : irq_handler_set, irq_set_enable;
 
 @nogc nothrow:
 
@@ -76,8 +76,7 @@ enum uint mtime_freq_hz = 26_000_000;
 enum bool has_mtime = true;
 enum bool has_rtc = false;
 enum bool has_mcycle = false;
-enum bool has_timer_stop = false;
-enum bool has_oneshot_timer = false;
+enum bool has_timer_compare = false;
 
 private __gshared uint timer_high;
 private __gshared uint timer_last;
@@ -150,7 +149,7 @@ void timer_set_periodic(ulong period_ticks, TimerCallback cb)
     assert(period_ticks <= uint.max, "bk7231 timer: period out of range");
     reg_write(TIMER1_PERIOD, cast(uint)period_ticks);
 
-    irq_set_handler(IRQ_TIMER, &timer_isr);
+    irq_handler_set(IRQ_TIMER, &timer_isr);
     irq_set_enable(IRQ_TIMER);
 
     reg_write(TIMER0_2_CTL, (ctl & ~INT_FLAG_MASK) | TIMER1_EN);

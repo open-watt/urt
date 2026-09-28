@@ -17,10 +17,7 @@ else
 enum bool has_mtime = true;
 enum bool has_rtc = false;
 enum bool has_mcycle = false;
-enum bool has_timer_stop = true;
-enum bool has_oneshot_timer = true;
-
-alias TimerCallback = void function() @nogc nothrow;
+enum bool has_timer_compare = true;
 
 void counter_init(uint counter_hz)
 {
@@ -49,24 +46,9 @@ ulong mtime_read()
         return mul_shr32(counter_read(), _ns_per_tick);
 }
 
-void timer_set_periodic(ulong period_ticks, TimerCallback cb)
-{
-    _interval = period_ticks;
-    _callback = cb;
-    _deadline = mtime_read() + period_ticks;
-    mtimecmp_write_oneshot(_deadline);
-}
-
-void timer_stop()
-{
-    _callback = null;
-    _interval = 0;
-    compare_write(ulong.max);
-}
-
 // The compare matches only when the counter reaches it, so a deadline already passed moves just ahead of the counter.
 // A match after the write is left pending for the handler; retrying then would deliver it twice.
-void mtimecmp_write_oneshot(ulong deadline)
+void timer_compare_arm(ulong deadline)
 {
     if (deadline == ulong.max)
     {
@@ -90,17 +72,10 @@ void mtimecmp_write_oneshot(ulong deadline)
 // Writing the compare register is what clears the GIC's pending compare interrupt.
 void timer_compare_irq()
 {
+    import urt.driver.timer : timer_compare_fired;
+
     compare_write(ulong.max);
-    if (_interval)
-    {
-        immutable now = mtime_read();
-        _deadline += _interval;
-        if (_deadline <= now)
-            _deadline = now + _interval;
-        mtimecmp_write_oneshot(_deadline);
-    }
-    if (_callback !is null)
-        _callback();
+    timer_compare_fired();
 }
 
 
@@ -126,9 +101,6 @@ static if (!fixed_clock)
         return ah * m + al * (m >> 32) + ((al * cast(uint)m) >> 32);
     }
 }
-__gshared ulong _interval;
-__gshared ulong _deadline;
-__gshared TimerCallback _callback;
 
 ulong counter_read()
 {
@@ -166,56 +138,7 @@ ulong ticks_at(ulong ns)
 }
 
 
-unittest // the compare interrupt is delivered through the vector, with the interrupted frame intact
-{
-    import core.volatile : volatileLoad;
-    import urt.driver.mt7621.irq : irq_enable, irq_disable;
-
-    __gshared uint fires;
-    fires = 0;
-    static void tick() @nogc nothrow { ++fires; }
-
-    ubyte[256] canary;
-    foreach (i, ref b; canary)
-        b = cast(ubyte)((i * 0x9Eu) ^ 0xA5u);
-
-    immutable prior = irq_enable();
-    timer_set_periodic(mtime_freq_hz / 500, &tick);
-    immutable start = mtime_read();
-    while (volatileLoad(&fires) < 5 && mtime_read() - start < mtime_freq_hz / 5)
-    {}
-    timer_stop();
-    if (!prior)
-        irq_disable();
-
-    assert(volatileLoad(&fires) >= 5, "periodic compare interrupt not delivered");
-    foreach (i, b; canary)
-        assert(b == cast(ubyte)((i * 0x9Eu) ^ 0xA5u), "stack clobbered across the interrupt vector");
-}
-
-unittest // a deadline already passed still fires, so a late one-shot cannot be lost
-{
-    import core.volatile : volatileLoad;
-    import urt.driver.mt7621.irq : irq_enable, irq_disable;
-
-    __gshared uint fires;
-    fires = 0;
-    static void tick() @nogc nothrow { ++fires; }
-
-    immutable prior = irq_enable();
-    _interval = 0;
-    _callback = &tick;
-    mtimecmp_write_oneshot(mtime_read() - mtime_freq_hz / 1000);
-    immutable start = mtime_read();
-    while (volatileLoad(&fires) == 0 && mtime_read() - start < mtime_freq_hz / 50)
-    {}
-    timer_stop();
-    if (!prior)
-        irq_disable();
-    assert(volatileLoad(&fires) == 1, "a compare deadline in the past did not fire");
-}
-
-unittest // mtime runs at the measured clock, and a deadline arms the first counter value that reaches it
+unittest
 {
     import urt.driver.mt7621 : cpu_hz;
 

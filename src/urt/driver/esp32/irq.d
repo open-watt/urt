@@ -10,13 +10,9 @@ import urt.internal.sys.freertos : portMUX_TYPE, portMUX_FREE_VAL, vPortEnterCri
 nothrow @nogc:
 
 
-enum bool has_plic = false;
-enum bool has_nvic = false;
-enum bool has_clic = false;
 enum bool has_per_irq_control = false; // TODO: wire up esp_intr_alloc
 enum bool has_irq_priority = false;    // TODO: wire up esp_intr_alloc priority flags
 enum bool has_wait_for_interrupt = true;
-enum bool has_irq_diagnostics = false;
 
 // FreeRTOS critical sections are recursive (portENTER nests with a per-mux
 // counter), so the return value is not a meaningful "prior global IRQ" bit

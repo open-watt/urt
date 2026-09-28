@@ -1,20 +1,52 @@
 module urt.driver.rp2350.timer;
 
 import core.volatile;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_enable;
 
 @nogc nothrow:
 
-enum uint mtime_freq_hz = 1_000_000;  // TIMER0 runs at 1MHz (microsecond counter)
+enum uint mtime_freq_hz = 1_000_000;  // TIMER0 counts microseconds from the TICKS block
 enum bool has_mtime = true;
 enum bool has_rtc = true;
 enum bool has_mcycle = false;
-enum bool has_timer_compare = false;
+enum bool has_timer_compare = true;
 
-// RP2350 TIMER0: 64-bit free-running microsecond counter at 0x400B_0000
-// Always enabled, always 1MHz. Read TIMELR first (latches TIMEHR).
-private enum uint TIMER0_BASE = 0x400B_0000;
-private enum uint TIMEHR      = TIMER0_BASE + 0x08;  // Time read high (latched on TIMELR read)
-private enum uint TIMELR      = TIMER0_BASE + 0x0C;  // Time read low (triggers latch)
+void mtime_init()
+{
+    irq_handler_set(timer0_irq_0, &alarm_isr);
+    volatileStore(cast(uint*)TIMER_INTE, alarm0);
+    irq_line_enable(timer0_irq_0);
+}
+
+// The raw halves are re-read across a carry; the latched pair would be split by an interrupt that reads the time.
+ulong mtime_read()
+{
+    uint hi = void, lo = void;
+    do
+    {
+        hi = volatileLoad(cast(uint*)TIMER_TIMERAWH);
+        lo = volatileLoad(cast(uint*)TIMER_TIMERAWL);
+    }
+    while (hi != volatileLoad(cast(uint*)TIMER_TIMERAWH));
+    return (ulong(hi) << 32) | lo;
+}
+
+// ALARM0 matches only the counter's low word and disarms when it does, so the interrupt re-arms it
+// until the whole deadline is reached. A deadline already passed would wait out a wrap; force it.
+void timer_compare_arm(ulong deadline)
+{
+    auto guard = irq_critical();
+    _deadline = deadline;
+    if (deadline == ulong.max)
+    {
+        volatileStore(cast(uint*)TIMER_ARMED, alarm0);
+        volatileStore(cast(uint*)TIMER_INTF, 0);
+        return;
+    }
+    volatileStore(cast(uint*)TIMER_ALARM0, cast(uint)deadline);
+    if (mtime_read() >= deadline)
+        volatileStore(cast(uint*)TIMER_INTF, alarm0);
+}
 
 // POWMAN's always-on timer counts milliseconds and keeps running across a reset; it stops only
 // when the always-on domain loses power. Writes to POWMAN need the password in the top half.
@@ -56,57 +88,29 @@ ulong rtc_read()
     }
 }
 
-// SysTick registers (ARM standard, part of the System Control Block)
-private enum uint SYST_CSR = 0xE000_E010;
-private enum uint SYST_RVR = 0xE000_E014;
-private enum uint SYST_CVR = 0xE000_E018;
+private:
 
-private enum uint CSR_ENABLE    = 1 << 0;
-private enum uint CSR_TICKINT   = 1 << 1;
-private enum uint CSR_CLKSOURCE = 1 << 2;
+enum uint TIMER0_BASE    = 0x400B_0000;
+enum uint TIMER_ALARM0   = TIMER0_BASE + 0x10;
+enum uint TIMER_ARMED    = TIMER0_BASE + 0x20;
+enum uint TIMER_TIMERAWH = TIMER0_BASE + 0x24;
+enum uint TIMER_TIMERAWL = TIMER0_BASE + 0x28;
+enum uint TIMER_INTR     = TIMER0_BASE + 0x3C;
+enum uint TIMER_INTE     = TIMER0_BASE + 0x40;
+enum uint TIMER_INTF     = TIMER0_BASE + 0x44;
+enum uint alarm0         = 1 << 0;
+enum uint timer0_irq_0   = 0;
 
-alias TimerCallback = void function() @nogc nothrow;
+__gshared ulong _deadline = ulong.max;
 
-private __gshared TimerCallback tick_callback;
-
-void timer_init(uint reload_value)
+void alarm_isr(uint)
 {
-    volatileStore(cast(uint*)(cast(size_t)SYST_RVR), reload_value & 0x00FFFFFF);
-    volatileStore(cast(uint*)(cast(size_t)SYST_CVR), 0);
-    volatileStore(cast(uint*)(cast(size_t)SYST_CSR), CSR_ENABLE | CSR_TICKINT | CSR_CLKSOURCE);
-}
+    import urt.driver.timer : timer_compare_fired;
 
-void timer_hw_init()
-{
-    // sys_init configures TIMER0 before runtime initialization.
-}
-
-// Read 64-bit monotonic microsecond counter.
-// Must read TIMELR first -- this latches TIMEHR atomically.
-ulong mtime_read()
-{
-    uint lo = volatileLoad(cast(uint*)(cast(size_t)TIMELR));
-    uint hi = volatileLoad(cast(uint*)(cast(size_t)TIMEHR));
-    return (cast(ulong)hi << 32) | lo;
-}
-
-void timer_set_periodic(ulong period_ticks, TimerCallback cb)
-{
-    tick_callback = cb;
-    // Use SysTick for periodic interrupts.
-    // period_ticks is in timer ticks (microseconds at 1MHz).
-    // SysTick runs from processor clock -- assume 150MHz after PLL init.
-    // Convert: systick_reload = period_us * 150
-    ulong reload = period_ticks * 150;
-    if (reload > 0x00FF_FFFF)
-        reload = 0x00FF_FFFF;  // SysTick is 24-bit
-    volatileStore(cast(uint*)(cast(size_t)SYST_RVR), cast(uint)reload);
-    volatileStore(cast(uint*)(cast(size_t)SYST_CVR), 0);
-    volatileStore(cast(uint*)(cast(size_t)SYST_CSR), CSR_ENABLE | CSR_TICKINT | CSR_CLKSOURCE);
-}
-
-extern(C) void SysTick_Handler() @nogc nothrow
-{
-    if (tick_callback !is null)
-        tick_callback();
+    volatileStore(cast(uint*)TIMER_INTF, 0);
+    volatileStore(cast(uint*)TIMER_INTR, alarm0);
+    if (mtime_read() >= _deadline)
+        timer_compare_fired();
+    else
+        timer_compare_arm(_deadline);
 }

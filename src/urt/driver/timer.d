@@ -3,7 +3,7 @@
 // A backend with a hardware compare (has_timer_compare) exports timer_compare_arm(deadline), which raises the
 // timer interrupt once mtime reaches the deadline, at once if it already has, and disarms on ulong.max. Its
 // interrupt calls timer_compare_fired(). This module schedules the periodic tick, the one-shot and wakes on that compare.
-// A backend without one provides its own timer_set_periodic.
+// A backend without one may provide its own timer_set_periodic.
 module urt.driver.timer;
 
 import urt.driver.irq : has_wait_for_interrupt, irq_critical, irq_global_enable, irq_global_set, irq_wait;
@@ -39,6 +39,8 @@ nothrow @nogc:
 
 alias TimerCallback = void function() nothrow @nogc;
 
+enum bool has_periodic_timer = has_timer_compare || __traits(compiles, timer_set_periodic(ulong.init, TimerCallback.init));
+
 // ====================================================================
 // Driver API
 // ====================================================================
@@ -46,33 +48,32 @@ alias TimerCallback = void function() nothrow @nogc;
 // Periodic tick
 
 // Call cb every interval, from interrupt context. A late tick keeps the phase; ticks missed outright are dropped.
-void periodic_set(Duration interval, TimerCallback cb)
+static if (has_periodic_timer)
 {
-    static if (has_timer_compare)
+    void periodic_set(Duration interval, TimerCallback cb)
     {
-        auto guard = irq_critical();
-        _schedule.period = interval.ticks;
-        _schedule.tick = cb;
-        _schedule.next_tick = mtime_read() + _schedule.period;
-        rearm();
+        static if (has_timer_compare)
+        {
+            auto guard = irq_critical();
+            _schedule.period = interval.ticks;
+            _schedule.tick = cb;
+            _schedule.next_tick = mtime_read() + _schedule.period;
+            rearm();
+        }
+        else
+            timer_set_periodic(interval.ticks, cb);
     }
-    else static if (has_mtime)
-        timer_set_periodic(interval.ticks, cb);
-    else
-        assert(false, "TODO: periodic_set not available");
 }
 
-void periodic_stop()
+static if (has_timer_compare)
 {
-    static if (has_timer_compare)
+    void periodic_stop()
     {
         auto guard = irq_critical();
         _schedule.period = 0;
         _schedule.tick = null;
         rearm();
     }
-    else
-        assert(false, "TODO: periodic_stop not available");
 }
 
 // Waiting
@@ -165,6 +166,7 @@ unittest
     static assert(mtime_freq_hz > 0 || !has_mtime, "has_mtime requires a known mtime frequency");
     static assert(!has_mcycle || has_mtime, "mcycle without mtime makes no sense in this codebase");
     static assert(!has_timer_compare || has_mtime, "a compare needs an mtime to compare against");
+    static assert(!has_periodic_timer || has_mtime);
 
     static if (has_mtime)
     {{

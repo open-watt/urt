@@ -65,7 +65,7 @@ extern(C) void sys_init()
 
     __register_frame_info(&__eh_frame_start, &__eh_frame_object);
     ticks_init();
-    timer_init(clk_sys_hz / 20 - 1);
+    mtime_init();
 
     uart0_hw_puts("RP2350: ready\r\n");
 }

@@ -38,19 +38,11 @@ bool irq_enable()
     return (primask & 1) == 0;
 }
 
-// Any interrupt serviced since the last wait ends this one at once, so a wake that lands between
-// a waiter's check and here is never slept through. Masked, a pending interrupt still ends wfi.
+// A pending interrupt ends wfi even under PRIMASK.
 void wait_for_interrupt()
 {
-    bool was_enabled = irq_disable();
-    if (!_woke)
-    {
-        asm @nogc nothrow { "dsb sy" ::: "memory"; }
-        asm @nogc nothrow { "wfi" ::: "memory"; }
-    }
-    _woke = false;
-    if (was_enabled)
-        irq_enable();
+    asm @nogc nothrow { "dsb sy" ::: "memory"; }
+    asm @nogc nothrow { "wfi" ::: "memory"; }
 }
 
 bool irq_set_enable(uint irq)
@@ -97,7 +89,6 @@ extern(C) void _nvic_dispatch()
     uint ipsr;
     asm @nogc nothrow { "mrs %0, ipsr" : "=r" (ipsr); }
     irq_dispatch(ipsr - 16);
-    _woke = true;
 }
 
 
@@ -108,5 +99,3 @@ enum size_t NVIC_ICER0 = 0xE000E180;
 enum size_t NVIC_ISPR0 = 0xE000E200;
 enum size_t NVIC_ICPR0 = 0xE000E280;
 enum size_t NVIC_IPR0  = 0xE000E400;
-
-__gshared bool _woke;

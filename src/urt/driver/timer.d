@@ -78,17 +78,20 @@ static if (has_timer_compare)
 
 // Waiting
 
-// Poll done() once per pass until it holds (true) or mtime reaches deadline (false), halted between passes
-// where the platform can wake on a deadline and spinning otherwise. ulong.max waits without a deadline.
+// Poll done() once per pass until it holds (true) or mtime reaches deadline (false). done() runs with interrupts
+// masked. A pass halts where the platform can wake on the deadline and it is further off than spin_margin, and
+// spins otherwise. ulong.max waits without a deadline.
 static if (has_mtime)
 {
     bool timer_wait(alias done)(ulong deadline)
     {
         static if (has_timer_compare && has_wait_for_interrupt)
-            return wait_until!(done, mtime_read, timer_wake_at, irq_wait)(deadline);
+            return wait_until!(done, mtime_read, timer_wake_at, irq_wait, irq_critical)(deadline, spin_margin);
         else
-            return wait_until!(done, mtime_read, (ulong) {}, () {})(deadline);
+            return wait_until!(done, mtime_read, (ulong) {}, () {}, no_guard)(deadline, ulong.max);
     }
+
+    enum ulong spin_margin = mtime_freq_hz / 50_000;
 }
 
 // One-shot
@@ -262,11 +265,22 @@ unittest
         s = Schedule();
         s.wake = 50;
         clock = 0;
-        assert(!wait_until!(never, now, wake_at, wait)(100) && clock == 100, "an earlier wake cut the wait short");
+        assert(!wait_until!(never, now, wake_at, wait, no_guard)(100, 0) && clock == 100, "an earlier wake cut the wait short");
 
         static void step() { ++clock; }
         clock = polls = 0;
-        assert(wait_until!(third, now, wake_at, step)(100) && polls == 3 && clock == 2, "done was polled past its success");
+        assert(wait_until!(third, now, wake_at, step, no_guard)(100, 0) && polls == 3 && clock == 2, "done was polled past its success");
+
+        // DMD's 32-bit PIC codegen clobbers the address it increments through in `return clock++`.
+        static ulong ticking()
+        {
+            immutable t = clock;
+            ++clock;
+            return t;
+        }
+        static void no_halt() { assert(false, "halted within the spin margin"); }
+        clock = 0;
+        assert(!wait_until!(never, ticking, wake_at, no_halt, no_guard)(10, 20) && clock == 11);
     }
 
     static if (has_timer_compare)
@@ -315,6 +329,16 @@ unittest
             wait(ms);
             assert(volatileLoad(&ticks) == fired, "the periodic tick fired after periodic_stop");
         }
+
+        static if (has_wait_for_interrupt)
+        {{
+            // The wait loop's check and halt are atomic only if a halt with interrupts masked ends on a pending one.
+            auto guard = irq_critical();
+            immutable start = mtime_read();
+            timer_wake_at(start + ms);
+            irq_wait();
+            assert(mtime_read() - start < 20 * ms, "a masked halt did not end on the pending wake");
+        }}
 
         {
             shots = 0;
@@ -392,18 +416,28 @@ nothrow @nogc:
     }
 }
 
-// An earlier wake empties the slot when it fires, so the wake is re-armed before every halt.
-bool wait_until(alias done, alias now, alias wake_at, alias halt)(ulong deadline)
+// Each pass checks and halts with interrupts masked: one landing after the check stays pending and ends the halt, then
+// runs as the pass unmasks. An earlier wake empties the slot when it fires, so the wake is re-armed every pass.
+bool wait_until(alias done, alias now, alias wake_at, alias halt, alias critical)(ulong deadline, ulong margin)
 {
-    while (!done())
+    for (;;)
     {
-        if (now() >= deadline)
+        auto guard = critical();
+        if (done())
+            return true;
+        immutable t = now();
+        if (t >= deadline)
             return false;
-        wake_at(deadline);
-        halt();
+        if (deadline - t > margin)
+        {
+            wake_at(deadline);
+            halt();
+        }
     }
-    return true;
 }
+
+struct NoGuard {}
+NoGuard no_guard() => NoGuard();
 
 static if (has_timer_compare)
 {

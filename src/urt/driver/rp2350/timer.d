@@ -8,8 +8,7 @@ enum uint mtime_freq_hz = 1_000_000;  // TIMER0 runs at 1MHz (microsecond counte
 enum bool has_mtime = true;
 enum bool has_rtc = true;
 enum bool has_mcycle = false;
-enum bool has_timer_stop = false;
-enum bool has_oneshot_timer = false;
+enum bool has_timer_compare = false;
 
 // RP2350 TIMER0: 64-bit free-running microsecond counter at 0x400B_0000
 // Always enabled, always 1MHz. Read TIMELR first (latches TIMEHR).

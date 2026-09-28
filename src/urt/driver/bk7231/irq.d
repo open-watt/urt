@@ -6,17 +6,11 @@ module urt.driver.bk7231.irq;
 
 import core.volatile;
 
-import urt.driver.irq : IrqHandler;
-
 @nogc nothrow:
 
-enum bool has_plic = false;
-enum bool has_nvic = false;
-enum bool has_clic = false;
 enum bool has_per_irq_control = true;
 enum bool has_irq_priority = false;
 enum bool has_wait_for_interrupt = false;
-enum bool has_irq_diagnostics = false;
 enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 enum uint irq_max = 32;
@@ -63,22 +57,15 @@ bool irq_clear_enable(uint irq_num)
 
 // The Beken ICU has no vector table; the vendor intc_irq() decodes the status
 // register and calls handlers registered through intc_service_register, whose
-// ISR type takes no argument. Each line gets a generated trampoline that
-// recovers its own number and dispatches to the installed IrqHandler.
-IrqHandler irq_set_handler(uint irq, IrqHandler handler)
+// ISR type takes no argument. A line is registered on its first handler, so
+// lines the vendor stack owns are never taken from it.
+void irq_hw_attach(uint irq)
 {
-    if (irq >= irq_max)
-        return null;
-
-    IrqHandler prev = _handlers[irq];
-    _handlers[irq] = handler;
-
-    if (handler && !_registered[irq])
+    if (!_registered[irq])
     {
         intc_service_register(cast(ubyte)irq, irq_priority[irq], cast(VendorIsr)_trampolines[irq]);
         _registered[irq] = true;
     }
-    return prev;
 }
 
 
@@ -93,14 +80,12 @@ immutable ubyte[irq_max] irq_priority = [
 alias VendorIsr = extern(C) void function() nothrow @nogc;
 extern(C) void intc_service_register(ubyte int_num, ubyte int_pri, VendorIsr isr);
 
-__gshared IrqHandler[irq_max] _handlers;
 __gshared bool[irq_max] _registered;
 
 void irq_trampoline(uint irq)() nothrow @nogc
 {
-    IrqHandler h = _handlers[irq];
-    if (h)
-        h(irq);
+    import urt.driver.irq : irq_dispatch;
+    irq_dispatch(irq);
 }
 
 __gshared immutable typeof(&irq_trampoline!0)[irq_max] _trampolines = () {

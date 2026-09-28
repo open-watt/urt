@@ -268,18 +268,16 @@ unittest
     atomicStore!(MemoryOrder.release)(operation._state, I2cOperationState.pending);
     assert(!i2c_complete(operation, I2cOperationState.cancelled, I2cError.none, I2cCallbackContext.thread));
     assert(operation.state == I2cOperationState.cancelled);
-}
 
-
-// A backend nominates a bus it accepts as `test_i2c_config` for this to run on its hardware.
-static if (num_i2c != 0 && __traits(compiles, test_i2c_config))
-unittest // a controller has one owner at a time
-{
-    I2cBus a, b;
-    assert(i2c_open(a, 0, test_i2c_config));
-    assert(!i2c_open(b, 0, test_i2c_config) && !b.is_open, "a second handle opened an owned controller");
-    i2c_close(a);
-    assert(i2c_open(b, 0, test_i2c_config), "the controller did not come back after close");
-    i2c_close(b);
-    assert(_open_ports == 0);
+    // A backend nominates a bus it accepts as `test_i2c_config` for this to run on its hardware.
+    static if (num_i2c != 0 && __traits(compiles, test_i2c_config))
+    {
+        I2cBus a, b;
+        assert(i2c_open(a, 0, test_i2c_config));
+        assert(!i2c_open(b, 0, test_i2c_config) && !b.is_open, "a second handle opened an owned controller");
+        i2c_close(a);
+        assert(i2c_open(b, 0, test_i2c_config), "the controller did not come back after close");
+        i2c_close(b);
+        assert(_open_ports == 0);
+    }
 }

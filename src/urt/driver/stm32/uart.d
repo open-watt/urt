@@ -3,7 +3,8 @@
 module urt.driver.stm32.uart;
 
 import urt.driver.stm32 : clock_enable, pclk1_hz, pclk2_hz, rcc_apb1enr, rcc_apb2enr, reg_read, reg_write;
-import urt.driver.stm32.irq : irq_clear_enable, irq_disable, irq_enable, irq_set_enable, irq_set_handler;
+import urt.driver.irq : irq_handler_set;
+import urt.driver.stm32.irq : irq_clear_enable, irq_disable, irq_enable, irq_set_enable;
 import urt.driver.uart : Parity, StopBits, UartConfig;
 import urt.mem.ring : RingBuffer;
 
@@ -62,7 +63,7 @@ bool uart_hw_open(uint id, UartConfig cfg)
         return false;
     rx_ring[id].purge();
     tx_ring[id].purge();
-    irq_set_handler(uart_irq[id], &uart_isr);
+    irq_handler_set(uart_irq[id], &uart_isr);
     irq_set_enable(uart_irq[id]);
     reg_write(uart_base[id] + cr1, reg_read(uart_base[id] + cr1) | cr1_rxneie);
     return true;

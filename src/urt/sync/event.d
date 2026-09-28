@@ -222,14 +222,14 @@ nothrow @nogc:
         {
             import urt.driver.timer;
             import urt.driver.irq;
-            static if (has_mtime && has_wait_for_interrupt)
+            static if (has_timer_compare && has_wait_for_interrupt)
             {
                 ulong deadline = mtime_read() + timeout.ticks;
                 while (!try_wait())
                 {
                     if (mtime_read() >= deadline)
                         return false;
-                    mtimecmp_write_oneshot(deadline);
+                    timer_wake_at(deadline);
                     irq_wait();
                 }
                 return true;

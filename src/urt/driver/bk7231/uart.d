@@ -16,7 +16,7 @@ import core.volatile;
 import urt.driver.uart : FlowControl, Parity, StopBits, Uart, UartCallbackContext,
     UartConfig, UartRxCallback;
 import urt.driver.gpio : Pull, gpio_set_function;
-import urt.driver.irq : irq_disable, irq_enable, irq_set_enable, irq_set_handler;
+import urt.driver.irq : irq_disable, irq_enable, irq_handler_set, irq_set_enable;
 import urt.mem.ring : RingBuffer;
 
 nothrow @nogc:
@@ -289,7 +289,7 @@ bool uart_hw_open(uint id, UartConfig cfg, UartRxCallback rx_cb)
 
     _rx_cb[id] = rx_cb;
 
-    irq_set_handler(uart_irq[id], &uart_isr);
+    irq_handler_set(uart_irq[id], &uart_isr);
     irq_set_enable(uart_irq[id]);
     reg_write(uart_bases[id] + REG_INT_ENABLE,
               rx_cb ? (INT_RX_FIFO_NEED_READ | INT_RX_STOP_END | INT_ALL_ERRORS) : 0);

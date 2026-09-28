@@ -54,8 +54,7 @@ enum uint mtime_freq_hz = 1_000_000;
 enum bool has_mtime = true;
 enum bool has_rtc = true;
 enum bool has_mcycle = true;
-enum bool has_timer_stop = true;
-enum bool has_oneshot_timer = true;
+enum bool has_timer_compare = true;
 
 // ================================================================
 // Time reading
@@ -80,90 +79,29 @@ ulong mcycle_read()
 }
 
 // ================================================================
-// Timer interrupt (periodic tick)
+// Compare (mtimecmp)
 // ================================================================
 
-private __gshared ulong tick_interval = 0;
-private __gshared void function() @nogc nothrow tick_callback = null;
-
-/// Set up a periodic timer interrupt.
-/// interval_us: microseconds between ticks
-/// callback: called from _timer_irq_handler (keep it short!)
-void timer_set_periodic(ulong period_ticks, void function() @nogc nothrow callback)
-{
-    import urt.driver.bl808.irq : IrqClass, enable_irq;
-
-    tick_interval = period_ticks;
-    tick_callback = callback;
-
-    ulong now = mtime_read();
-    mtimecmp_write(now + tick_interval);
-    enable_irq(IrqClass.timer);
-}
-
-/// Stop the periodic timer
-void timer_stop()
-{
-    import urt.driver.bl808.irq : IrqClass, disable_irq;
-
-    disable_irq(IrqClass.timer);
-    mtimecmp_write(ulong.max);
-    tick_callback = null;
-}
-
-/// Called from start.S _trap_mtimer.
-/// Sets next deadline and invokes the user callback.
-extern(C) void _timer_irq_handler()
-{
-    if (tick_interval > 0)
-    {
-        // Advance deadline relative to current compare value
-        // (not current time - avoids drift)
-        ulong cmp = mtimecmp_read();
-        mtimecmp_write(cmp + tick_interval);
-    }
-
-    if (tick_callback !is null)
-        tick_callback();
-}
-
-// ================================================================
-// MTIMECMP register access
-//
-// Split into two 32-bit writes. Write high word to max first
-// to prevent a spurious interrupt when the low word is updated.
-// ================================================================
-
-/// Set mtimecmp for a one-shot wakeup (used by sleep).
-/// The periodic timer handler will re-arm on the next tick if active.
-void mtimecmp_write_oneshot(ulong value)
-{
-    mtimecmp_write(value);
-}
-
-private void mtimecmp_write(ulong value)
+// The compare is level-sensitive, so a deadline already passed raises at once.
+void timer_compare_arm(ulong deadline)
 {
     auto lo = cast(uint*)MTIMECMPL0;
     auto hi = cast(uint*)MTIMECMPH0;
 
     // Write 0xFFFFFFFF to high first to prevent spurious fire
     volatileStore(hi, 0xFFFF_FFFF);
-    volatileStore(lo, cast(uint)(value & 0xFFFF_FFFF));
-    volatileStore(hi, cast(uint)(value >> 32));
+    volatileStore(lo, cast(uint)(deadline & 0xFFFF_FFFF));
+    volatileStore(hi, cast(uint)(deadline >> 32));
+
+    enum ulong mie_mtie = 1 << 7;
+    asm nothrow @nogc { "csrs mie, %0" :: "r" (mie_mtie); }
 }
 
-private ulong mtimecmp_read()
+// Called from start.S _trap_mtimer.
+extern(C) void _timer_irq_handler()
 {
-    auto lo = cast(uint*)MTIMECMPL0;
-    auto hi = cast(uint*)MTIMECMPH0;
-
-    // Read high-low-high to handle rollover
-    uint h1 = volatileLoad(hi);
-    uint l  = volatileLoad(lo);
-    uint h2 = volatileLoad(hi);
-    if (h1 != h2)
-        l = volatileLoad(lo);
-    return (cast(ulong)h2 << 32) | l;
+    import urt.driver.timer : timer_compare_fired;
+    timer_compare_fired();
 }
 
 // ================================================================

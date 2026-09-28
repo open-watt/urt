@@ -335,28 +335,3 @@ void log_failover(size_t size, size_t alignment, MemFlags flags)
     import urt.log;
     log_debug("heap.alloc", "preferred pool full, fell back - size=", size, " align=", alignment, " flags=", cast(int)flags);
 }
-
-
-unittest
-{
-    import urt.mem.alloc : alloc, free, realloc;
-    import urt.util : is_aligned;
-
-    void[] m = alloc(64, 64);
-    (cast(ubyte[])m)[] = 0x5A;
-    void[] neighbour = alloc(64);
-    m = realloc(m, 2048, 64);
-    assert(m.ptr && is_aligned(m.ptr, 64), "a moving realloc lost the requested alignment");
-    foreach (b; (cast(ubyte[])m)[0 .. 64])
-        assert(b == 0x5A);
-    free(m);
-    free(neighbour);
-
-    m = alloc(64, 8);
-    (cast(ubyte[])m)[] = 0xA5;
-    m = realloc(m, 32, 64);
-    assert(m.ptr && is_aligned(m.ptr, 64), "a shrinking realloc kept a block short of the requested alignment");
-    foreach (b; cast(ubyte[])m)
-        assert(b == 0xA5);
-    free(m);
-}

@@ -1,6 +1,6 @@
 ENTRY(Reset_Handler)
 
-EXTERN(_write _read _close _lseek _fstat _isatty _sbrk _exit _kill _getpid)
+EXTERN(_write _read _close _lseek _fstat _isatty _exit _kill _getpid)
 EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
@@ -122,7 +122,7 @@ SECTIONS
         _persist_end = .;
     } > SRAM
 
-    _stack_size = 4K;
+    _stack_size = 32K;
 
     __heap_start = _persist_end;
     __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - _stack_size;

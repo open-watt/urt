@@ -462,17 +462,9 @@ MemFlags get_flags(void* ptr) pure
 
 version (Espressif)
     public import urt.driver.esp32.alloc;
-else version (Bouffalo)
-    public import urt.driver.baremetal.heap;
-else version (RP2350)
-    public import urt.driver.rp2350.alloc;
-else version (MT7621)
-    public import urt.driver.mt7621.alloc;
-else version (BK7231N)
+else version (Beken)
     public import urt.driver.bk7231.alloc;
-else version (BK7231T)
-    public import urt.driver.bk7231.alloc;
-else version (STM32)
+else version (BareMetal)
     public import urt.driver.baremetal.heap;
 else version (Windows)
     public import urt.driver.windows.alloc;

@@ -122,7 +122,7 @@ SECTIONS
         _got_end = .;
     } > SRAM AT > FLASH
 
-    /* No DTCM: @fast_data is ordinary SRAM here and the fast heap is empty. */
+    /* No DTCM: @fast_data is ordinary SRAM here, and SRAM is the only heap pool. */
     .dtcm_data (NOLOAD) : ALIGN(8)
     {
         _dtcm_data_start = .;
@@ -130,8 +130,6 @@ SECTIONS
         . = ALIGN(4);
         _dtcm_data_end = .;
     } > SRAM
-    _fast_heap_start = _dtcm_data_end;
-    _fast_heap_end   = _dtcm_data_end;
 
     .tdata : ALIGN(4)
     {

@@ -7,9 +7,6 @@ enum size_t cache_line = 32;
 
 enum uint kseg1_bit = 0x2000_0000;
 
-void* uncached_alias(void* p)
-    => cast(void*)(cast(size_t)p | kseg1_bit);
-
 void* cached_alias(void* p)
     => cast(void*)(cast(size_t)p & ~kseg1_bit);
 

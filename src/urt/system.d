@@ -5,10 +5,6 @@ import urt.processor;
 import urt.string.ascii : is_numeric;
 import urt.time;
 
-version (Bouffalo)     version = TlsfHeap;
-else version (BK7231N) version = TlsfHeap;
-else version (STM32)   version = TlsfHeap;
-
 version (Espressif)
 {
     enum uint MALLOC_CAP_8BIT      = 1 << 2;
@@ -116,7 +112,13 @@ SystemInfo get_sysinfo()
     else enum hosted = false;
 
     SystemInfo r;
-    r.os_name = Platform;
+    version (MT7621)
+    {
+        import urt.driver.mt7621 : chip_id;
+        r.os_name = chip_id();
+    }
+    else
+        r.os_name = Platform;
     r.processor = ProcessorName;
     version (Windows)
     {
@@ -191,34 +193,7 @@ SystemInfo get_sysinfo()
         }
 
     }
-    else version (BK7231T)
-    {
-        import urt.driver.bk7231.alloc : sram_heap_stats;
-
-        size_t total, used, peak, largest;
-        sram_heap_stats(total, used, peak, largest);
-        r.pools[0].name = "SRAM";
-        r.pools[0].total = total;
-        r.pools[0].used = used;
-        r.pools[0].peak_used = peak;
-        r.pools[0].largest_free = largest;
-    }
-    else version (MT7621)
-    {
-        import urt.driver.mt7621 : chip_id;
-        r.os_name = chip_id();
-
-        import urt.driver.mt7621.alloc : heap_stats;
-
-        size_t total, used, peak, largest;
-        heap_stats(total, used, peak, largest);
-        r.pools[0].name = "RAM";
-        r.pools[0].total = total;
-        r.pools[0].used = used;
-        r.pools[0].peak_used = peak;
-        r.pools[0].largest_free = largest;
-    }
-    else version (TlsfHeap)
+    else version (BareMetal)
     {
         import urt.driver.baremetal.heap : num_pools, query_pool_stats, PoolStats;
         import urt.string : c_string;

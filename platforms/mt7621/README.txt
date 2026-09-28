@@ -52,10 +52,10 @@ Build
 
 Outputs (in bin/mt7621_rb760igs_release/): openwatt, the ELF with symbols, and
 kernel, the same ELF stripped. The board sets the RAM size the linker sizes the
-heap and stack from, and CPU_HZ, the clock RouterBOOT runs it at: mtime is then
-the GIC counter itself, and boot reports if the PLL disagrees. A build without
-CPU_HZ (urt's own unittest image) reads the PLL at boot and keeps mtime in
-nanoseconds.
+heap, the dma window and the stack from, and CPU_HZ, the clock RouterBOOT runs it
+at: mtime is then the GIC counter itself, and boot reports if the PLL disagrees.
+A build without CPU_HZ (urt's own unittest image) reads the PLL at boot and keeps
+mtime in nanoseconds.
 
 Boot (MikroTik RouterBOOT)
 --------------------------

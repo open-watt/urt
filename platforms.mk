@@ -31,7 +31,7 @@
 #   BAREMETAL_NM         - cross-nm path
 #   BAREMETAL_CFLAGS     - cross-gcc cflags (mcpu/march/mabi/mfpu)
 #   RAM_IMAGE_PACKER     - generic raw/deflate RAM-image post-link tool
-#   BAREMETAL_LIBC/M/GCC - resolved newlib/picolibc/libgcc archive paths
+#   BAREMETAL_LIBC/M/GCC - resolved picolibc/libgcc archive paths
 #   ESPRESSIF_PATH, ESPRESSIF_XTENSA_BIN, ESPRESSIF_RISCV32_BIN
 #   XTENSA_TWO_STAGE, ESPRESSIF_LLC, XTENSA_MATTR
 #
@@ -164,9 +164,7 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     PROCESSOR := arm968e-s
     # ARMv5TE silently rounds unaligned halfword stores down.
     STRICT_ALIGN := 1
-    ifeq ($(PLATFORM),bk7231n)
-        TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
-    endif
+    TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
     OS = baremetal
     RAM_IMAGE ?= raw
 else ifeq ($(PLATFORM),rp2350)
@@ -554,6 +552,8 @@ ifeq ($(PLATFORM),bl618)
 endif
 ifeq ($(PLATFORM),rp2350)
     DFLAGS := $(DFLAGS) -d-version=RP2350 -d-version=CRuntime_Picolibc
+    # SRAM is 520 KB; urt.driver.rp2350.heap sizes the TLSF control block to match.
+    TLSF_DEFINES := -DTLSF_FL_INDEX_MAX=20
 endif
 ifeq ($(PLATFORM),mt7621)
     DFLAGS := $(DFLAGS) -d-version=MT7621 -d-version=CRuntime_Picolibc
@@ -871,11 +871,16 @@ ifeq ($(COMPILER),ldc)
           BAREMETAL_CFLAGS := -march=$(MARCH) -mabi=$(MABI)
         endif
         BAREMETAL_LIBGCC ?= $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-libgcc-file-name)
-        # picolibc/newlib via --specs=picolibc.specs first, then plain gcc, then multilib fallback
+        # picolibc and nothing else: urt's C bindings follow its ABI (CRuntime_Picolibc). Debian makes it
+        # the sysroot; Ubuntu keeps it outside, where --print-file-name finds newlib instead.
         PICOLIBC_MULTIDIR := $(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-multi-directory 2>/dev/null)
         ifndef BAREMETAL_LIBC
-        BAREMETAL_LIBC   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libc.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libc.a))
-        BAREMETAL_LIBM   := $(or $(filter /%,$(shell $(BAREMETAL_GCC) --specs=picolibc.specs $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(filter /%,$(shell $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS) --print-file-name=libm.a 2>/dev/null)),$(wildcard /usr/lib/picolibc/riscv64-unknown-elf/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        PICOLIBC_ROOT    := $(patsubst %/include/picolibc.h,%,$(firstword $(wildcard $(addsuffix /include/picolibc.h,/usr/lib/picolibc/$(BAREMETAL_GCC:-gcc=) $(abspath $(dir $(filter /%,$(shell $(BAREMETAL_GCC) --print-file-name=picolibc.specs 2>/dev/null)))..)))))
+        BAREMETAL_LIBC   := $(if $(PICOLIBC_ROOT),$(wildcard $(PICOLIBC_ROOT)/lib/$(PICOLIBC_MULTIDIR)/libc.a))
+        BAREMETAL_LIBM   := $(if $(PICOLIBC_ROOT),$(wildcard $(PICOLIBC_ROOT)/lib/$(PICOLIBC_MULTIDIR)/libm.a))
+        ifeq ($(BAREMETAL_LIBC),)
+          $(error No picolibc for $(BAREMETAL_GCC) $(BAREMETAL_CFLAGS); install picolibc, or set BAREMETAL_LIBC and BAREMETAL_LIBM)
+        endif
         endif
         # Vendor C deps (tlsf, mbedtls shim) include hosted headers (assert.h,
         # string.h). A bare cross-gcc (CI's gcc-<arch>) only finds those via

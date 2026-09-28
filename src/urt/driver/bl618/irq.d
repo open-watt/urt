@@ -16,6 +16,8 @@ module urt.driver.bl618.irq;
 
 import core.volatile;
 
+public import urt.driver.riscv.csr : irq_disable, irq_enable, wait_for_interrupt;
+
 @nogc nothrow:
 
 
@@ -42,29 +44,7 @@ version (BL618)
     enum uint[2] test_irq_lines = [16, 17];
 
 
-// ====================================================================
-// Global IRQ delivery (mstatus.MIE)
-// ====================================================================
-
-bool irq_disable()
-{
-    uint prev;
-    asm @nogc nothrow { "csrrci %0, mstatus, 0x8" : "=r" (prev); }
-    return (prev & 0x8) != 0;
-}
-
-bool irq_enable()
-{
-    uint prev;
-    asm @nogc nothrow { "csrrsi %0, mstatus, 0x8" : "=r" (prev); }
-    return (prev & 0x8) != 0;
-}
-
-void wait_for_interrupt()
-{
-    asm @nogc nothrow { "wfi"; }
-}
-
+package(urt.driver):
 
 // ====================================================================
 // Per-IRQ control

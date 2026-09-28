@@ -3,8 +3,7 @@
 module urt.driver.stm32.uart;
 
 import urt.driver.stm32 : clock_enable, pclk1_hz, pclk2_hz, rcc_apb1enr, rcc_apb2enr, reg_read, reg_write;
-import urt.driver.irq : irq_handler_set;
-import urt.driver.stm32.irq : irq_clear_enable, irq_disable, irq_enable, irq_set_enable;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_line_enable;
 import urt.driver.uart : Parity, StopBits, UartConfig;
 import urt.mem.ring : RingBuffer;
 
@@ -64,14 +63,14 @@ bool uart_hw_open(uint id, UartConfig cfg)
     rx_ring[id].purge();
     tx_ring[id].purge();
     irq_handler_set(uart_irq[id], &uart_isr);
-    irq_set_enable(uart_irq[id]);
+    irq_line_enable(uart_irq[id]);
     reg_write(uart_base[id] + cr1, reg_read(uart_base[id] + cr1) | cr1_rxneie);
     return true;
 }
 
 void uart_hw_close(uint id)
 {
-    irq_clear_enable(uart_irq[id]);
+    irq_line_disable(uart_irq[id]);
     reg_write(uart_base[id] + cr1, 0);
     rx_ring[id].purge();
     tx_ring[id].purge();
@@ -79,11 +78,8 @@ void uart_hw_close(uint id)
 
 ptrdiff_t uart_hw_read(uint id, void[] buffer)
 {
-    bool was_enabled = irq_disable();
-    size_t n = rx_ring[id].read(buffer);
-    if (was_enabled)
-        irq_enable();
-    return n;
+    auto guard = irq_critical();
+    return rx_ring[id].read(buffer);
 }
 
 // Blocks while the ring is full; the console treats a short write as sent.
@@ -92,44 +88,33 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     size_t total = 0;
     while (total < data.length)
     {
-        bool was_enabled = irq_disable();
-        size_t n = tx_ring[id].write(data[total .. $]);
-        total += n;
+        auto guard = irq_critical();
+        total += tx_ring[id].write(data[total .. $]);
         tx_fill(id);
-        if (was_enabled)
-            irq_enable();
     }
     return total;
 }
 
 ptrdiff_t uart_hw_tx_pending(uint id)
 {
-    bool was_enabled = irq_disable();
-    size_t n = tx_ring[id].pending;
-    if (was_enabled)
-        irq_enable();
-    return n;
+    auto guard = irq_critical();
+    return tx_ring[id].pending;
 }
 
 void uart_hw_poll(uint id) {}
 
 bool uart_hw_check_errors(uint id)
 {
-    bool was_enabled = irq_disable();
+    auto guard = irq_critical();
     bool errors = _errors[id];
     _errors[id] = false;
-    if (was_enabled)
-        irq_enable();
     return errors;
 }
 
 ptrdiff_t uart_hw_rx_pending(uint id)
 {
-    bool was_enabled = irq_disable();
-    size_t n = rx_ring[id].pending;
-    if (was_enabled)
-        irq_enable();
-    return n;
+    auto guard = irq_critical();
+    return rx_ring[id].pending;
 }
 
 ptrdiff_t uart_hw_flush(uint id)
@@ -151,7 +136,7 @@ void uart0_hw_puts(const(char)[] s)
     size_t i = 0;
     while (i < s.length)
     {
-        bool was_enabled = irq_disable();
+        auto guard = irq_critical();
         if (reg_read(base + sr) & st_txe)
         {
             if (!tx_ring[console_uart].empty)
@@ -159,8 +144,6 @@ void uart0_hw_puts(const(char)[] s)
             else
                 reg_write(base + tdr, s[i++]);
         }
-        if (was_enabled)
-            irq_enable();
     }
 }
 

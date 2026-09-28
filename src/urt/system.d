@@ -60,20 +60,9 @@ void sleep(Duration duration)
     else version (Embedded)
     {
         import urt.driver.timer;
-        import urt.driver.irq;
 
         static if (has_mtime)
-        {
-            ulong deadline = mtime_read() + duration.ticks;
-            static if (has_timer_compare && has_wait_for_interrupt)
-            {
-                timer_sleep_until(deadline);
-            }
-            else
-            {
-                while (mtime_read() < deadline) {}
-            }
-        }
+            timer_wait!(() => false)(mtime_read() + duration.ticks);
     }
     else
     {

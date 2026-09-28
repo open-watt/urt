@@ -19,7 +19,7 @@ module urt.driver.bk7231.timer;
 
 import core.volatile;
 
-import urt.driver.irq : irq_handler_set, irq_set_enable;
+import urt.driver.irq : irq_handler_set, irq_line_enable;
 
 @nogc nothrow:
 
@@ -150,7 +150,7 @@ void timer_set_periodic(ulong period_ticks, TimerCallback cb)
     reg_write(TIMER1_PERIOD, cast(uint)period_ticks);
 
     irq_handler_set(IRQ_TIMER, &timer_isr);
-    irq_set_enable(IRQ_TIMER);
+    irq_line_enable(IRQ_TIMER);
 
     reg_write(TIMER0_2_CTL, (ctl & ~INT_FLAG_MASK) | TIMER1_EN);
 }

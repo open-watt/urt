@@ -2,6 +2,8 @@ module urt.driver.bl808.irq;
 
 import core.volatile;
 
+public import urt.driver.riscv.csr : irq_disable, irq_enable, wait_for_interrupt;
+
 nothrow @nogc:
 
 enum bool has_per_irq_control = true;
@@ -13,32 +15,7 @@ enum bool has_smp = false;
 enum uint irq_max = 80;
 
 
-// ================================================================
-// CPU interrupt control
-// ================================================================
-
-// Disable interrupt delivery. Returns previous state.
-bool irq_disable()
-{
-    ulong prev;
-    asm nothrow @nogc { "csrrci %0, mstatus, 0x8" : "=r" (prev); }
-    return (prev & 0x8) != 0;
-}
-
-// Enable interrupt delivery. Returns previous state.
-bool irq_enable()
-{
-    ulong prev;
-    asm nothrow @nogc { "csrrsi %0, mstatus, 0x8" : "=r" (prev); }
-    return (prev & 0x8) != 0;
-}
-
-// Halt CPU until an interrupt is pending. Near-zero power.
-void wait_for_interrupt()
-{
-    asm nothrow @nogc { "wfi"; }
-}
-
+package(urt.driver):
 
 // ================================================================
 // PLIC lines

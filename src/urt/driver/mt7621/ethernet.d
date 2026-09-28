@@ -139,10 +139,9 @@ bool eth_hw_open(uint mac, uint port, ref const EthernetConfig cfg, EthRxCallbac
     _ports[slot] = Port(rx, link, context);
     if (_enabled == 1u << slot)
     {
-        import urt.driver.irq : irq_handler_set;
-        import urt.driver.mt7621.irq : irq_set_enable;
+        import urt.driver.irq : irq_handler_set, irq_line_enable;
         irq_handler_set(fe_irq, &fe_irq_handler);
-        irq_set_enable(fe_irq);
+        irq_line_enable(fe_irq);
         mmio_write(fe_base + pdma_irq_status, pdma_rx_done_int0);
         mmio_write(fe_base + pdma_irq_mask, pdma_rx_done_int0);
     }
@@ -158,9 +157,9 @@ bool eth_hw_close(uint mac, uint port)
     _ports[slot] = Port.init;
     if (_enabled == 0)
     {
-        import urt.driver.mt7621.irq : irq_clear_enable;
+        import urt.driver.irq : irq_line_disable;
         mmio_write(fe_base + pdma_irq_mask, 0);
-        irq_clear_enable(fe_irq);
+        irq_line_disable(fe_irq);
     }
     return true;
 }

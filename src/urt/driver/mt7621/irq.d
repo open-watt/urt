@@ -13,6 +13,8 @@ enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 enum uint irq_max = 56;
 
+package(urt.driver):
+
 bool irq_disable()
 {
     uint status = void;
@@ -68,6 +70,12 @@ extern(C) void irq_init()
     gic_write(gic_vl_ctl, gic_read(gic_vl_ctl) & ~gic_vl_ctl_eic);
     gic_write(gic_vl_rmask, ~0u);
     gic_write(gic_vl_compare_map, gic_map_to_pin | gic_cpu_pin);
+
+    // Config7.WII: wait ends on a pending interrupt with interrupts masked, which the wait loop's masked check needs.
+    uint config7 = void;
+    asm @nogc nothrow { ".set push; .set noat; mfc0 %0, $16, 7; .set pop" : "=r"(config7); }
+    config7 |= config7_wii;
+    asm @nogc nothrow { ".set push; .set noat; mtc0 %0, $16, 7; ehb; .set pop" :: "r"(config7) : "memory"; }
 
     uint status = void;
     asm @nogc nothrow { ".set push; .set noat; mfc0 %0, $12; .set pop" : "=r"(status); }
@@ -138,6 +146,7 @@ enum uint gic_vl_ctl_eic     = 1 << 0;
 enum uint gic_map_to_pin = 1u << 31;
 enum uint gic_cpu_pin    = 0;
 enum uint status_im_gic  = 1 << (10 + gic_cpu_pin);
+enum uint config7_wii    = 1u << 31;
 
 bool irq_enabled(uint irq)
     => (gic_read(gic_sh_mask + irq / 32 * 4) & (1u << (irq % 32))) != 0;

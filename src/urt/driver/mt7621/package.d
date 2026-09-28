@@ -4,6 +4,7 @@ public import urt.driver.mt7621.irq;
 public import urt.driver.mt7621.uart;
 public import urt.driver.mt7621.timer;
 
+import urt.driver.irq : irq_global_enable;
 import urt.driver.uart : UartConfig;
 import core.volatile;
 
@@ -37,7 +38,7 @@ extern(C) void sys_init()
     counter_init(cpu_hz);
     import urt.exception : assert_handler;
     assert_handler = &assert_reset;
-    irq_enable();
+    irq_global_enable();
     import urt.driver.mt7621.ethernet : fe_init;
     fe_init();
     static if (fixed_clock)

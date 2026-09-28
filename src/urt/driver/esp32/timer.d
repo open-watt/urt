@@ -27,18 +27,10 @@ void rtc_reset() {}
 
 ulong rtc_read() => esp_rtc_get_time_us();
 
-alias TimerCallback = void function() nothrow @nogc;
-
-void timer_set_periodic(ulong period_ticks, TimerCallback cb)
-{
-    tick_callback = cb;
-    // TODO: configure esp_timer or FreeRTOS tick for periodic callback
-}
 
 
 private:
 
-private __gshared TimerCallback tick_callback;
 
 extern(C) nothrow @nogc
 {

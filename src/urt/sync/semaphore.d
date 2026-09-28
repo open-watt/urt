@@ -124,12 +124,8 @@ nothrow @nogc:
         }
         else version (BareMetal)
         {
-            import urt.driver.irq;
-            while (!try_wait())
-            {
-                static if (has_wait_for_interrupt)
-                    irq_wait();
-            }
+            import urt.driver.timer : timer_wait;
+            timer_wait!(() => try_wait())(ulong.max);
         }
     }
 
@@ -184,31 +180,8 @@ nothrow @nogc:
         }
         else version (BareMetal)
         {
-            import urt.driver.timer;
-            import urt.driver.irq;
-            static if (has_timer_compare && has_wait_for_interrupt)
-            {
-                ulong deadline = mtime_read() + timeout.ticks;
-                while (!try_wait())
-                {
-                    if (mtime_read() >= deadline)
-                        return false;
-                    timer_wake_at(deadline);
-                    irq_wait();
-                }
-                return true;
-            }
-            else
-            {
-                // No timer + WFI? Busy-poll until deadline. Not ideal.
-                MonoTime deadline = get_time() + timeout;
-                while (!try_wait())
-                {
-                    if (get_time() >= deadline)
-                        return false;
-                }
-                return true;
-            }
+            import urt.driver.timer : mtime_read, timer_wait;
+            return timer_wait!(() => try_wait())(mtime_read() + timeout.ticks);
         }
     }
 

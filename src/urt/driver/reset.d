@@ -113,16 +113,28 @@ static if (has_reset_record)
         enum uint magic_value = 0x5453_5257; // "WRST"
 
         uint magic;
-        ubyte mark;
-        ubyte check;
-        ubyte[2] scratch;
+        union
+        {
+            struct
+            {
+                ubyte mark;
+                ubyte check;
+                ubyte[2] scratch;
+            }
+            uint word;
+        }
 
         bool valid() const => magic == magic_value && check == cast(ubyte)~mark && mark <= ResetMark.crashed;
 
+        // One word store: the H7's ECC RAM holds a partial write until a later write flushes it, and a
+        // reset drops it. The scratch bytes ride in the same word, so they survive the reset too.
         void set(ResetMark m)
         {
-            mark = m;
-            check = cast(ubyte)~m;
+            import core.volatile : volatileStore;
+            ResetRecord r = this;
+            r.mark = m;
+            r.check = cast(ubyte)~m;
+            volatileStore(&word, r.word);
             magic = magic_value;
         }
     }

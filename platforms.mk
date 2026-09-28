@@ -164,9 +164,7 @@ else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
     PROCESSOR := arm968e-s
     # ARMv5TE silently rounds unaligned halfword stores down.
     STRICT_ALIGN := 1
-    ifeq ($(PLATFORM),bk7231n)
-        TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
-    endif
+    TLSF_DEFINES := -DTLSF_SL_INDEX_COUNT_LOG2=4 -DTLSF_FL_INDEX_MAX=18
     OS = baremetal
     RAM_IMAGE ?= raw
 else ifeq ($(PLATFORM),rp2350)
@@ -554,6 +552,8 @@ ifeq ($(PLATFORM),bl618)
 endif
 ifeq ($(PLATFORM),rp2350)
     DFLAGS := $(DFLAGS) -d-version=RP2350 -d-version=CRuntime_Picolibc
+    # SRAM is 520 KB; urt.driver.rp2350.heap sizes the TLSF control block to match.
+    TLSF_DEFINES := -DTLSF_FL_INDEX_MAX=20
 endif
 ifeq ($(PLATFORM),mt7621)
     DFLAGS := $(DFLAGS) -d-version=MT7621 -d-version=CRuntime_Picolibc

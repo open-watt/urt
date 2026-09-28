@@ -2,12 +2,14 @@
 // c_heap_flags, and optionally report_oom; C's malloc family is overridden onto the same pools.
 module urt.driver.baremetal.heap;
 
-version (Bouffalo)     { static import urt.driver.bl_common.heap; alias topology = urt.driver.bl_common.heap; version = TlsfHeap; }
-else version (BK7231N) { static import urt.driver.bk7231.heap; alias topology = urt.driver.bk7231.heap; version = TlsfHeap; }
-else version (STM32)   { static import urt.driver.stm32.heap; alias topology = urt.driver.stm32.heap; version = TlsfHeap; }
-else version (MT7621)  { static import urt.driver.mt7621.heap; alias topology = urt.driver.mt7621.heap; version = TlsfHeap; }
+version (Bouffalo)       { static import urt.driver.bl_common.heap; alias topology = urt.driver.bl_common.heap; }
+else version (Beken)     { static import urt.driver.bk7231.heap; alias topology = urt.driver.bk7231.heap; }
+else version (STM32)     { static import urt.driver.stm32.heap; alias topology = urt.driver.stm32.heap; }
+else version (RP2350)    { static import urt.driver.rp2350.heap; alias topology = urt.driver.rp2350.heap; }
+else version (MT7621)    { static import urt.driver.mt7621.heap; alias topology = urt.driver.mt7621.heap; }
+else version (BareMetal) static assert(false, "No heap topology for this bare-metal platform");
 
-version (TlsfHeap):
+version (BareMetal):
 
 import urt.attribute : fast_data;
 import urt.mem.alloc : MemFlags, default_alignment;

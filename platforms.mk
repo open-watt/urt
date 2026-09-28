@@ -15,8 +15,9 @@
 #   COMPILER   - dmd | ldc | gdc. Auto-promoted to ldc for cross-compile.
 #   URT_SRCDIR - path to URT's src/ tree. Default `src` (URT in-tree); outer
 #                projects set this to e.g. `third_party/urt/src`.
-#   STM32_PART, STM32_HSE_HZ
-#              - STM32 board facts: memory map (platforms/stm32/stm32_<part>.ld) and HSE crystal.
+#   STM32_PART, STM32_HSE_HZ, STM32_DFU_BUTTON
+#              - STM32 board facts: memory map (platforms/stm32/stm32_<part>.ld), HSE crystal,
+#                and the button that enters the ROM bootloader.
 #   CPU_HZ     - the CPU clock, for a part that can only measure it and a board
 #                that fixes it (MT7621). Optional; without it the driver measures.
 #
@@ -570,9 +571,13 @@ ifdef STM32_VARIANT
     STM32_LD := $(STM32_LD_DIR)/stm32_$(STM32_PART).ld
     BAREMETAL_LD_DEPS := $(STM32_LD) $(STM32_LD_DIR)/stm32_common.ld
     DFLAGS := $(DFLAGS) -L-L$(STM32_LD_DIR)
-    # The HSE crystal in Hz rides in as a link-time constant; 0 runs on HSI.
+    # Board facts ride in as link-time constants: the HSE crystal in Hz (0 runs on HSI), and a
+    # button held at reset to enter the ROM bootloader, as port * 16 + pin | active_high << 8.
     ifdef STM32_HSE_HZ
         DFLAGS := $(DFLAGS) -L--defsym=__stm32_hse_hz=$(STM32_HSE_HZ)
+    endif
+    ifdef STM32_DFU_BUTTON
+        DFLAGS := $(DFLAGS) -L--defsym=__stm32_dfu_button=$(STM32_DFU_BUTTON)
     endif
 endif
 ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)

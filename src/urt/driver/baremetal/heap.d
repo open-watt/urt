@@ -13,9 +13,11 @@ version (BareMetal):
 
 import urt.attribute : fast_data;
 import urt.mem.alloc : MemFlags, default_alignment;
+import urt.mem.pressure : MaxUsagePools, note_pool_usage;
 import urt.sync.critical : Critical;
 
 enum size_t num_pools = topology.heap_regions.length;
+static assert(num_pools <= MaxUsagePools);
 private alias tlsf_control_bytes = topology.tlsf_control_bytes;
 private alias c_heap_flags = topology.c_heap_flags;
 private alias heap_regions = topology.heap_regions;
@@ -32,6 +34,7 @@ enum has_memsize  = true;
 enum has_exec     = false;
 enum has_retain   = false;
 enum has_memflags = true;
+enum has_pool_usage = true;
 enum account_usable_size = true;
 
 struct HeapRegion
@@ -226,6 +229,7 @@ void[] realloc_impl(void[] mem, size_t new_size, size_t alignment, MemFlags flag
                     owner.used = owner.used - old_block + tlsf_block_size(p);
                     if (owner.used > owner.peak_used)
                         owner.peak_used = owner.used;
+                    note_pool_usage(owner - _pools.ptr, owner.used);
                     return p[0 .. new_size];
                 }
             }
@@ -251,6 +255,7 @@ void free_impl(void* ptr)
     if (!owner)
         return;
     owner.used -= tlsf_block_size(ptr);
+    note_pool_usage(owner - _pools.ptr, owner.used);
     tlsf_free(owner.tlsf, ptr);
 }
 
@@ -270,6 +275,7 @@ void* allocate(ref Pool pool, size_t size, size_t alignment)
         pool.used += tlsf_block_size(p);
         if (pool.used > pool.peak_used)
             pool.peak_used = pool.used;
+        note_pool_usage(&pool - _pools.ptr, pool.used);
     }
     return p;
 }

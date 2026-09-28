@@ -558,7 +558,7 @@ else version (D_InlineAsm_X86)
     {
         static assert(T.sizeof <= 4, "64-bit atomicExchange not supported on 32-bit target");
 
-        auto ptr = cast(T*)here;
+        auto dest_ptr = cast(T*)here;
         T tmp = cast(T)exchangeWith;
         size_t storage = void;
 
@@ -568,7 +568,7 @@ else version (D_InlineAsm_X86)
             asm pure nothrow @nogc @trusted
             {
                 mov %0, tmp;
-                mov ECX, ptr;
+                mov ECX, dest_ptr;
                 lock; xchg [ECX], %0;
                 lea ECX, storage;
                 mov [ECX], %0;

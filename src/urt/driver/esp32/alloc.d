@@ -12,6 +12,7 @@ enum has_memsize  = true;
 enum has_exec     = true;
 enum has_retain   = true;
 enum has_memflags = true;
+enum has_pool_usage = true;
 
 void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
 {
@@ -37,7 +38,10 @@ void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
             }
         }
     }
-    return p ? p[0 .. size] : null;
+    if (p is null)
+        return null;
+    note_pools();
+    return p[0 .. size];
 }
 
 extern(C) void ow_alloc_failed_reclaim(size_t size)
@@ -55,6 +59,7 @@ void _alloc_failure(size_t size, size_t alignment, MemFlags flags) pure
 void _free(void* ptr) pure
 {
     heap_caps_aligned_free(ptr);
+    note_pools();
 }
 
 size_t _memsize(void* ptr) pure
@@ -87,6 +92,7 @@ void _free_retain(void[] mem) pure
 
 private:
 
+enum CAP_8BIT      = 1 << 2;
 enum CAP_DMA       = 1 << 3;
 enum CAP_SPIRAM    = 1 << 10;
 enum CAP_INTERNAL  = 1 << 11;
@@ -95,9 +101,28 @@ enum CAP_IRAM_8BIT = 1 << 13;
 enum CAP_RTCRAM    = 1 << 15;
 
 version (Iram8BitSlowMemory)
+{
     enum slow_caps = CAP_IRAM_8BIT;
+    enum slow_query_caps = CAP_IRAM_8BIT;
+}
 else
+{
     enum slow_caps = CAP_DEFAULT | CAP_SPIRAM;
+    enum slow_query_caps = CAP_SPIRAM;
+}
+
+// Match sysinfo's pools. IDF-only transients between uRT calls are not observed.
+void note_pools() pure
+{
+    static void impl() nothrow @nogc
+    {
+        import urt.mem.pressure : note_pool_usage;
+        foreach (i, caps; [CAP_INTERNAL | CAP_8BIT, slow_query_caps])
+            note_pool_usage(i, heap_caps_get_total_size(caps) - heap_caps_get_free_size(caps));
+    }
+    alias Fn = void function() pure nothrow @nogc;
+    (cast(Fn) &impl)();
+}
 
 // MemFlags [2:0] -> ESP-IDF heap_caps
 //   [1:0] speed: 0=default, 1=fast, 2=slow, 3=fastest
@@ -116,6 +141,7 @@ immutable uint[8] _esp_caps = [
 extern(C) void* heap_caps_aligned_alloc(size_t alignment, size_t size, uint caps) pure;
 extern(C) void heap_caps_aligned_free(void* ptr) pure;
 extern(C) size_t heap_caps_get_allocated_size(void* ptr) pure;
+extern(C) size_t heap_caps_get_total_size(uint caps) pure;
 extern(C) size_t heap_caps_get_free_size(uint caps) pure;
 extern(C) size_t heap_caps_get_largest_free_block(uint caps) pure;
 

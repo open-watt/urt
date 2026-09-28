@@ -6,6 +6,8 @@ import core.volatile;
 
 @nogc nothrow:
 
+package(urt.driver):
+
 // PRIMASK bit 0 set means interrupts masked. Read it before mutating so callers (including
 // IrqGuard) can restore prior state.
 bool irq_disable()

@@ -8,7 +8,8 @@
 // The compare raises CLIC line 7, which urt.driver.bl618.irq dispatches straight to the timer frontend.
 module urt.driver.bl618.timer;
 
-import urt.driver.bl618.irq : irq_set_enable, timer_irq;
+import urt.driver.bl618.irq : timer_irq;
+import urt.driver.irq : irq_line_enable;
 import urt.driver.riscv.clint : mtimecmp_write;
 
 public import urt.driver.riscv.csr : mtime_read;
@@ -24,7 +25,7 @@ enum bool has_timer_compare = true;
 void timer_compare_arm(ulong deadline)
 {
     mtimecmp_write(mtimecmp, deadline);
-    irq_set_enable(timer_irq);
+    irq_line_enable(timer_irq);
 }
 
 

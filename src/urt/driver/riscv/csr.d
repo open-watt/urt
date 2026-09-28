@@ -4,25 +4,6 @@ module urt.driver.riscv.csr;
 
 @nogc nothrow:
 
-bool irq_disable()
-{
-    size_t prev;
-    asm @nogc nothrow { "csrrci %0, mstatus, 0x8" : "=r" (prev); }
-    return (prev & 0x8) != 0;
-}
-
-bool irq_enable()
-{
-    size_t prev;
-    asm @nogc nothrow { "csrrsi %0, mstatus, 0x8" : "=r" (prev); }
-    return (prev & 0x8) != 0;
-}
-
-void wait_for_interrupt()
-{
-    asm @nogc nothrow { "wfi"; }
-}
-
 ulong mtime_read()
 {
     version (RISCV64)
@@ -66,4 +47,26 @@ ulong mcycle_read()
         while (hi != again);
         return (ulong(hi) << 32) | lo;
     }
+}
+
+
+package(urt.driver):
+
+bool irq_disable()
+{
+    size_t prev;
+    asm @nogc nothrow { "csrrci %0, mstatus, 0x8" : "=r" (prev); }
+    return (prev & 0x8) != 0;
+}
+
+bool irq_enable()
+{
+    size_t prev;
+    asm @nogc nothrow { "csrrsi %0, mstatus, 0x8" : "=r" (prev); }
+    return (prev & 0x8) != 0;
+}
+
+void wait_for_interrupt()
+{
+    asm @nogc nothrow { "wfi"; }
 }

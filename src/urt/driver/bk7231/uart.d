@@ -16,7 +16,7 @@ import core.volatile;
 import urt.driver.uart : FlowControl, Parity, StopBits, Uart, UartCallbackContext,
     UartConfig, UartRxCallback;
 import urt.driver.gpio : Pull, gpio_set_function;
-import urt.driver.irq : irq_disable, irq_enable, irq_handler_set, irq_set_enable;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_enable;
 import urt.mem.ring : RingBuffer;
 
 nothrow @nogc:
@@ -290,7 +290,7 @@ bool uart_hw_open(uint id, UartConfig cfg, UartRxCallback rx_cb)
     _rx_cb[id] = rx_cb;
 
     irq_handler_set(uart_irq[id], &uart_isr);
-    irq_set_enable(uart_irq[id]);
+    irq_line_enable(uart_irq[id]);
     reg_write(uart_bases[id] + REG_INT_ENABLE,
               rx_cb ? (INT_RX_FIFO_NEED_READ | INT_RX_STOP_END | INT_ALL_ERRORS) : 0);
     return true;
@@ -335,8 +335,11 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 
     immutable uint base = uart_bases[id];
 
-    bool prev = irq_disable();
-    immutable size_t n = tx_ring[id].write(data);
+    size_t n;
+    {
+        auto guard = irq_critical();
+        n = tx_ring[id].write(data);
+    }
 
     // TODO: TX_FIFO_NEED_WRITE never fires on this part, so the ring is drained here rather
     // than from the ISR. The vendor busy-waits in uart_write_byte too. Revisit if the TX
@@ -344,15 +347,14 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     // Interrupts are masked only while the ring is touched, never while waiting on the wire.
     for (;;)
     {
-        fill_tx_fifo(id);
-        immutable bool drained = tx_ring[id].empty;
-        if (prev)
-            irq_enable();
-        if (drained)
-            break;
+        {
+            auto guard = irq_critical();
+            fill_tx_fifo(id);
+            if (tx_ring[id].empty)
+                break;
+        }
         while (!(reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
         {}
-        prev = irq_disable();
     }
     return cast(ptrdiff_t)n;
 }
@@ -362,10 +364,11 @@ ptrdiff_t uart_hw_tx_pending(uint id)
     if (id >= num_uarts)
         return -1;
 
-    immutable bool prev = irq_disable();
-    size_t n = tx_ring[id].pending;
-    if (prev)
-        irq_enable();
+    size_t n;
+    {
+        auto guard = irq_critical();
+        n = tx_ring[id].pending;
+    }
     n += reg_read(uart_bases[id] + REG_FIFO_STATUS) & STAT_TX_FIFO_COUNT_MASK;
     return cast(ptrdiff_t)n;
 }
@@ -409,11 +412,12 @@ bool uart_hw_check_errors(uint id)
 {
     immutable uint base = uart_bases[id];
 
-    immutable bool prev = irq_disable();
-    uint errors = _latched_errors[id];
-    _latched_errors[id] = 0;
-    if (prev)
-        irq_enable();
+    uint errors;
+    {
+        auto guard = irq_critical();
+        errors = _latched_errors[id];
+        _latched_errors[id] = 0;
+    }
 
     uint live = reg_read(base + REG_INT_STATUS) & INT_ALL_ERRORS;
     if (live)

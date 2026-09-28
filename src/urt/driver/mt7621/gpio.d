@@ -3,9 +3,8 @@
 module urt.driver.mt7621.gpio;
 
 import urt.driver.gpio : DriveMode, GpioInterruptConfig, GpioInterruptTrigger, Pull, gpio_interrupt_dispatch;
-import urt.driver.irq : irq_handler_set;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_enable;
 import urt.driver.mt7621 : mmio_read, mmio_write, sysctl_base;
-import urt.driver.mt7621.irq : irq_disable, irq_enable, irq_set_enable;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
@@ -78,8 +77,7 @@ enum ubyte link_owner = 0x80;
 // A callback may close a line from the ISR, so ownership and the trigger registers change with interrupts off.
 Result line_irq_open(uint line, GpioInterruptTrigger trigger, ubyte owner)
 {
-    immutable prior = irq_disable();
-    scope (exit) if (prior) irq_enable();
+    auto guard = irq_critical();
     if (_owner[line] != no_owner)
         return InternalResult.already_exists;
     gpio_input_init(line);
@@ -92,7 +90,7 @@ Result line_irq_open(uint line, GpioInterruptTrigger trigger, ubyte owner)
     if (!_irq_hooked)
     {
         irq_handler_set(gpio_irq, &gpio_irq_handler);
-        irq_set_enable(gpio_irq);
+        irq_line_enable(gpio_irq);
         _irq_hooked = true;
     }
     return Result.success;
@@ -101,13 +99,11 @@ Result line_irq_open(uint line, GpioInterruptTrigger trigger, ubyte owner)
 void line_irq_close(uint line)
 {
     static immutable uint[4] triggers = [redge, fedge, hlvl, llvl];
-    immutable prior = irq_disable();
+    auto guard = irq_critical();
     foreach (r; triggers)
         reg_set(r, line, false);
     mmio_write(bank(stat, line), bit(line));
     _owner[line] = no_owner;
-    if (prior)
-        irq_enable();
 }
 
 

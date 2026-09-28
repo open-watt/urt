@@ -24,7 +24,7 @@ version (BL808_M0):
 
 import urt.mem.alloc : alloc, free, MemFlags;
 import urt.mem       : memset;
-import urt.driver.irq         : irq_disable, irq_enable, irq_global_set;
+import urt.driver.irq         : irq_global_disable, irq_global_enable, irq_global_set;
 import urt.driver.bl618.timer : mtime_read, mtime_freq_hz;
 import urt.fibre              : Fibre, AwakenEvent, FibreEntryFunc, ResumeHandler,
                                 yield, is_in_fibre;
@@ -169,7 +169,7 @@ int bl_ops_init() { return 0; }
 // bit; symmetric with _exit_critical taking that token back.
 uint bl_ops_enter_critical()
 {
-    return irq_disable() ? 1 : 0;
+    return irq_global_disable() ? 1 : 0;
 }
 
 void bl_ops_exit_critical(uint level)
@@ -349,11 +349,11 @@ int bl_ops_event_notify(int evt, int val)                { return 0; }
 // "Gaint" (giant) lock -- global serialising lock. Map to enter_critical.
 void bl_ops_lock_gaint()
 {
-    irq_disable();
+    irq_global_disable();
 }
 void bl_ops_unlock_gaint()
 {
-    irq_enable();
+    irq_global_enable();
 }
 
 

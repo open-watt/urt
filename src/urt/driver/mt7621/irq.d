@@ -13,6 +13,8 @@ enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 enum uint irq_max = 56;
 
+package(urt.driver):
+
 bool irq_disable()
 {
     uint status = void;

@@ -3,7 +3,7 @@ module urt.driver.bk7231.wifi;
 version (Beken):
 
 import urt.driver.bk7231.pbuf : beken_ethernet_input_handler;
-import urt.driver.irq : irq_disable, irq_enable;
+import urt.driver.irq : irq_critical;
 import urt.driver.wifi;
 import urt.driver.wpa : wpa2_psk_ccmp_rsn_ie, wpa_max_eapol_len;
 import urt.driver.wpa.supplicant : WpaStaSupplicant, WpaKeyMgmt;
@@ -49,15 +49,15 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
             manual_cal_load_bandgap_calm();
         rwnxl_init();
         // Calibration polls the ADC FIFO and deadlocks if the vendor ISR drains it concurrently.
-        immutable bool irqs = irq_disable();
-        calibration_main();
-        uint tab_in_flash = manual_cal_load_txpwr_tab_flash();
-        manual_cal_load_default_txpwr_tab(tab_in_flash);
-        manual_cal_load_lpf_iq_tag_flash();
-        manual_cal_load_xtal_tag_flash();
-        rwnx_cal_initial_calibration();
-        if (irqs)
-            irq_enable();
+        {
+            auto guard = irq_critical();
+            calibration_main();
+            uint tab_in_flash = manual_cal_load_txpwr_tab_flash();
+            manual_cal_load_default_txpwr_tab(tab_in_flash);
+            manual_cal_load_lpf_iq_tag_flash();
+            manual_cal_load_xtal_tag_flash();
+            rwnx_cal_initial_calibration();
+        }
         _initialized = true;
         mac_start();
     }
@@ -438,19 +438,15 @@ bool wifi_hw_service(ubyte port, size_t budget)
 
     while (served < budget)
     {
-        immutable bool prev = irq_disable();
-        bool have = _rx_pending != 0;
         int arg = 0;
-        if (have)
         {
+            auto guard = irq_critical();
+            if (_rx_pending == 0)
+                break;
             arg = _rx_args[_rx_tail];
             _rx_tail = (_rx_tail + 1) % _rx_args.length;
             --_rx_pending;
         }
-        if (prev)
-            irq_enable();
-        if (!have)
-            break;
         rxl_cntrl_evt(arg);
         if (epoch != _service_epoch)
             return _open && needs_service_wake();
@@ -863,30 +859,26 @@ bool prepare_raw_rx_pages()
 
 Page* take_raw_rx_page()
 {
-    immutable bool prev = irq_disable();
+    auto guard = irq_critical();
     Page* page = _raw_rx_free;
     if (page)
     {
         _raw_rx_free = page.next;
         page.next = null;
     }
-    if (prev)
-        irq_enable();
     return page;
 }
 
 void release_raw_rx_page(Page* page)
 {
-    immutable bool prev = irq_disable();
+    auto guard = irq_critical();
     page.next = _raw_rx_free;
     _raw_rx_free = page;
-    if (prev)
-        irq_enable();
 }
 
 Page* pop_raw_rx()
 {
-    immutable bool prev = irq_disable();
+    auto guard = irq_critical();
     Page* page = _raw_rx_head;
     if (page)
     {
@@ -895,8 +887,6 @@ Page* pop_raw_rx()
         if (!_raw_rx_head)
             _raw_rx_tail = null;
     }
-    if (prev)
-        irq_enable();
     return page;
 }
 
@@ -910,20 +900,20 @@ void discard_raw_rx()
 void release_raw_rx_pages()
 {
     Page* pages;
-    immutable bool prev = irq_disable();
-    ++_raw_rx_epoch;
-    if (_raw_rx_tail)
     {
-        _raw_rx_tail.next = _raw_rx_free;
-        pages = _raw_rx_head;
+        auto guard = irq_critical();
+        ++_raw_rx_epoch;
+        if (_raw_rx_tail)
+        {
+            _raw_rx_tail.next = _raw_rx_free;
+            pages = _raw_rx_head;
+        }
+        else
+            pages = _raw_rx_free;
+        _raw_rx_head = null;
+        _raw_rx_tail = null;
+        _raw_rx_free = null;
     }
-    else
-        pages = _raw_rx_free;
-    _raw_rx_head = null;
-    _raw_rx_tail = null;
-    _raw_rx_free = null;
-    if (prev)
-        irq_enable();
     free_pages(pages);
 }
 
@@ -951,14 +941,14 @@ extern(C) void monitor_callback(ubyte* data, int len, WifiLinkInfo* info)
     rx_info.channel = _channel;
 
     page.length = cast(ushort)len;
-    immutable bool prev = irq_disable();
-    if (_raw_rx_tail)
-        _raw_rx_tail.next = page;
-    else
-        _raw_rx_head = page;
-    _raw_rx_tail = page;
-    if (prev)
-        irq_enable();
+    {
+        auto guard = irq_critical();
+        if (_raw_rx_tail)
+            _raw_rx_tail.next = page;
+        else
+            _raw_rx_head = page;
+        _raw_rx_tail = page;
+    }
     if (_ready_cb)
         _ready_cb();
 }
@@ -1383,11 +1373,9 @@ void push_event(WifiEventRecord event)
 
 uint take_drop_count(ref uint count)
 {
-    immutable bool prev = irq_disable();
+    auto guard = irq_critical();
     uint result = count;
     count = 0;
-    if (prev)
-        irq_enable();
     return result;
 }
 
@@ -1418,16 +1406,16 @@ extern(C) void __wrap_bmsg_null_sender()
 
 extern(C) void __wrap_bmsg_rx_sender(void* arg)
 {
-    immutable bool prev = irq_disable();
-    if (_rx_pending < 2)
     {
-        _rx_args[(_rx_tail + _rx_pending) % _rx_args.length] = cast(int)cast(size_t)arg;
-        ++_rx_pending;
+        auto guard = irq_critical();
+        if (_rx_pending < 2)
+        {
+            _rx_args[(_rx_tail + _rx_pending) % _rx_args.length] = cast(int)cast(size_t)arg;
+            ++_rx_pending;
+        }
+        else
+            ++_rx_drops;
     }
-    else
-        ++_rx_drops;
-    if (prev)
-        irq_enable();
     if (_ready_cb)
         _ready_cb();
 }

@@ -1,6 +1,7 @@
 module urt.driver.mt7621.timer;
 
-import urt.driver.mt7621.irq : gic_read, gic_write, gic_vl_pend, gic_vl_smask, gic_vl_compare, irq_disable, irq_enable;
+import urt.driver.irq : irq_critical;
+import urt.driver.mt7621.irq : gic_read, gic_write, gic_vl_pend, gic_vl_smask, gic_vl_compare;
 
 nothrow @nogc:
 
@@ -55,7 +56,7 @@ void timer_compare_arm(ulong deadline)
         compare_write(ulong.max);
         return;
     }
-    immutable prior = irq_disable();
+    auto guard = irq_critical();
     ulong ticks = ticks_at(deadline);
     for (ulong step = 1;; step <<= 1)
     {
@@ -65,8 +66,6 @@ void timer_compare_arm(ulong deadline)
             break;
         ticks = now + step;
     }
-    if (prior)
-        irq_enable();
 }
 
 // Writing the compare register is what clears the GIC's pending compare interrupt.

@@ -22,7 +22,7 @@
 module urt.driver.bl808.uart;
 
 import core.volatile;
-import urt.driver.irq : irq_disable, irq_global_set, irq_handler_set, irq_line_disable, irq_line_enable;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_line_enable;
 
 import urt.driver.uart : Parity, StopBits, UartConfig;
 
@@ -302,10 +302,8 @@ ptrdiff_t uart_hw_read(uint id, void[] buffer)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = irq_disable();
-    auto n = rx_ring[id].read(buffer);
-    irq_global_set(prev);
-    return cast(ptrdiff_t)n;
+    auto guard = irq_critical();
+    return cast(ptrdiff_t)rx_ring[id].read(buffer);
 }
 
 // Non-blocking write: push into TX ring buffer, kick TX if needed.
@@ -315,7 +313,7 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = irq_disable();
+    auto guard = irq_critical();
 
     auto n = tx_ring[id].write(data);
 
@@ -330,7 +328,6 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
         reg_write(uart_base[id], INT_MASK, mask);
     }
 
-    irq_global_set(prev);
     return cast(ptrdiff_t)n;
 }
 
@@ -340,10 +337,8 @@ ptrdiff_t uart_hw_rx_pending(uint id)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = irq_disable();
-    auto p = rx_ring[id].pending;
-    irq_global_set(prev);
-    return cast(ptrdiff_t)p;
+    auto guard = irq_critical();
+    return cast(ptrdiff_t)rx_ring[id].pending;
 }
 
 // Clear RX ring buffer and hardware FIFO. Returns bytes discarded.
@@ -352,7 +347,7 @@ ptrdiff_t uart_hw_flush(uint id)
     if (id >= num_uarts)
         return -1;
 
-    immutable prev = irq_disable();
+    auto guard = irq_critical();
 
     immutable p = rx_ring[id].pending;
     rx_ring[id].purge();
@@ -362,7 +357,6 @@ ptrdiff_t uart_hw_flush(uint id)
     auto fifo0 = reg_read(base, FIFO_CONFIG_0);
     reg_write(base, FIFO_CONFIG_0, fifo0 | RX_FIFO_CLR);
 
-    irq_global_set(prev);
     return cast(ptrdiff_t)p;
 }
 

@@ -22,6 +22,8 @@ enum bool has_global_irq_state = false;
 enum bool has_smp = false;
 enum uint irq_max = 32;
 
+package(urt.driver):
+
 bool irq_disable()
 {
     vPortEnterCritical(&_irq_mux);

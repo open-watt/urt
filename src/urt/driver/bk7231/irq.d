@@ -15,6 +15,8 @@ enum bool has_global_irq_state = true;
 enum bool has_smp = false;
 enum uint irq_max = 32;
 
+package(urt.driver):
+
 // ARMv5 CPSR: I=bit7 masks IRQ, F=bit6 masks FIQ. The WLAN MAC interrupts are FIQs, so
 // the global enable covers both; the reported state is the I bit.
 bool irq_disable()

@@ -2,9 +2,8 @@
 // compare the timer frontend schedules on.
 module urt.driver.stm32.timer;
 
-import urt.driver.irq : irq_handler_set;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_enable;
 import urt.driver.stm32 : apb1_timer_hz, clock_enable, rcc_apb1enr, reg_read, reg_write;
-import urt.driver.stm32.irq : irq_disable, irq_enable, irq_set_enable;
 
 @nogc nothrow:
 
@@ -26,14 +25,14 @@ void mtime_init()
     reg_write(tim5_sr, 0);
     reg_write(tim5_dier, dier_uie);
     irq_handler_set(tim5_irq, &tim5_isr);
-    irq_set_enable(tim5_irq);
+    irq_line_enable(tim5_irq);
     reg_write(tim5_cr1, 1);
 }
 
 // An update still pending means the counter wrapped after the last count of _mtime_hi.
 ulong mtime_read()
 {
-    bool was_enabled = irq_disable();
+    auto guard = irq_critical();
     uint hi = _mtime_hi;
     uint lo = reg_read(tim5_cnt);
     if (reg_read(tim5_sr) & sr_uif)
@@ -41,8 +40,6 @@ ulong mtime_read()
         lo = reg_read(tim5_cnt);
         ++hi;
     }
-    if (was_enabled)
-        irq_enable();
     return (ulong(hi) << 32) | lo;
 }
 
@@ -50,7 +47,7 @@ ulong mtime_read()
 // A compare written at or behind the counter would wait out a whole wrap; raise it in software instead.
 void timer_compare_arm(ulong deadline)
 {
-    bool was_enabled = irq_disable();
+    auto guard = irq_critical();
     if (deadline == ulong.max)
         reg_write(tim5_dier, reg_read(tim5_dier) & ~dier_cc1ie);
     else
@@ -62,8 +59,6 @@ void timer_compare_arm(ulong deadline)
         if (mtime_read() >= deadline)
             reg_write(tim5_egr, egr_cc1g);
     }
-    if (was_enabled)
-        irq_enable();
 }
 
 

@@ -5,7 +5,7 @@ public import urt.driver.bk7231.pbuf : BekenEthernetInputHandler, beken_ethernet
 public import urt.driver.bk7231.timer;
 public import urt.driver.bk7231.uart;
 
-import urt.driver.bk7231.irq : irq_enable;
+import urt.driver.irq : irq_global_enable;
 import urt.driver.uart : UartConfig;
 
 @nogc nothrow:
@@ -40,7 +40,7 @@ extern(C) void sys_init()
     func_init_basic();
 
     timer_hw_init();
-    irq_enable();
+    irq_global_enable();
 }
 
 private:

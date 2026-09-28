@@ -1710,5 +1710,7 @@ else unittest
 
     assert(tconcat(dir_path, "/one.txt").delete_file());
     assert(tconcat(dir_path, "/two.txt").delete_file());
+    assert(remove_directory(tconcat(dir_path, "/sub")));
+    assert(remove_directory(dir_path));
     assert(temp_name.delete_file());
 }

@@ -4,6 +4,7 @@ module urt.driver.baremetal.heap;
 
 version (Bouffalo)     { static import urt.driver.bl_common.heap; alias topology = urt.driver.bl_common.heap; version = TlsfHeap; }
 else version (BK7231N) { static import urt.driver.bk7231.heap; alias topology = urt.driver.bk7231.heap; version = TlsfHeap; }
+else version (STM32)   { static import urt.driver.stm32.heap; alias topology = urt.driver.stm32.heap; version = TlsfHeap; }
 
 version (TlsfHeap):
 

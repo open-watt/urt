@@ -7,6 +7,7 @@ import urt.time;
 
 version (Bouffalo)     version = TlsfHeap;
 else version (BK7231N) version = TlsfHeap;
+else version (STM32)   version = TlsfHeap;
 
 version (Espressif)
 {

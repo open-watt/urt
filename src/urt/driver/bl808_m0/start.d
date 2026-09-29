@@ -1,14 +1,14 @@
 // BL808 M0 chip init and D0 launch
 //
 // m0_bringup() runs from start.S before sys_init: chip-wide power, clocks,
-// PSRAM, L2 partition, TZC, then D0 launch. D0's own start.S spins ~80ms
+// PSRAM, L2 partition, then D0 launch. D0's own start.S spins ~80ms
 // waiting for M0 to finish clock setup, so launching it here (well before
 // M0's main() loop comes up) is safe -- both cores run in parallel from
 // that point, and M0's XRAM rings are ready by the time D0 needs IPC.
 module urt.driver.bl808_m0.start;
 
 import core.volatile;
-import urt.zip : gzip_uncompress;
+import urt.zip : uncompress;
 import urt.driver.bl618.uart : uart0_early_init, uart0_hw_puts;
 
 @nogc nothrow:
@@ -30,16 +30,21 @@ extern(C) void m0_bringup()
     wifi_em_carveout();
     psram_init();
     l2_sram_partition();
-    tzc_config_for_d0();
     launch_d0();
 }
 
 private void launch_d0()
 {
-    d0_image_load();
+    uint entry = d0_image_load();
+    if (!entry)
+    {
+        uart0_hw_puts("BL808 M0: no valid D0 image, D0 stays halted\n");
+        return;
+    }
+    d0_console_pins();
     d0_mtimer_config();
     d0_halt();
-    d0_set_boot_addr();
+    mmio_write(MM_MISC_CPU0_BOOT, entry);
     d0_release();
 }
 
@@ -47,21 +52,22 @@ private:
 
 enum uint PDS_CTL2              = 0x2000_E010;
 enum uint MM_CLK_CTRL_CPU       = 0x3000_7000;
+enum uint MM_CLK_CTRL_PERI      = 0x3000_7010;
 enum uint MCU_MISC_MCU_BUS_CFG1 = 0x2000_9004;
 enum uint GLB_PARM_CFG0         = 0x2000_0510;
 enum uint MM_MISC_VRAM_CTRL     = 0x3000_0050;
-enum uint TZC_MM_BMX_TZMID      = 0x2000_5300;
-enum uint TZC_MM_BMX_TZMID_LOCK = 0x2000_5304;
-enum uint TZC_PSRAMA_TZSRG_CTRL = 0x2000_5380;
-enum uint TZC_PSRAMB_TZSRG_CTRL = 0x2000_53A0;
 enum uint MM_MISC_CPU0_BOOT     = 0x3000_0000;
 enum uint MM_GLB_SW_SYS_RESET   = 0x3000_7040;
 enum uint MM_MISC_CPU_RTC       = 0x3000_0018;
+enum uint GLB_GPIO_CFG0         = 0x2000_08C4;
 
-enum uint D0_IMAGE_FLASH_ADDR   = 0x5821_0000;   // D0FW partition base (XIP-mapped)
-enum uint D0_IMAGE_FLASH_SIZE   = 0x0040_0000;   // D0FW partition size
-enum uint D0_PSRAM_LOAD_ADDR    = 0x5010_0000;
-enum uint D0_PSRAM_LOAD_SIZE    = 0x0040_0000;   // D0 CODE region in d0 linker script
+struct D0Run
+{
+    uint dest;
+    uint size;
+}
+
+extern(C) extern immutable(ubyte) _d0_image, _image_limit;
 
 extern(C) void bl_psram_init();
 
@@ -153,8 +159,9 @@ void mm_clk_config()
     mmio_set_field(MM_CLK_CTRL_CPU, 13, 0x3, 2);   // BCLK1X_SEL      = 160MHz PLL
     mmio_set_field(MM_CLK_CTRL_CPU, 11, 0x1, 1);   // CPU_ROOT_CLK    = PLL
     mmio_set_field(MM_CLK_CTRL_CPU,  8, 0x3, 2);   // CPU_CLK_SEL     = 400MHz PLL
-    mmio_set_field(MM_CLK_CTRL_CPU,  4, 0x3, 3);   // UART_CLK_SEL    = XCLK
+    mmio_set_field(MM_CLK_CTRL_CPU,  4, 0x3, 2);   // UART_CLK_SEL    = XCLK
     mmio_set_field(MM_CLK_CTRL_CPU,  6, 0x1, 1);   // I2C_CLK_SEL     = XCLK
+    mmio_set_field(MM_CLK_CTRL_PERI, 16, 0xF, 1);  // UART0 (D0's UART3): DIV_EN, DIV = 0
 }
 
 void uart_signal_mux()
@@ -182,82 +189,60 @@ void l2_sram_partition()
     mmio_set_bit(MM_MISC_VRAM_CTRL, 0);
 }
 
-void tzc_config_for_d0()
+// Payload from tools/bl808_image.py: entry, run count, the runs, then one raw-deflate stream per run.
+uint d0_image_load()
 {
-    mmio_set_bit(TZC_MM_BMX_TZMID, 0);
-    mmio_set_bit(TZC_MM_BMX_TZMID_LOCK, 0);
+    const(uint)* header = cast(const(uint)*)&_d0_image;
+    const(ubyte)* limit = &_image_limit;
+    uint entry = header[0];
+    uint count = header[1];
+    const(D0Run)* table = cast(const(D0Run)*)(header + 2);
+    if (count == 0 || (limit - cast(const(ubyte)*)table) / D0Run.sizeof <= count)
+        return 0;
+    const(ubyte)* streams = cast(const(ubyte)*)(table + count);
+    const(ubyte)[] src = streams[0 .. limit - streams];
 
-    uint a = mmio_read(TZC_PSRAMA_TZSRG_CTRL);
-    a = (a & ~uint(0x3)) | 0x1;    // region 0 group = 1 (D0)
-    a |= uint(1) << 16;            // region 0 enable
-    mmio_write(TZC_PSRAMA_TZSRG_CTRL, a);
-
-    uint b = mmio_read(TZC_PSRAMB_TZSRG_CTRL);
-    b = (b & ~uint(0x3)) | 0x1;
-    b |= uint(1) << 16;
-    mmio_write(TZC_PSRAMB_TZSRG_CTRL, b);
-}
-
-void d0_image_load()
-{
     // T-Head MHCR (CSR 0x7C1): bit 0 = I-cache enable, bit 1 = D-cache enable.
     // Disable D-cache around PSRAM writes so D0 sees fresh memory.
     asm @nogc nothrow { "csrc 0x7C1, 0x2"; }
+    scope (exit) asm @nogc nothrow { "csrs 0x7C1, 0x2"; }
 
-    // Detect gzip: id1=0x1F, id2=0x8B, method=deflate(8). Anything else is
-    // treated as a raw D0 image starting at offset 0.
-    const(ubyte)* flash = cast(const(ubyte)*)cast(size_t)D0_IMAGE_FLASH_ADDR;
-    if (flash[0] == 0x1F && flash[1] == 0x8B && flash[2] == 0x08)
-        gunzip_d0(flash);
-    else
-        raw_copy_d0(flash);
-
-    asm @nogc nothrow { "csrs 0x7C1, 0x2"; }
-}
-
-void raw_copy_d0(const(ubyte)* flash)
-{
-    uint* src = cast(uint*)flash;
-    uint* dst = cast(uint*)cast(size_t)D0_PSRAM_LOAD_ADDR;
-    uint words = D0_PSRAM_LOAD_SIZE / 4;
-    for (uint i = 0; i < words; ++i)
-        dst[i] = src[i];
-}
-
-void gunzip_d0(const(ubyte)* flash)
-{
-    // gzip_uncompress tolerates an oversized source slice -- it finds its own
-    // footer via uncompress's srcConsumed output. Source bound is the whole
-    // D0FW partition; anything past the actual gzip stream is junk and ignored.
-    const(void)[] src = flash[0 .. D0_IMAGE_FLASH_SIZE];
-    void[] dst = (cast(void*)cast(size_t)D0_PSRAM_LOAD_ADDR)[0 .. D0_PSRAM_LOAD_SIZE];
-    size_t out_len;
-    if (gzip_uncompress(src, dst, out_len).failed)
+    foreach (ref run; table[0 .. count])
     {
-        // No UART yet (sys_init runs after m0_bringup), nowhere to report.
-        // Halt -- watchdog will reset the board if enabled.
-        for (;;) {}
+        size_t written, consumed;
+        if (uncompress(src, (cast(void*)cast(size_t)run.dest)[0 .. run.size], written, &consumed).failed || written != run.size)
+            return 0;
+        src = src[consumed .. $];
     }
+    return entry;
+}
+
+// M1s Dock: D0's UART3 reaches the BL702's second channel on GPIO16 (TX) / GPIO17 (RX).
+// MM_UART is function 21; the pad's index picks the signal (16 = TXD, 17 = RXD).
+void d0_console_pins()
+{
+    enum uint mm_uart_pad = (21 << 8) | (1 << 4) | (1 << 2) | (1 << 1) | (1 << 0);   // FUNC_SEL, PU, DRV=1, SMT, IE
+    mmio_write(GLB_GPIO_CFG0 + 16 * 4, mm_uart_pad);
+    mmio_write(GLB_GPIO_CFG0 + 17 * 4, mm_uart_pad);
 }
 
 void d0_mtimer_config()
 {
     mmio_clear_bit(MM_MISC_CPU_RTC, 31);            // disable while changing divider
-    mmio_set_field(MM_MISC_CPU_RTC, 0, 0x3FF, 39);  // DIV = 39 for 10MHz from 400MHz
+    mmio_set_field(MM_MISC_CPU_RTC, 0, 0x3FF, 399); // DIV = 399 for 1MHz from 400MHz
     mmio_set_bit(MM_MISC_CPU_RTC, 31);              // re-enable
 }
 
 void d0_halt()
 {
-    mmio_set_bit(MM_GLB_SW_SYS_RESET, 8);
-}
-
-void d0_set_boot_addr()
-{
-    mmio_write(MM_MISC_CPU0_BOOT, D0_PSRAM_LOAD_ADDR);
+    mmio_clear_bit(MM_CLK_CTRL_CPU, 12);            // MMCPU0_CLK_EN
+    arch_delay_us(1);
+    mmio_set_bit(MM_GLB_SW_SYS_RESET, 8);           // MMCPU0_RESET
 }
 
 void d0_release()
 {
+    mmio_set_bit(MM_CLK_CTRL_CPU, 12);
+    arch_delay_us(1);
     mmio_clear_bit(MM_GLB_SW_SYS_RESET, 8);
 }

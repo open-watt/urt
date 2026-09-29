@@ -30,6 +30,7 @@ enum uint reset_uart0       = 1 << 26;
 enum uint reset_uart1       = 1 << 27;
 enum uint reset_io_bank0    = 1 << 6;
 enum uint reset_pads_bank0  = 1 << 9;
+enum uint reset_pio0        = 1 << 11;
 enum uint reset_pwm         = 1 << 16;
 enum uint reset_pll_sys     = 1 << 14;
 enum uint reset_trng        = 1 << 25;

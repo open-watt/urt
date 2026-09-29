@@ -8,6 +8,7 @@
 module urt.driver.bl808_m0.start;
 
 import core.volatile;
+import urt.attribute : critical;
 import urt.zip : uncompress;
 import urt.driver.bl618.uart : uart0_early_init, uart0_hw_puts;
 
@@ -98,7 +99,7 @@ pragma(inline, true) void mmio_set_field(uint addr, uint shift, uint mask, uint 
     mmio_write(addr, v);
 }
 
-pragma(inline, false) extern(C) void arch_delay_us(uint us)
+@critical pragma(inline, false) extern(C) void arch_delay_us(uint us)
 {
     // E907 mtime runs at 1MHz so 1 tick == 1us. The low 32 bits roll over every
     // ~71 minutes; we only ever wait microseconds, so unsigned wrap is harmless.

@@ -123,6 +123,7 @@ SECTIONS
     .ramfunc : ALIGN(4)
     {
         *(.ramfunc .ramfunc.*)
+        *(.tcm_code .tcm_code.* .tcm_const .tcm_const.*)
     } > ITCM AT > FLASH
 
     _ramfunc_load  = LOADADDR(.ramfunc);

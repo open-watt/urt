@@ -283,3 +283,11 @@ bool _resolve_batch(const(void*)[] addrs, Resolved[] results) @trusted
 {
     return false;
 }
+
+// C's assert, from the vendored C libraries, reports through urt like a D assert.
+extern(C) void __assert_func(immutable(char)* file, int line, immutable(char)* func, immutable(char)* expr) @trusted
+{
+    import urt.mem : strlen;
+    import urt.exception : assert_handler;
+    assert_handler()(file[0 .. file ? strlen(file) : 0], line, expr[0 .. expr ? strlen(expr) : 0]);
+}

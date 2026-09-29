@@ -79,8 +79,13 @@ struct MemoryPool
     ulong total;        // capacity in bytes (0 means slot unused)
     ulong used;         // currently allocated
     ulong peak_used;    // high-water mark of used (0 if unavailable)
-    ulong largest_free; // largest contiguous allocatable block (0 if unknown)
-    ulong low;          // interval watermarks; only sample_memory_watermarks() fills these
+    ulong largest_free; // largest contiguous allocatable block (0 if unknown); walks the heap
+}
+
+struct PoolUsage
+{
+    ulong used;
+    ulong low;          // extremes of used since the previous sample
     ulong high;
 }
 
@@ -205,6 +210,29 @@ SystemInfo get_sysinfo()
         }
     }
 
+    get_stack_usage(r.stack_size, r.stack_peak);
+
+    static if (!hosted)
+        r.uptime = get_app_time();
+
+    return r;
+}
+
+// The allocator's own accounting, one domain for all three and cheap: no heap walk, no lock.
+// Hosted pools count uRT allocations only. Sampling re-arms the interval, so one caller owns it.
+void sample_memory_usage(ref PoolUsage[MaxMemoryPools] usage)
+{
+    foreach (i, ref u; usage)
+    {
+        size_t used, low, high;
+        sample_pool_usage(i, used, low, high);
+        u = PoolUsage(used, low, high);
+    }
+}
+
+// The main stack's capacity (0 if unknown) and its deepest use since boot.
+void get_stack_usage(out ulong size, out ulong peak)
+{
     version (Windows)
     {
         version (X86_64) alias read_tib = __readgsqword;
@@ -214,8 +242,8 @@ SystemInfo get_sysinfo()
         const size_t limit = cast(size_t)read_tib(NT_TIB.StackLimit.offsetof);
         MEMORY_BASIC_INFORMATION mbi;
         if (VirtualQuery(cast(void*)limit, &mbi, mbi.sizeof))
-            r.stack_size = high - cast(size_t)mbi.AllocationBase;
-        r.stack_peak = stack_depth(limit, high, 0);
+            size = high - cast(size_t)mbi.AllocationBase;
+        peak = stack_depth(limit, high, 0);
     }
     else version (linux)
     {
@@ -223,39 +251,22 @@ SystemInfo get_sysinfo()
 
         rlimit rl = void;
         if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
-            r.stack_size = rl.rlim_cur;
+            size = rl.rlim_cur;
         size_t low, high;
         if (stack_mapping(low, high))
-            r.stack_peak = stack_depth(low, high, 0);
+            peak = stack_depth(low, high, 0);
     }
     else version (Espressif)
     {
-        size_t size, peak;
-        ow_main_stack_stats(&size, &peak);
-        r.stack_size = size;
-        r.stack_peak = peak;
+        size_t main_size, main_peak;
+        ow_main_stack_stats(&main_size, &main_peak);
+        size = main_size;
+        peak = main_peak;
     }
     else version (BareMetal)
     {
-        r.stack_size = cast(size_t)&_stack_top - cast(size_t)&_stack_low;
-        r.stack_peak = stack_depth(cast(size_t)&_stack_low, cast(size_t)&_stack_top, stack_paint);
-    }
-
-    static if (!hosted)
-        r.uptime = get_app_time();
-
-    return r;
-}
-
-// Destructive interval sample; one caller owns the cadence. Hosted pools track uRT allocations.
-void sample_memory_watermarks(ref SystemInfo info)
-{
-    foreach (i, ref p; info.pools)
-    {
-        size_t low, high;
-        sample_pool_usage(i, low, high);
-        p.low = low;
-        p.high = high;
+        size = cast(size_t)&_stack_top - cast(size_t)&_stack_low;
+        peak = stack_depth(cast(size_t)&_stack_low, cast(size_t)&_stack_top, stack_paint);
     }
 }
 

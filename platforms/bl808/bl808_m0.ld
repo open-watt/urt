@@ -11,7 +11,7 @@
  *   - Jump to _start
  *
  * Memory map (M0 view):
- *   FLASH   : 0x58000000  2MB    XIP -- .text, .rodata (matches M0 FW partition)
+ *   FLASH   : 0x58000000  4MB-4K XIP -- .text, .rodata, then the deflated D0 image (one FW bank)
  *   ITCM    : 0x62028000  28KB   @critical code (.ramfunc), copied at boot
  *   DTCM    : 0x6202F000  4KB    fastest heap pool (uncached, single-cycle)
  *   HBNRAM  : 0x20010000  4KB    @persist data (.hbn_ram), survives hibernate
@@ -57,7 +57,7 @@ EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
 {
-    FLASH  (rx)  : ORIGIN = 0x58000000, LENGTH = 2M
+    FLASH  (rx)  : ORIGIN = 0x58000000, LENGTH = 0x3FF000
     ITCM   (rx)  : ORIGIN = 0x62028000, LENGTH = 28K
     DTCM   (rwx) : ORIGIN = 0x6202F000, LENGTH = 4K
     HBNRAM (rw)  : ORIGIN = 0x20010000, LENGTH = 4K
@@ -281,6 +281,11 @@ SECTIONS
     _tdata_load  = LOADADDR(.tdata);
     _tdata_start = ADDR(.tdata);
     _tdata_end   = _tdata_start + SIZEOF(.tdata);
+
+    /* The deflated D0 image follows the last flash-resident byte; one FW bank holds both. */
+    _image_start = ORIGIN(FLASH);
+    _d0_image    = ALIGN(_tdata_load + SIZEOF(.tdata), 4);
+    _image_limit = ORIGIN(FLASH) + LENGTH(FLASH);
 
     .tbss (NOLOAD) : ALIGN(4)
     {

@@ -129,7 +129,7 @@ SECTIONS
 
     _stack_size = 32K;
 
-    __heap_start = _persist_end;
+    __heap_start = ALIGN(_persist_end, 8);
     __heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - _stack_size;
 
     _stack_top = ORIGIN(SRAM) + LENGTH(SRAM);

@@ -158,12 +158,12 @@ SECTIONS
     /* PSRAM heap pool (default / slow for urt.driver.bl_common.alloc).
      * Starts at _bss_end and grows to end of PSRAM. The allocator reclaims
      * the LMA-tail bytes after start.S finishes the SRAM copies. */
-    __psram_heap_start = _bss_end;
+    __psram_heap_start = ALIGN(_bss_end, 8);
     __psram_heap_end   = ORIGIN(PSRAM) + LENGTH(PSRAM);
 
     /* SRAM heap pool (fast / dma / fastest -- D0 has no DTCM). End of .tbss
      * up to stack reservation at top of SRAM. */
-    __sram_heap_start = _tbss_end;
+    __sram_heap_start = ALIGN(_tbss_end, 8);
     __sram_heap_end   = ORIGIN(SRAM) + LENGTH(SRAM) - 16K;
 
     /* Stack in fast on-chip SRAM, top 16K reserved. */

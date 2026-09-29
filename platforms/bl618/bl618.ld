@@ -157,7 +157,7 @@ SECTIONS
     __StackTop = _stack_top;
 
     /* OCRAM heap (cached, fast): between TLS and the stack. */
-    __ocram_heap_start = _tbss_end;
+    __ocram_heap_start = ALIGN(_tbss_end, 8);
     __ocram_heap_end   = _stack_low;
 
     /* DMA heap (non-cache): the full reserved alias region. */

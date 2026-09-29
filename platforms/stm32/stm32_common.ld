@@ -127,7 +127,7 @@ SECTIONS
     _stack_low = _stack_top - _stack_size;
     __StackTop = _stack_top;
 
-    __core_heap_start = _persist_end;
+    __core_heap_start = ALIGN(_persist_end, 8);
     __core_heap_end   = _stack_low;
     ASSERT(__core_heap_end >= __core_heap_start, "core RAM exhausted: static data collides with the stack")
 
@@ -141,7 +141,7 @@ SECTIONS
 
     _ramfunc_load = LOADADDR(.ramfunc);
 
-    __bulk_heap_start = _ramfunc_end;
+    __bulk_heap_start = ALIGN(_ramfunc_end, 8);
     __bulk_heap_end   = ORIGIN(BULK_RAM) + LENGTH(BULK_RAM);
 
     /DISCARD/ :

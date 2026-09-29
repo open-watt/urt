@@ -6,12 +6,12 @@ import urt.result : InternalResult, Result;
 nothrow @nogc:
 
 
-enum uint num_pwm = 4;
+enum uint num_hw_pwm = 4;
 
 Result pwm_hw_open(uint port, ref const PwmConfig config)
 {
     ubyte resolution = resolution_bits(config.period);
-    if (port >= num_pwm || resolution == 0)
+    if (port >= num_hw_pwm || resolution == 0)
         return InternalResult.invalid_parameter;
     if (_open[port])
         return InternalResult.already_exists;
@@ -27,14 +27,14 @@ Result pwm_hw_open(uint port, ref const PwmConfig config)
 
 Result pwm_hw_set_duty(uint port, uint duty)
 {
-    if (port >= num_pwm || !_open[port])
+    if (port >= num_hw_pwm || !_open[port])
         return InternalResult.invalid_parameter;
     return ow_pwm_set_duty(port, duty) == 0 ? Result.success : InternalResult.failed;
 }
 
 void pwm_hw_close(uint port)
 {
-    if (port >= num_pwm || !_open[port])
+    if (port >= num_hw_pwm || !_open[port])
         return;
     ow_pwm_close(port);
     _open[port] = false;
@@ -42,7 +42,7 @@ void pwm_hw_close(uint port)
 
 private:
 
-__gshared bool[num_pwm] _open;
+__gshared bool[num_hw_pwm] _open;
 
 ubyte resolution_bits(uint period)
 {

@@ -13,9 +13,9 @@ void note_pool_usage(size_t pool, size_t used)
 }
 
 // One sampler per pool. Concurrent updates can fall on either side of a sample boundary.
-void sample_pool_usage(size_t pool, out size_t low, out size_t high)
+void sample_pool_usage(size_t pool, out size_t used, out size_t low, out size_t high)
 {
-    _watermarks[pool].sample(low, high);
+    _watermarks[pool].sample(used, low, high);
 }
 
 void account_pool_usage(size_t bytes, bool freed)
@@ -45,33 +45,46 @@ struct Watermark
             old = atomicLoad!(MemoryOrder.relaxed)(high);
     }
 
-    void sample(out size_t minimum, out size_t maximum)
+    void sample(out size_t used, out size_t minimum, out size_t maximum)
     {
-        size_t used = atomicLoad!(MemoryOrder.relaxed)(current);
+        used = atomicLoad!(MemoryOrder.relaxed)(current);
         minimum = atomicExchange!(MemoryOrder.relaxed)(&low, used);
         maximum = atomicExchange!(MemoryOrder.relaxed)(&high, used);
-        if (minimum > maximum)
-            minimum = maximum = used;
+        // a writer publishes current before noting it, so used may not have reached the extremes yet
+        if (used < minimum)
+            minimum = used;
+        if (used > maximum)
+            maximum = used;
     }
 }
 
 unittest
 {
     Watermark w;
-    size_t low, high;
-    w.sample(low, high);
-    assert(low == 0 && high == 0);
-    foreach (used; [1000, 5000, 2000])
+    size_t used, low, high;
+    w.sample(used, low, high);
+    assert(used == 0 && low == 0 && high == 0);
+    foreach (u; [1000, 5000, 2000])
     {
-        w.current = used;
-        w.note(used);
+        w.current = u;
+        w.note(u);
     }
-    w.sample(low, high);
-    assert(low == 0 && high == 5000);
-    w.sample(low, high);
-    assert(low == 2000 && high == 2000);
+    w.sample(used, low, high);
+    assert(used == 2000 && low == 0 && high == 5000);
+    w.sample(used, low, high);
+    assert(used == 2000 && low == 2000 && high == 2000);
     w.current = 2500;
     w.note(2500);
-    w.sample(low, high);
-    assert(low == 2000 && high == 2500);
+    w.sample(used, low, high);
+    assert(used == 2500 && low == 2000 && high == 2500);
+
+    w.current = 1000;
+    w.note(1000);
+    w.sample(used, low, high);
+    w.current = 3000;
+    w.sample(used, low, high);
+    assert(used == 3000 && low == 1000 && high == 3000, "a writer paused between current and note left used outside its band");
+    w.note(3000);
+    w.sample(used, low, high);
+    assert(used == 3000 && low == 3000 && high == 3000);
 }

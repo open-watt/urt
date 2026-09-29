@@ -219,7 +219,7 @@ _start:
     bltu    a0, a2, .Lsram_data_copy
 .Lsram_data_done:
 
-    /* Copy .tdata from flash to DTCM */
+    /* Copy .tdata from flash to PSRAM */
     la      a0, _tdata_start
     la      a1, _tdata_load
     la      a2, _tdata_end

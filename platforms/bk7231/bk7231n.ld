@@ -199,7 +199,7 @@ SECTIONS
     _fast_heap_end = _und_stack_start;
     ASSERT(_fast_heap_end >= _fast_heap_start, "DTCM data and stacks overlap")
 
-    __heap_start = _persist_end;
+    __heap_start = ALIGN(_persist_end, 8);
     /* The reset record takes the last 16 bytes of SRAM, where no build moves it. */
     __reset_record = ORIGIN(SRAM) + LENGTH(SRAM) - 16;
     __heap_end   = __reset_record;

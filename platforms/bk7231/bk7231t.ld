@@ -196,7 +196,7 @@ SECTIONS
     _abt_stack_start = _stack_bottom - _abt_stack_size;
     _und_stack_start = _abt_stack_start - _und_stack_size;
 
-    __heap_start = _persist_end;
+    __heap_start = ALIGN(_persist_end, 8);
     __heap_end   = _und_stack_start;
     ASSERT(__heap_end - __heap_start >= 32K, "static data has squeezed the heap below 32K")
     _stack_low = _stack_bottom;

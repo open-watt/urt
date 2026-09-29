@@ -297,7 +297,7 @@ SECTIONS
     } > HBNRAM
 
     /* PSRAM heap pool: end of .tbss up to top of slice. */
-    __psram_heap_start = _tbss_end;
+    __psram_heap_start = ALIGN(_tbss_end, 8);
     __psram_heap_end   = ORIGIN(PSRAM) + LENGTH(PSRAM);
 
     /* Stack at the top of OCRAM, immediately below WIFIRAM.
@@ -311,7 +311,7 @@ SECTIONS
 
     /* OCRAM heap pool: between fast data and stack. DMA-reachable; the
      * allocator's MemFlags.dma routes here. */
-    __ocram_heap_start = _sram_data_end;
+    __ocram_heap_start = ALIGN(_sram_data_end, 8);
     __ocram_heap_end   = _stack_low;
 
     ASSERT(__ocram_heap_start <= __ocram_heap_end, "OCRAM overflow: .xram + .sram_data + heap + stack don't fit in 64K")

@@ -128,13 +128,13 @@ _start:
     call    sys_init
 
     /* .init_array — LDC module info registration */
-    la      t0, __init_array_start
-    la      t1, __init_array_end
+    la      s0, __init_array_start
+    la      s1, __init_array_end
 .Linit_array_loop:
-    bgeu    t0, t1, .Linit_array_done
-    ld      t2, 0(t0)
+    bgeu    s0, s1, .Linit_array_done
+    ld      t2, 0(s0)
     jalr    ra, t2
-    addi    t0, t0, 8
+    addi    s0, s0, 8
     j       .Linit_array_loop
 .Linit_array_done:
 

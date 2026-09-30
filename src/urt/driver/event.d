@@ -44,6 +44,8 @@ version (Espressif)
     public import urt.driver.esp32.event;
 else version (MT7621)
     public import urt.driver.mt7621.event;
+else version (STM32)
+    public import urt.driver.stm32.event;
 else
 {
     enum uint num_links = 0;
@@ -147,12 +149,12 @@ Task isr_task(alias handler)(void* context = null)
     return Task(TaskKind.isr, 0, 0, &handler, context);
 }
 
-bool is_open(ref const Link link)
+bool is_open(ref const Link link) pure
 {
     return link.slot != ubyte.max;
 }
 
-bool is_hardware(ref const Link link)
+bool is_hardware(ref const Link link) pure
 {
     return link.hardware;
 }

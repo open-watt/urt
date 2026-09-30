@@ -79,14 +79,21 @@ else version (Beken)    enum bool has_system_reset = true;
 else version (MT7621)   enum bool has_system_reset = true;
 else                    enum bool has_system_reset = false;
 
-version (RP2350) version = CortexM;
-else version (STM32) version = CortexM;
+version (STM32) version = CortexM;
 
 noreturn system_reset()
 {
     import core.volatile : volatileLoad, volatileStore;
 
-    version (CortexM)
+    version (RP2350)
+    {
+        // A core reset leaves the peripherals configured, so the watchdog resets the chip as the ROM's reboot()
+        // does, without the parameters it leaves in SCRATCH2-3.
+        import urt.driver.rp2350 : mmio_write, watchdog_base, watchdog_reset_all;
+        watchdog_reset_all();
+        mmio_write(watchdog_base, 1u << 31);
+    }
+    else version (CortexM)
     {
         asm @nogc nothrow { "dsb sy" ::: "memory"; }
         volatileStore(cast(uint*)0xE000ED0C, 0x05FA_0004);    // AIRCR SYSRESETREQ

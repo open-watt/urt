@@ -385,15 +385,6 @@ __clic_vectors:
     .option arch, +xtheadint
 _clic_dispatch:
     th.ipush
-    csrr    t0, mepc
-    la      t1, __irq_sample_mepc
-    sw      t0, 0(t1)
-    csrr    t0, mcause
-    la      t1, __irq_sample_mcause
-    sw      t0, 0(t1)
-    mv      t0, sp
-    la      t1, __irq_sample_sp
-    sw      t0, 0(t1)
     csrci   mstatus, 0x8
     csrr    a0, mcause
     andi    a0, a0, 0x3FF

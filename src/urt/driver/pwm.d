@@ -14,8 +14,8 @@ else version (RP2350)
 else
     enum uint num_hw_pwm = 0;
 
-// Bouffalo's system tick holds the periodic timer
-version (Bouffalo)
+// the BL808 M0's hang watchdog holds the periodic timer
+version (BL808_M0)
     enum bool has_soft_pwm = false;
 else
     enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;

@@ -22,7 +22,7 @@ Result ws2812_hw_open(uint chain, GpioLine line)
     return Result.success;
 }
 
-void ws2812_hw_send(uint chain, const(uint)[] grb)
+bool ws2812_hw_send(uint chain, const(uint)[] grb)
 {
     auto guard = irq_critical();
     foreach (pixel; grb)
@@ -31,6 +31,7 @@ void ws2812_hw_send(uint chain, const(uint)[] grb)
             send_bit((pixel & (0x80_0000 >> i)) != 0);
     }
     raw_set(_pin, false);
+    return true;
 }
 
 void ws2812_hw_close(uint chain)

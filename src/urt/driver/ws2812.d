@@ -5,7 +5,7 @@
 // A backend exports:
 //   enum uint num_ws2812;                      // chains it can drive at once
 //   Result ws2812_hw_open(uint chain, GpioLine line);
-//   void ws2812_hw_send(uint chain, const(uint)[] grb);   // one pixel per word, in the low 24 bits
+//   bool ws2812_hw_send(uint chain, const(uint)[] grb);   // one pixel per word, in the low 24 bits; false if cut short
 //   void ws2812_hw_close(uint chain);
 module urt.driver.ws2812;
 
@@ -63,7 +63,7 @@ Result ws2812_open(ref Ws2812 ws, GpioLine line)
             Result result = ws2812_hw_open(cast(uint)i, line);
             if (!result)
                 return result;
-            c = Chain(line, 1, 0);
+            c = Chain(line, 1);
             ws.chain = cast(ubyte)i;
             return Result.success;
         }
@@ -82,16 +82,16 @@ Result ws2812_set(ref Ws2812 ws, uint index, uint rgb)
             return InternalResult.invalid_parameter;
         Chain* c = &_chains[ws.chain];
         immutable uint grb = (rgb >> 8 & 0xFF) << 16 | (rgb >> 16 & 0xFF) << 8 | (rgb & 0xFF);
-        if (index < c.length && c.grb[index] == grb)
+        if (index < c.length && c.grb[index] == grb && !c.unsent)
             return Result.success;
         c.grb[index] = grb;
         if (index >= c.length)
             c.length = cast(ubyte)(index + 1);
         while (getTime() < c.latched)
         {}
-        ws2812_hw_send(ws.chain, c.grb[0 .. c.length]);
+        c.unsent = !ws2812_hw_send(ws.chain, c.grb[0 .. c.length]);
         c.latched = getTime() + usecs(c.length * pixel_us) + ws2812_latch;
-        return Result.success;
+        return c.unsent ? InternalResult.failed : Result.success;
     }
 }
 
@@ -119,6 +119,7 @@ struct Chain
     GpioLine line;
     ubyte users;
     ubyte length;
+    bool unsent;
     MonoTime latched;
     uint[ws2812_max_pixels] grb;
 }

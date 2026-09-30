@@ -12,6 +12,7 @@ import urt.attribute : critical;
 import urt.zip : uncompress;
 import urt.driver.bl618.uart : uart0_early_init, uart0_hw_puts;
 import urt.driver.bl_common.clock : d0_clock_hz, m0_clock_hz, mtime_hz;
+import urt.driver.bl_common.xram : xram_reset;
 
 @nogc nothrow:
 
@@ -50,6 +51,7 @@ private void launch_d0()
     mtime_config(MM_MISC_CPU_RTC, d0_clock_hz);
     d0_halt();
     mmio_write(MM_MISC_CPU0_BOOT, entry);
+    xram_reset();
     dcache_clean_all();
     d0_release();
     mtime_zero();

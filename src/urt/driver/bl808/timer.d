@@ -2,8 +2,8 @@
 ///
 /// Two time sources:
 ///
-/// 1. mtime (RISC-V standard) - 1 MHz monotonic counter.
-///    Read via rdtime. Survives WFI/clock scaling, resets on system reset.
+/// 1. mtime (RISC-V standard) - monotonic counter at the rate shared with M0 (bl_common.clock).
+///    Read via rdtime. Divides the core clock, so it follows any change to it.
 ///    Used for monotonic timekeeping (get_time / Duration / Timer).
 ///
 /// 2. HBN RTC - 32,768 Hz counter in the Hibernate block.
@@ -26,6 +26,7 @@
 module urt.driver.bl808.timer;
 
 import core.volatile;
+import urt.driver.bl_common.clock : mtime_hz;
 import urt.driver.riscv.clint : mtimecmp_write;
 
 public import urt.driver.riscv.csr : mcycle_read, mtime_read;
@@ -44,15 +45,7 @@ private enum ulong HBN_CTL       = HBN_BASE + 0x00;
 private enum ulong HBN_RTC_TIME_L = HBN_BASE + 0x0C;
 private enum ulong HBN_RTC_TIME_H = HBN_BASE + 0x10;
 
-// ================================================================
-// mtime frequency
-//
-// The BL808 mtime counter runs at 1MHz (from the XTAL/PLL
-// divided down). Confirm on hardware by measuring against
-// a known delay or reading the clock tree registers.
-// ================================================================
-
-enum uint mtime_freq_hz = 1_000_000;
+enum uint mtime_freq_hz = mtime_hz;
 enum bool has_mtime = true;
 enum bool has_rtc = true;
 enum bool has_mcycle = true;

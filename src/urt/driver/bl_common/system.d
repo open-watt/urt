@@ -58,7 +58,7 @@ version (BL808_M0)
 
     extern(C) void ow_hang_watchdog_feed()
     {
-        _wd_last_feed_us = mtime_read();
+        _wd_last_feed = mtime_read();
         ++_wd_feed_count;
     }
 }
@@ -74,27 +74,27 @@ void tick_stub() @nogc nothrow
 
 version (BL808_M0)
 {
-    __gshared ulong _wd_last_feed_us;
-    __gshared ulong _wd_next_report_us;
+    __gshared ulong _wd_last_feed;
+    __gshared ulong _wd_next_report;
     __gshared uint  _wd_feed_count;
     __gshared uint  _wd_report_count;
 
     void hang_watchdog_tick()
     {
         ulong now = mtime_read();
-        if (_wd_last_feed_us == 0)
+        if (_wd_last_feed == 0)
         {
-            _wd_last_feed_us = now;
-            _wd_next_report_us = now + 1_500_000;
+            _wd_last_feed = now;
+            _wd_next_report = now + mtime_freq_hz * 3 / 2;
             return;
         }
 
-        if (now - _wd_last_feed_us < 1_500_000)
+        if (now - _wd_last_feed < mtime_freq_hz * 3 / 2)
             return;
-        if (now < _wd_next_report_us)
+        if (now < _wd_next_report)
             return;
 
-        _wd_next_report_us = now + 1_000_000;
+        _wd_next_report = now + mtime_freq_hz;
         ++_wd_report_count;
 
         uart0_print("\n[wd hung feed=");

@@ -11,6 +11,7 @@ import core.volatile;
 import urt.attribute : critical;
 import urt.zip : uncompress;
 import urt.driver.bl618.uart : uart0_early_init, uart0_hw_puts;
+import urt.driver.bl_common.clock : d0_clock_hz, m0_clock_hz, mtime_hz;
 
 @nogc nothrow:
 
@@ -22,8 +23,10 @@ private enum uint M0_CONSOLE_BAUD   = 2_000_000;
 
 extern(C) void m0_bringup()
 {
+    mtime_config(MCU_E907_RTC, m0_clock_hz);
     xram_uncached();
     mm_domain_power_on();
+    bl_cpupll_480m();
     mm_clk_config();
     mcu2ext_bus_threshold();
     uart_signal_mux();
@@ -44,11 +47,12 @@ private void launch_d0()
         return;
     }
     d0_console_pins();
-    d0_mtimer_config();
+    mtime_config(MM_MISC_CPU_RTC, d0_clock_hz);
     d0_halt();
     mmio_write(MM_MISC_CPU0_BOOT, entry);
     dcache_clean_all();
     d0_release();
+    mtime_zero();
 }
 
 private:
@@ -62,6 +66,7 @@ enum uint MM_MISC_VRAM_CTRL     = 0x3000_0050;
 enum uint MM_MISC_CPU0_BOOT     = 0x3000_0000;
 enum uint MM_GLB_SW_SYS_RESET   = 0x3000_7040;
 enum uint MM_MISC_CPU_RTC       = 0x3000_0018;
+enum uint MCU_E907_RTC          = 0x2000_9014;
 enum uint GLB_GPIO_CFG0         = 0x2000_08C4;
 
 struct D0Run
@@ -73,6 +78,7 @@ struct D0Run
 extern(C) extern immutable(ubyte) _d0_image, _image_limit;
 
 extern(C) void bl_psram_init();
+extern(C) void bl_cpupll_480m();
 
 pragma(inline, true) uint mmio_read(uint addr)
 {
@@ -103,15 +109,14 @@ pragma(inline, true) void mmio_set_field(uint addr, uint shift, uint mask, uint 
 
 @critical pragma(inline, false) extern(C) void arch_delay_us(uint us)
 {
-    // E907 mtime runs at 1MHz so 1 tick == 1us. The low 32 bits roll over every
-    // ~71 minutes; we only ever wait microseconds, so unsigned wrap is harmless.
+    // The low 32 bits roll over every ~27 s; we only ever wait microseconds.
     uint start, now;
     asm @nogc nothrow { "rdtime %0" : "=r" (start); }
     do
     {
         asm @nogc nothrow { "rdtime %0" : "=r" (now); }
     }
-    while ((now - start) < us);
+    while ((now - start) < us * (mtime_hz / 1_000_000));
 }
 
 // Carve 64KB of WRAM as WiFi MAC "Embedded Memory" (EM). Vendor's libwifi.a
@@ -178,7 +183,7 @@ void mm_clk_config()
     mmio_set_field(MM_CLK_CTRL_CPU, 10, 0x1, 1);   // XCLK_CLK_SEL    = XTAL
     mmio_set_field(MM_CLK_CTRL_CPU, 13, 0x3, 2);   // BCLK1X_SEL      = 160MHz PLL
     mmio_set_field(MM_CLK_CTRL_CPU, 11, 0x1, 1);   // CPU_ROOT_CLK    = PLL
-    mmio_set_field(MM_CLK_CTRL_CPU,  8, 0x3, 2);   // CPU_CLK_SEL     = 400MHz PLL
+    mmio_set_field(MM_CLK_CTRL_CPU,  8, 0x3, 2);   // CPU_CLK_SEL     = CPU PLL
     mmio_set_field(MM_CLK_CTRL_CPU,  4, 0x3, 2);   // UART_CLK_SEL    = XCLK
     mmio_set_field(MM_CLK_CTRL_CPU,  6, 0x1, 1);   // I2C_CLK_SEL     = XCLK
     mmio_set_field(MM_CLK_CTRL_PERI, 16, 0xF, 1);  // UART0 (D0's UART3): DIV_EN, DIV = 0
@@ -241,11 +246,24 @@ void d0_console_pins()
     mmio_write(GLB_GPIO_CFG0 + 17 * 4, mm_uart_pad);
 }
 
-void d0_mtimer_config()
+// DIV [9:0] is the core clock's divisor less one; bit 30 holds the counter at zero, bit 31 enables it.
+void mtime_config(uint reg, uint clock_hz)
 {
-    mmio_clear_bit(MM_MISC_CPU_RTC, 31);            // disable while changing divider
-    mmio_set_field(MM_MISC_CPU_RTC, 0, 0x3FF, 399); // DIV = 399 for 1MHz from 400MHz
-    mmio_set_bit(MM_MISC_CPU_RTC, 31);              // re-enable
+    mmio_clear_bit(reg, 31);
+    mmio_set_field(reg, 0, 0x3FF, clock_hz / mtime_hz - 1);
+    mmio_set_bit(reg, 31);
+}
+
+// D0's counter only runs once D0 is released, and D0 reads no time before its start-up spin ends.
+void mtime_zero()
+{
+    enum uint hold = 1 << 30;
+    uint m0 = mmio_read(MCU_E907_RTC) & ~hold;
+    uint d0 = mmio_read(MM_MISC_CPU_RTC) & ~hold;
+    mmio_write(MCU_E907_RTC, m0 | hold);
+    mmio_write(MM_MISC_CPU_RTC, d0 | hold);
+    mmio_write(MM_MISC_CPU_RTC, d0);
+    mmio_write(MCU_E907_RTC, m0);
 }
 
 void d0_halt()

@@ -629,10 +629,13 @@ struct shim_timer
 {
     extern(C) void function() nothrow @nogc cb;
     void*  arg;
-    ulong  fire_at_us;
-    ulong  period_us;
+    ulong  fire_at;
+    ulong  period;
     ubyte  active;
 }
+
+private extern(D) ulong timer_ticks(long t_sec, long t_nsec)
+    => cast(ulong)t_sec * mtime_freq_hz + cast(ulong)t_nsec / 1000 * (mtime_freq_hz / 1_000_000);
 
 BL_Timer_t bl_ops_timer_create(void* func, void* arg)
 {
@@ -653,9 +656,8 @@ int bl_ops_timer_start_once(BL_Timer_t h, long t_sec, long t_nsec)
 {
     auto t = cast(shim_timer*)h;
     if (t is null) return -1;
-    ulong us = cast(ulong)t_sec * 1_000_000UL + cast(ulong)t_nsec / 1000;
-    t.fire_at_us = mtime_read() + us;
-    t.period_us  = 0;
+    t.fire_at = mtime_read() + timer_ticks(t_sec, t_nsec);
+    t.period  = 0;
     t.active     = 1;
     return 0;
 }
@@ -663,9 +665,8 @@ int bl_ops_timer_start_periodic(BL_Timer_t h, long t_sec, long t_nsec)
 {
     auto t = cast(shim_timer*)h;
     if (t is null) return -1;
-    ulong us = cast(ulong)t_sec * 1_000_000UL + cast(ulong)t_nsec / 1000;
-    t.fire_at_us = mtime_read() + us;
-    t.period_us  = us;
+    t.period  = timer_ticks(t_sec, t_nsec);
+    t.fire_at = mtime_read() + t.period;
     t.active     = 1;
     return 0;
 }

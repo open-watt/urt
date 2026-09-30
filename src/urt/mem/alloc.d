@@ -237,6 +237,7 @@ pragma(inline, true) T* alloc(T, Args...)(auto ref Args args)
 T alloc(T, Args...)(MemFlags flags, auto ref Args args)
     if (is(T == class))
 {
+    static assert(cpp_dtor_chain_declared!T, T.stringof ~ " and every base up to its extern(C++) root must declare `~this()`; before DMD 2.114 an undeclared one breaks virtual destruction (dlang/dmd#22931)");
     T item = cast(T)alloc(__traits(classInstanceSize, T), __traits(classInstanceAlignment, T), flags).ptr;
     if (item)
         item.emplace(forward!args);
@@ -246,6 +247,21 @@ T alloc(T, Args...)(MemFlags flags, auto ref Args args)
 T alloc(T, Args...)(auto ref Args args)
     if (is(T == class) && (Args.length == 0 || !is(Args[0] == MemFlags)))
     => alloc!T(MemFlags.none, forward!args);
+
+// TODO: delete once the minimum frontend is 2.114, with every `~this() {}` it forced
+private template cpp_dtor_chain_declared(T)
+{
+    static if (__VERSION__ >= 2114 || __traits(getLinkage, T) != "C++" || !__traits(hasMember, T, "__dtor"))
+        enum cpp_dtor_chain_declared = true;
+    else
+    {
+        enum declares = () { foreach (m; __traits(derivedMembers, T)) if (m == "__dtor") return true; return false; }();
+        static if (is(T S == super) && S.length)
+            enum cpp_dtor_chain_declared = declares && cpp_dtor_chain_declared!(S[0]);
+        else
+            enum cpp_dtor_chain_declared = declares;
+    }
+}
 
 T[] alloc_array(T, Args...)(MemFlags flags, size_t count, auto ref Args args)
     if (!is(T == class))
@@ -596,4 +612,23 @@ unittest
     C[] classes = alloc_array!C(MemFlags.none, 3);
     assert(classes.length == 3 && classes[0] is null);
     free(classes);
+}
+
+unittest
+{
+    static struct F { ~this() {} }
+    extern(C++) static class Root { ~this() {} }
+    extern(C++) static class Complete : Root { ~this() {} }
+    extern(C++) static class Gap : Root { int x; }
+    extern(C++) static class FieldOnly : Root { F f; }
+    static class DLinkage { ~this() {} }
+    static class DDerived : DLinkage { int x; }
+
+    static assert(cpp_dtor_chain_declared!Complete);
+    static assert(cpp_dtor_chain_declared!DDerived);
+    static if (__VERSION__ < 2114)
+    {
+        static assert(!cpp_dtor_chain_declared!Gap);
+        static assert(!cpp_dtor_chain_declared!FieldOnly);
+    }
 }

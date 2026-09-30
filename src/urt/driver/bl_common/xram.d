@@ -34,6 +34,21 @@ void xram_reset()
         volatileStore(counter(r, producer_offset), 0);
         volatileStore(counter(r, consumer_offset), 0);
     }
+    volatileStore(counter(d0_tx_ring, heartbeat_offset), 0);
+}
+
+// D0's liveness count, on the cache line of its own producer counter: D0 advances it, M0 watches it.
+version (BL808_M0)
+{
+    uint xram_d0_heartbeat()
+        => load(d0_tx_ring, heartbeat_offset);
+}
+else
+{
+    void xram_d0_heartbeat_beat()
+    {
+        store(d0_tx_ring, heartbeat_offset, load(d0_tx_ring, heartbeat_offset) + 1);
+    }
 }
 
 bool xram_open(uint channel, XramNotify notify)
@@ -121,6 +136,7 @@ private:
 enum size_t xram_base = 0x4000_0000;
 enum uint ring_size = 4096;
 enum uint producer_offset = 0x00;
+enum uint heartbeat_offset = 0x04;
 enum uint consumer_offset = 0x40;
 enum uint data_offset = 0x80;
 enum uint capacity = ring_size - data_offset;
@@ -134,6 +150,7 @@ enum size_t ipc_d0 = 0x3000_5000;
 enum uint ipc_set = 0, ipc_status = 9, ipc_clear = 10, ipc_unmask = 11, ipc_mask = 12;
 
 // Ring 2c carries M0 to D0 on channel c, ring 2c+1 D0 to M0.
+enum uint d0_tx_ring = 1;
 version (BL808_M0)
 {
     enum size_t local_ipc = ipc_m0, peer_ipc = ipc_d0;

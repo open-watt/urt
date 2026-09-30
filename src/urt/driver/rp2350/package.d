@@ -66,6 +66,15 @@ uint mmio_read(ulong addr)
     return volatileLoad(cast(uint*)addr);
 }
 
+// An edge is seen only through an enabled, unisolated pad; this leaves the pin's function and pulls alone.
+void pad_input_enable(uint gpio)
+{
+    enum uint pad_ie  = 1 << 6;
+    enum uint pad_iso = 1 << 8;
+    immutable ulong pad = pads_bank0_base + 0x04 + gpio * 4;
+    mmio_write(pad, (mmio_read(pad) & ~pad_iso) | pad_ie);
+}
+
 void gpio_route(uint gpio, uint funcsel, bool input)
 {
     enum uint pad_ie  = 1 << 6;

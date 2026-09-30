@@ -44,6 +44,8 @@ version (Espressif)
     public import urt.driver.esp32.event;
 else version (MT7621)
     public import urt.driver.mt7621.event;
+else version (RP2350)
+    public import urt.driver.rp2350.event;
 else
 {
     enum uint num_links = 0;

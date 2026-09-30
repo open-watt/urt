@@ -5,6 +5,7 @@ public import urt.driver.stm32.irq;
 public import urt.driver.stm32.timer;
 
 import urt.attribute : persist, used;
+import urt.driver.reset : ResetCause;
 import urt.driver.uart : UartConfig, console_uart;
 
 import core.volatile;
@@ -76,6 +77,28 @@ void clock_enable(uint enr, uint bit)
 {
     reg_set(rcc_base + enr, 1u << bit);
     reg_read(rcc_base + enr);
+}
+
+// Every reset source drives NRST, so the pin flag alone is the reset line itself.
+ResetCause rcc_reset_cause()
+{
+    version (STM32H7)
+    {
+        enum uint rsr = 0xD0, rmvf = 1 << 16, bor = 1 << 21, pin = 1 << 22, por = 1 << 23, sft = 1 << 24, iwdg = 1 << 26, wwdg = 1 << 28;
+    }
+    else
+    {
+        enum uint rsr = 0x74, rmvf = 1 << 24, bor = 1 << 25, pin = 1 << 26, por = 1 << 27, sft = 1 << 28, iwdg = 1 << 29, wwdg = 1 << 30;
+    }
+    immutable uint flags = reg_read(rcc_base + rsr);
+    reg_set(rcc_base + rsr, rmvf);
+    if (flags & (iwdg | wwdg))
+        return ResetCause.watchdog;
+    if (flags & (por | bor))
+        return ResetCause.power;
+    if (flags & sft)
+        return ResetCause.software;
+    return flags & pin ? ResetCause.pin : ResetCause.unknown;
 }
 
 // Flash size in KB as the factory programmed it; the part number can undersell it.

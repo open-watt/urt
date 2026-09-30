@@ -15,6 +15,15 @@ enum ResetMark : ubyte
     updated,        // the record was left by another build: a firmware update
 }
 
+enum ResetCause : ubyte
+{
+    unknown,        // the hardware keeps no cause, or none it reports
+    power,          // power-on or brownout
+    pin,            // the reset line alone
+    software,
+    watchdog,
+}
+
 enum bool has_reset_record = has_persist;
 
 // Runs before anything reads @persist: another build's record reads `updated`, its floating @persist is zeroed.
@@ -115,6 +124,23 @@ noreturn system_reset()
 
     for (;;)
     {}
+}
+
+// Read once: the hardware latches its cause across later resets until it is cleared.
+ResetCause reset_cause()
+{
+    version (STM32)
+    {
+        import urt.driver.stm32 : rcc_reset_cause;
+        return rcc_reset_cause();
+    }
+    else version (MT7621)
+    {
+        import urt.driver.mt7621.watchdog : reset_by_watchdog;
+        return reset_by_watchdog() ? ResetCause.watchdog : ResetCause.unknown;
+    }
+    else
+        return ResetCause.unknown;
 }
 
 // Two bytes that ride with the record, zeroed when retained memory was lost or another build took over.

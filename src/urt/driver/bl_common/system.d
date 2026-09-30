@@ -44,7 +44,8 @@ extern(C) void sys_init()
     // point any irq_line_enable will actually deliver.
     irq_global_enable();
 
-    periodic_set(dur!"msecs"(50), &tick_stub);
+    version (BL808_M0)
+        periodic_set(dur!"msecs"(50), &hang_watchdog_tick);
 
     uart0_hw_puts(chip_name ~ ": ready\n");
 }
@@ -65,12 +66,6 @@ version (BL808_M0)
 
 
 private:
-
-void tick_stub() @nogc nothrow
-{
-    version (BL808_M0)
-        hang_watchdog_tick();
-}
 
 version (BL808_M0)
 {
@@ -113,7 +108,7 @@ version (BL808_M0)
 
 // Chip-specific bring-up that doesn't belong in the shared sequence.
 // Order matters: BL808_M0 must precede BL808 because the M0 build sets both
-// flags, and BL808 D0 wants XRAM-IPC rings that M0 hasn't grown yet.
+// flags.
 void chip_post_init()
 {
     version (BL808_M0)
@@ -122,9 +117,7 @@ void chip_post_init()
     }
     else version (BL808)
     {
-        // XRAM ring buffers for IPC with M0.
-        import urt.driver.bl808.ipc : ipc_init;
-        ipc_init();
+        // Nothing chip-specific yet; M0 resets the XRAM rings before releasing D0.
     }
     else version (BL618)
     {

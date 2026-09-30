@@ -22,6 +22,7 @@ private enum uint M0_CONSOLE_BAUD   = 2_000_000;
 
 extern(C) void m0_bringup()
 {
+    xram_uncached();
     mm_domain_power_on();
     mm_clk_config();
     mcu2ext_bus_threshold();
@@ -46,6 +47,7 @@ private void launch_d0()
     d0_mtimer_config();
     d0_halt();
     mmio_write(MM_MISC_CPU0_BOOT, entry);
+    dcache_clean_all();
     d0_release();
 }
 
@@ -143,6 +145,23 @@ void mcu2ext_bus_threshold()
     mmio_set_field(MCU_MISC_MCU_BUS_CFG1, 7, 0x3, 3);
 }
 
+// Boot leaves M0's D-cache on in write-back mode with a SYSMAP whose cacheable region starts at
+// XRAM. Region 0 (strongly ordered: MMIO and uncached SRAM) is extended over XRAM so writes to
+// the inter-core rings reach D0.
+void xram_uncached()
+{
+    enum uint SYSMAPADDR0 = 0xEFFF_F000;
+    mmio_write(SYSMAPADDR0, 0x4000_4000 >> 12);
+    asm @nogc nothrow { "fence rw, rw"; }
+}
+
+// th.dcache.call, th.sync.s: D0 must see the image M0 wrote through its write-back cache. The
+// T-Head cache instructions are outside the ISA LLVM targets for this core.
+void dcache_clean_all()
+{
+    asm @nogc nothrow { ".word 0x0010000B"; ".word 0x0190000B" ::: "memory"; }
+}
+
 void mm_domain_power_on()
 {
     // PDS_CTL2: ordered de-isolation/power-up sequence; bit 1 first, settle, then 5/17/13/9
@@ -202,11 +221,6 @@ uint d0_image_load()
         return 0;
     const(ubyte)* streams = cast(const(ubyte)*)(table + count);
     const(ubyte)[] src = streams[0 .. limit - streams];
-
-    // T-Head MHCR (CSR 0x7C1): bit 0 = I-cache enable, bit 1 = D-cache enable.
-    // Disable D-cache around PSRAM writes so D0 sees fresh memory.
-    asm @nogc nothrow { "csrc 0x7C1, 0x2"; }
-    scope (exit) asm @nogc nothrow { "csrs 0x7C1, 0x2"; }
 
     foreach (ref run; table[0 .. count])
     {

@@ -288,22 +288,10 @@ _start:
 
     /* -- 4. Caches ------------------------------------------------- */
 
-    /* D-cache and branch prediction are intentionally OFF -- we set
-     * only IE (bit 0). Vendor's csi_dcache_enable writes MHCR=0x103F
-     * (DE | WB | WA | RS | BPE | L0BTB), and MHINT=0x0C for D$ prefetch +
-     * write-buffer auto-merge.
-     *
-     * Functional: chip works either way, this is purely a perf cost --
-     * data loads/stores hit SRAM directly (~10x slower on OCRAM, worse on
-     * PSRAM), and every conditional branch stalls the pipeline. Visible
-     * once wifi/TLS are running real traffic.
-     *
-     * Before flipping: we MUST first configure the SYSMAP CSRs to mark
-     * MMIO / DMA regions as uncacheable. Without that, enabling D-cache
-     * could return stale IPC status reads or hide DMA writes. Vendor sets
-     * SYSMAP via Tzc_Sec_PSRAMA_Access_Set_Not_Lock and friends before
-     * csi_dcache_enable. Our start.d:d0_image_load already brackets PSRAM
-     * writes with D-cache disable/enable, implying the original intent. */
+    /* Boot2 hands over with the D-cache already on, write-back (MHCR 0x103F),
+     * and a SYSMAP that makes everything from 0x40000000 up cacheable; this
+     * only makes sure the I-cache is on. m0_bringup narrows SYSMAP so XRAM
+     * is uncached, and cleans the D-cache before D0 runs from PSRAM. */
     li      t0, (1 << 0)        /* IE: I-cache enable */
     csrs    CSR_MHCR, t0
 

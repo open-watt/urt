@@ -460,6 +460,109 @@ unittest
     assert(data == decoded);
 }
 
+// Consistent overhead byte stuffing: the encoding holds no zero byte, so a zero can delimit it.
+size_t cobs_encode_length(size_t source_length) pure
+    => source_length + source_length / 254 + 1;
+
+ptrdiff_t cobs_encode(const void[] data, void[] result) pure
+{
+    auto src = cast(const(ubyte)[])data;
+    auto dst = cast(ubyte[])result;
+    if (dst.length < cobs_encode_length(src.length))
+        return -1;
+
+    size_t code_at = 0, o = 1;
+    ubyte code = 1;
+    foreach (b; src)
+    {
+        if (b)
+        {
+            dst[o++] = b;
+            if (++code != 0xFF)
+                continue;
+        }
+        dst[code_at] = code;
+        code_at = o++;
+        code = 1;
+    }
+    dst[code_at] = code;
+    return o;
+}
+
+// `result` may be `data`: decoding in place never overtakes the input.
+ptrdiff_t cobs_decode(const void[] data, void[] result) pure
+{
+    auto src = cast(const(ubyte)[])data;
+    auto dst = cast(ubyte[])result;
+
+    size_t i = 0, o = 0;
+    while (i < src.length)
+    {
+        size_t run = src[i++] - 1;
+        if (run == size_t.max || run > src.length - i || run > dst.length - o)
+            return -1;
+        foreach (b; src[i .. i + run])
+        {
+            if (!b)
+                return -1;
+            dst[o++] = b;
+        }
+        i += run;
+        if (run != 0xFE && i < src.length)
+        {
+            if (o == dst.length)
+                return -1;
+            dst[o++] = 0;
+        }
+    }
+    return o;
+}
+
+unittest
+{
+    ubyte[300] data = void;
+    ubyte[cobs_encode_length(data.length)] encoded = void;
+    ubyte[data.length] decoded = void;
+
+    static immutable ubyte[][2][] vectors = [
+        [ [], [0x01] ],
+        [ [0x00], [0x01, 0x01] ],
+        [ [0x00, 0x00], [0x01, 0x01, 0x01] ],
+        [ [0x11, 0x22, 0x00, 0x33], [0x03, 0x11, 0x22, 0x02, 0x33] ],
+        [ [0x11, 0x00, 0x00, 0x00], [0x02, 0x11, 0x01, 0x01, 0x01] ],
+    ];
+    foreach (ref v; vectors)
+    {
+        ptrdiff_t n = cobs_encode(v[0], encoded);
+        assert(encoded[0 .. n] == v[1]);
+        assert(cobs_decode(encoded[0 .. n], decoded) == v[0].length && decoded[0 .. v[0].length] == v[0]);
+    }
+
+    foreach (len; [253, 254, 255, 300])
+    {
+        foreach (i, ref b; data[0 .. len])
+            b = cast(ubyte)(i % 255 + 1);
+        data[len / 2] = 0;
+        ptrdiff_t n = cobs_encode(data[0 .. len], encoded);
+        assert(n > 0 && n <= cobs_encode_length(len));
+        foreach (b; encoded[0 .. n])
+            assert(b != 0);
+        assert(cobs_decode(encoded[0 .. n], encoded[0 .. n]) == len && encoded[0 .. len] == data[0 .. len]);
+    }
+
+    foreach (i, ref b; data[0 .. 254])
+        b = cast(ubyte)(i % 255 + 1);
+    ptrdiff_t n = cobs_encode(data[0 .. 254], encoded);
+    assert(n == 256 && encoded[0] == 0xFF && encoded[255] == 0x01);
+
+    static immutable ubyte[][] malformed = [ [0x00], [0x03, 0x11], [0x03, 0x11, 0x00] ];
+    foreach (m; malformed)
+        assert(cobs_decode(m, decoded) == -1);
+    static immutable ubyte[3] overrun = [0x02, 0x11, 0x01];
+    assert(cobs_decode(overrun, decoded[0 .. 1]) == -1);
+    assert(cobs_encode(data[0 .. 4], encoded[0 .. 4]) == -1);
+}
+
 
 private:
 

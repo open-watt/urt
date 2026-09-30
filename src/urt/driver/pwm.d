@@ -11,6 +11,8 @@ version (Espressif)
     public import urt.driver.esp32.pwm;
 else version (RP2350)
     public import urt.driver.rp2350.pwm;
+else version (BL808)
+    public import urt.driver.bl_common.pwm;
 else
     enum uint num_hw_pwm = 0;
 

@@ -5,6 +5,7 @@ version (BL808):
 
 nothrow @nogc:
 
+enum uint xclk_hz = 40_000_000;         // the crystal
 enum uint m0_clock_hz = 320_000_000;    // boot2's choice
 enum uint d0_clock_hz = 480_000_000;    // the CPU PLL, set by M0
 

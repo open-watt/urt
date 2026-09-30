@@ -16,11 +16,7 @@ else version (BL808)
 else
     enum uint num_hw_pwm = 0;
 
-// the BL808 M0's hang watchdog holds the periodic timer
-version (BL808_M0)
-    enum bool has_soft_pwm = false;
-else
-    enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;
+enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;
 
 static if (has_soft_pwm)
     import urt.driver.soft_pwm;

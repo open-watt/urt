@@ -16,6 +16,8 @@ enum ulong pll_sys_base     = 0x40050000;
 enum ulong io_bank0_base    = 0x40028000;
 enum ulong pads_bank0_base  = 0x40038000;
 enum ulong ticks_base       = 0x40108000;
+enum ulong watchdog_base    = 0x400D8000;
+enum ulong psm_base         = 0x40018000;
 
 enum uint xosc_hz     = 12_000_000;
 enum uint clk_sys_hz  = 150_000_000;
@@ -92,6 +94,13 @@ extern(C) void sys_init()
     mtime_init();
 
     uart0_hw_puts("RP2350: ready\r\n");
+}
+
+// A watchdog reset normally spares most of the chip; select every block but the oscillators.
+void watchdog_reset_all()
+{
+    enum uint wdsel_all = 0x01FF_FFFF, wdsel_rosc = 1 << 2, wdsel_xosc = 1 << 3;
+    mmio_write(psm_base + 0x08, wdsel_all & ~(wdsel_rosc | wdsel_xosc));
 }
 
 private:

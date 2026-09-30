@@ -94,6 +94,9 @@ void gpio_route(uint gpio, uint funcsel, bool input)
 
 extern(C) void sys_init()
 {
+    import urt.driver.rp2350.watchdog : watchdog_latch_cause;
+
+    watchdog_latch_cause();
     clocks_init();
     uart_hw_init(console_uart, UartConfig.init);
     uart0_hw_puts("RP2350: sys_init\r\n");

@@ -10,11 +10,14 @@ enum RebootType : uint
 
 bool rom_reboot(RebootType type, uint delay_ms = 1)
 {
+    import urt.driver.rp2350.watchdog : wdt_stop;
+
     alias RebootFn = extern(C) int function(uint flags, uint delay_ms, uint p0, uint p1) nothrow @nogc;
 
     auto fn = cast(RebootFn)rom_func_lookup(rom_code('R', 'B'));
     if (!fn)
         return false;
+    wdt_stop();
     // A zero delay never fires.
     return fn(type, delay_ms ? delay_ms : 1, 0, 0) >= 0;
 }

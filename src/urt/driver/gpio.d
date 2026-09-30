@@ -69,6 +69,7 @@ else
 
 version (Espressif) {}
 else version (MT7621) {}
+else version (BL808_M0) {}
 else enum uint num_gpio_interrupts = 0;
 
 nothrow @nogc:

@@ -30,6 +30,8 @@ enum uint reset_uart0       = 1 << 26;
 enum uint reset_uart1       = 1 << 27;
 enum uint reset_io_bank0    = 1 << 6;
 enum uint reset_pads_bank0  = 1 << 9;
+enum uint reset_pio0        = 1 << 11;
+enum uint reset_pwm         = 1 << 16;
 enum uint reset_pll_sys     = 1 << 14;
 enum uint reset_trng        = 1 << 25;
 
@@ -40,7 +42,17 @@ void unreset_wait(uint bits)
     {}
 }
 
-void gpio_route_uart(uint gpio, uint funcsel, bool input)
+void mmio_write(ulong addr, uint val)
+{
+    volatileStore(cast(uint*)addr, val);
+}
+
+uint mmio_read(ulong addr)
+{
+    return volatileLoad(cast(uint*)addr);
+}
+
+void gpio_route(uint gpio, uint funcsel, bool input)
 {
     enum uint pad_ie  = 1 << 6;
     enum uint pad_od  = 1 << 7;
@@ -75,16 +87,6 @@ private:
 extern(C) void __register_frame_info(const void*, void*);
 extern(C) extern const ubyte __eh_frame_start;
 align(8) ubyte[48] __eh_frame_object;
-
-void mmio_write(ulong addr, uint val)
-{
-    volatileStore(cast(uint*)addr, val);
-}
-
-uint mmio_read(ulong addr)
-{
-    return volatileLoad(cast(uint*)addr);
-}
 
 void pll_sys_init()
 {

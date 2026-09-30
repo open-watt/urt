@@ -1,6 +1,6 @@
 module urt.driver.rp2350.uart;
 
-import urt.driver.rp2350 : clk_peri_hz, gpio_route_uart, unreset_wait, reset_io_bank0, reset_pads_bank0, reset_uart0, reset_uart1;
+import urt.driver.rp2350 : clk_peri_hz, gpio_route, unreset_wait, reset_io_bank0, reset_pads_bank0, reset_uart0, reset_uart1;
 import urt.driver.uart : Parity, StopBits, UartConfig;
 
 import core.volatile;
@@ -18,8 +18,8 @@ bool uart_hw_init(uint id, UartConfig cfg)
     immutable base = uart_base(id);
 
     unreset_wait(reset_io_bank0 | reset_pads_bank0 | (id == 0 ? reset_uart0 : reset_uart1));
-    gpio_route_uart(default_tx_gpio[id], 2, false);
-    gpio_route_uart(default_rx_gpio[id], 2, true);
+    gpio_route(default_tx_gpio[id], 2, false);
+    gpio_route(default_rx_gpio[id], 2, true);
 
     uart_write_reg(base, uartcr, 0);
 

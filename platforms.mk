@@ -524,11 +524,6 @@ endif
 ifneq ($(filter esp8266 bk7231n bk7231t esp32-c2 esp32-h2 esp32-s2,$(PLATFORM)),)
     TINY ?= 1
 endif
-ifeq ($(PLATFORM),bl808)
-  ifeq ($(PROCESSOR),e907)
-    TINY ?= 1
-  endif
-endif
 ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) -d-version=Tiny
 endif

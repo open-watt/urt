@@ -125,6 +125,8 @@ enum UartCallbackContext : ubyte
 alias UartRxCallback = bool function(Uart uart, size_t rx_avail,
                                      UartCallbackContext context) nothrow @nogc;
 
+enum bool has_rx_callback = __traits(compiles, { UartConfig c; uart_hw_open(0, c, UartRxCallback.init); });
+
 // Called from ISR/DMA when TX buffer space becomes available (e.g. FIFO
 // drains below threshold). The callee should feed more data via uart_write.
 // tx_avail: number of bytes that can be written to the TX buffer.
@@ -244,6 +246,8 @@ Result uart_reconfigure(ref Uart uart, ref const UartConfig cfg)
 
 void uart_close(ref Uart uart)
 {
+    if (!is_open(uart))
+        return;
     static if (num_uarts == 0)
         assert(false, "no UART on this platform");
     else

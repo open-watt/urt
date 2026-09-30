@@ -77,6 +77,7 @@ version (RP2350)        enum bool has_system_reset = true;
 else version (STM32)    enum bool has_system_reset = true;
 else version (Beken)    enum bool has_system_reset = true;
 else version (MT7621)   enum bool has_system_reset = true;
+else version (BL808)    enum bool has_system_reset = true;
 else                    enum bool has_system_reset = false;
 
 version (RP2350) version = CortexM;
@@ -111,6 +112,11 @@ noreturn system_reset()
     {
         import urt.driver.mt7621 : mmio_write, sysctl_base, sysc_rstctrl;
         mmio_write(sysctl_base + sysc_rstctrl, 1);
+    }
+    else version (BL808)
+    {
+        import urt.driver.bl_common.reset : por_reset;
+        por_reset(false);
     }
 
     for (;;)

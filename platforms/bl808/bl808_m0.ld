@@ -11,9 +11,8 @@
  *   - Jump to _start
  *
  * Memory map (M0 view):
- *   FLASH   : 0x58000000  2MB    XIP -- .text, .rodata (matches M0 FW partition)
- *   ITCM    : 0x62028000  28KB   @critical code (.ramfunc), copied at boot
- *   DTCM    : 0x6202F000  4KB    fastest heap pool (uncached, single-cycle)
+ *   FLASH   : 0x58000000  4MB-4K XIP -- .text, .rodata, then the deflated D0 image (one FW bank)
+ *   ITCM    : 0x6202E000  8K     cached alias of OCRAM's top 8K; @critical code (.ramfunc)
  *   HBNRAM  : 0x20010000  4KB    @persist data (.hbn_ram), survives hibernate
  *   XRAM    : 0x40000000  16K    EMI shared RAM for M0/LP/D0 IPC
  *   OCRAM   : 0x22020000  64K    @fast_data + ocram heap + stack
@@ -21,9 +20,10 @@
  *   PSRAM   : 0x50000000  1MB    .data + @bulk_data + .bss + .tdata + .tbss + slow heap
  *
  * OCRAM layout (low to high):
- *   .sram_data       @fast_data; LMA in flash, copied at boot
+ *   .got, .sram_data @fast_data; LMA in flash, copied at boot
  *   ocram heap       small DMA-reachable heap, fills gap to stack low
- *   stack            16K, grows down to the WiFi window boundary
+ *   stack            16K, grows down from .ramfunc
+ *   .ramfunc         @critical code, executed through the cached alias (ITCM)
  *
  * WIFIRAM layout (low to high):
  *   .wifibss         vendor-selected WiFi shared/DMA state
@@ -40,12 +40,15 @@
  *   - GLB_SRAM_CFG3.EM_SEL = 0xFF set by m0_bringup carves the top 64K of
  *     the WRAM bank as EM (dual-port for WiFi DSP DMA). We don't put any
  *     sections in EM; libwifi uses it for internal scratch.
- *   - DTCM cannot be reached by peripheral DMA; the allocator routes
- *     MemFlags.dma to the OCRAM pool only.
+ *   - The E907 here has no TCM: the vendor's "itcm"/"dtcm" at 0x62028000 and
+ *     0x6202F000 are this OCRAM through its cached alias (read back on
+ *     hardware 2026-09-30), so code and data share one 64K budget. Code runs
+ *     from the upper half only: .ramfunc placed at 0x62020000 hung M0 before
+ *     its first print, and the vendor map leaves that range empty too.
  *   - HBNRAM survives deep-sleep / HBN if VBAT is maintained. NOLOAD --
  *     @persist data is not initialised at boot, that's the point.
- *   - ITCM stays empty unless the build has @critical functions; the
- *     copy loop in start.S is a no-op if .ramfunc is zero-length.
+ *   - .ramfunc is empty unless the build has @critical functions; the
+ *     copy loop in start.S is a no-op if it is zero-length.
  *   - D0 uses PSRAM from 0x50100000 upward; the 1MB M0 slice (0x50000000
  *     .. 0x50100000) stays clear of that.
  */
@@ -57,9 +60,8 @@ EXTERN(_Dmodule_ref __errno_location stdout)
 
 MEMORY
 {
-    FLASH  (rx)  : ORIGIN = 0x58000000, LENGTH = 2M
-    ITCM   (rx)  : ORIGIN = 0x62028000, LENGTH = 28K
-    DTCM   (rwx) : ORIGIN = 0x6202F000, LENGTH = 4K
+    FLASH  (rx)  : ORIGIN = 0x58000000, LENGTH = 0x3FF000
+    ITCM   (rx)  : ORIGIN = 0x6202E000, LENGTH = 8K
     HBNRAM (rw)  : ORIGIN = 0x20010000, LENGTH = 4K
     XRAM   (rw)  : ORIGIN = 0x40000000, LENGTH = 16K
     OCRAM  (rwx) : ORIGIN = 0x22020000, LENGTH = 64K
@@ -121,6 +123,7 @@ SECTIONS
     .ramfunc : ALIGN(4)
     {
         *(.ramfunc .ramfunc.*)
+        *(.tcm_code .tcm_code.* .tcm_const .tcm_const.*)
     } > ITCM AT > FLASH
 
     _ramfunc_load  = LOADADDR(.ramfunc);
@@ -282,6 +285,11 @@ SECTIONS
     _tdata_start = ADDR(.tdata);
     _tdata_end   = _tdata_start + SIZEOF(.tdata);
 
+    /* The deflated D0 image follows the last flash-resident byte; one FW bank holds both. */
+    _image_start = ORIGIN(FLASH);
+    _d0_image    = ALIGN(_tdata_load + SIZEOF(.tdata), 4);
+    _image_limit = ORIGIN(FLASH) + LENGTH(FLASH);
+
     .tbss (NOLOAD) : ALIGN(4)
     {
         _tbss_start = .;
@@ -305,7 +313,7 @@ SECTIONS
      * and overflowed once the AP path reached the main loop. 16K is the
      * smallest size that's stayed safe; revisit with the high-water-mark
      * scan before shrinking. */
-    _stack_top = ORIGIN(OCRAM) + LENGTH(OCRAM);
+    _stack_top = ORIGIN(OCRAM) + (ORIGIN(ITCM) - 0x62020000);
     _stack_low = _stack_top - 16K;
     __StackTop = _stack_top;
 
@@ -314,12 +322,8 @@ SECTIONS
     __ocram_heap_start = ALIGN(_sram_data_end, 8);
     __ocram_heap_end   = _stack_low;
 
-    ASSERT(__ocram_heap_start <= __ocram_heap_end, "OCRAM overflow: .xram + .sram_data + heap + stack don't fit in 64K")
+    ASSERT(__ocram_heap_start <= __ocram_heap_end, "OCRAM overflow: .ramfunc + .sram_data + heap + stack don't fit in 64K")
     ASSERT(_sram_data_tail_end <= ORIGIN(WIFIRAM) + LENGTH(WIFIRAM), "WIFIRAM overflow: .wifibss + .got + .sram_data_tail don't fit in 96K")
-
-    /* DTCM heap pool: full region (no sections placed here). */
-    __dtcm_heap_start = ORIGIN(DTCM);
-    __dtcm_heap_end   = ORIGIN(DTCM) + LENGTH(DTCM);
 
     /* Compatibility aliases: get_sysinfo and the (now dead) bl618 _sbrk
      * still reference __heap_start/__heap_end. Point them at the PSRAM

@@ -3,6 +3,11 @@
 ifeq ($(OS),baremetal)
 TLSF_DIR  := $(URT_ROOT)third_party/tlsf
 TLSF_SRCS := $(TLSF_DIR)/tlsf.c
+
+ifeq ($(USE_LITTLEFS),1)
+  LFS_DIR  := $(URT_ROOT)third_party/littlefs
+  LFS_SRCS := $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(URT_SRCDIR)/urt/internal/littlefs.c $(URT_SRCDIR)/urt/internal/littlefs_flash.c
+endif
 endif
 
 ifneq ($(filter bl808 bl618,$(PLATFORM)),)
@@ -57,6 +62,7 @@ endif
 ifdef BL_PSRAM_DIR
   BL_PSRAM_OBJS    = $(patsubst $(BL_PSRAM_DIR)/src/%.c,$(OBJDIR)/bl_psram/%.o,$(BL_PSRAM_SRCS))
   BL_PSRAM_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
+      -ffunction-sections -fdata-sections -fno-jump-tables -fno-tree-switch-conversion \
       -I$(BL_PSRAM_INC) -DBL808 -DARCH_RISCV -fcommon
 endif
 
@@ -66,6 +72,12 @@ ifdef MBEDTLS_LIB
   MBEDTLS_CFLAGS   := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Oz \
       -ffunction-sections -fdata-sections \
       -I$(MBEDTLS_INC) -DMBEDTLS_CONFIG_FILE='"mbedtls_config_openwatt.h"' -fcommon
+endif
+
+ifdef LFS_DIR
+  LFS_OBJS    = $(addprefix $(OBJDIR)/littlefs/,$(notdir $(LFS_SRCS:.c=.o)))
+  LFS_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
+      -ffunction-sections -fdata-sections -I$(LFS_DIR) -DLFS_NO_DEBUG -DLFS_NO_WARN
 endif
 
 ifdef TLSF_DIR
@@ -87,6 +99,16 @@ $(OBJDIR)/bl_psram/%.o: $(BL_PSRAM_DIR)/src/%.c
 	$(BAREMETAL_GCC) $(BL_PSRAM_CFLAGS) -c -o $@ $<
 endif
 
+ifdef LFS_DIR
+$(OBJDIR)/littlefs/%.o: $(LFS_DIR)/%.c
+	@mkdir -p $(OBJDIR)/littlefs
+	$(BAREMETAL_GCC) $(LFS_CFLAGS) -c -o $@ $<
+
+$(OBJDIR)/littlefs/%.o: $(URT_SRCDIR)/urt/internal/%.c
+	@mkdir -p $(OBJDIR)/littlefs
+	$(BAREMETAL_GCC) $(LFS_CFLAGS) -c -o $@ $<
+endif
+
 ifdef MBEDTLS_LIB
 $(OBJDIR)/mbedtls/%.o: $(dir $(MBEDTLS_SHIM_SRC))%.c
 	@mkdir -p $(OBJDIR)/mbedtls
@@ -94,4 +116,4 @@ $(OBJDIR)/mbedtls/%.o: $(dir $(MBEDTLS_SHIM_SRC))%.c
 endif
 
 # Single aggregate for consumers to link; the per-blob lists above are private.
-VENDOR_OBJS = $(TLSF_OBJS) $(BL_WIFI_OBJS) $(BL_PSRAM_OBJS) $(MBEDTLS_OBJS)
+VENDOR_OBJS = $(TLSF_OBJS) $(BL_WIFI_OBJS) $(BL_PSRAM_OBJS) $(MBEDTLS_OBJS) $(LFS_OBJS)

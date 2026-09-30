@@ -524,11 +524,6 @@ endif
 ifneq ($(filter esp8266 bk7231n bk7231t esp32-c2 esp32-h2 esp32-s2,$(PLATFORM)),)
     TINY ?= 1
 endif
-ifeq ($(PLATFORM),bl808)
-  ifeq ($(PROCESSOR),e907)
-    TINY ?= 1
-  endif
-endif
 ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) -d-version=Tiny
 endif
@@ -645,7 +640,7 @@ else ifeq ($(USE_LWIP),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)lwIP
 endif
 
-# ESP defaults to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
+# ESP and the BL808 M0 default to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
 ifeq ($(USE_SPIFFS),)
     USE_SPIFFS := 0
 endif
@@ -653,6 +648,8 @@ ifeq ($(USE_LITTLEFS),)
   ifeq ($(USE_SPIFFS),1)
     USE_LITTLEFS := 0
   else ifneq ($(filter esp%,$(PLATFORM)),)
+    USE_LITTLEFS := 1
+  else ifeq ($(PLATFORM)$(PROCESSOR),bl808e907)
     USE_LITTLEFS := 1
   else
     USE_LITTLEFS := 0

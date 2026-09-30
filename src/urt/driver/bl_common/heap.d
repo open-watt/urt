@@ -11,18 +11,16 @@ enum MemFlags c_heap_flags = MemFlags.none;
 
 version (BL808_M0)
 {
-    enum ubyte dtcm = 0, ocram = 1, psram = 2;
+    enum ubyte ocram = 0, psram = 1;
 
-    static immutable HeapRegion[3] heap_regions = [
-        HeapRegion(&__dtcm_heap_start, &__dtcm_heap_end, "TCM"),
+    static immutable HeapRegion[2] heap_regions = [
         HeapRegion(&__ocram_heap_start, &__ocram_heap_end, "SRAM"),
         HeapRegion(&__psram_heap_start, &__psram_heap_end, "PSRAM"),
     ];
 
-    // DMA cannot reach DTCM (CPU-local bus) and PSRAM is not DMA-clean on the E907.
-    static immutable ubyte[8] pool_by_flags = [psram, ocram, psram, dtcm, ocram, ocram, ocram, ocram];
+    // The E907 has no TCM; OCRAM is its fastest memory, and PSRAM is not DMA-clean.
+    static immutable ubyte[8] pool_by_flags = [psram, ocram, psram, ocram, ocram, ocram, ocram, ocram];
 
-    private extern(C) extern immutable(ubyte) __dtcm_heap_start, __dtcm_heap_end;
     private extern(C) extern immutable(ubyte) __ocram_heap_start, __ocram_heap_end;
     private extern(C) extern immutable(ubyte) __psram_heap_start, __psram_heap_end;
 }

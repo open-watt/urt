@@ -1,24 +1,13 @@
-// HBN (Hibernate) RAM persistence -- 4KB at 0x20010000, survives deep sleep
-// if VBAT is maintained. Shared across all Bouffalo variants that expose the
-// AON/HBN domain (BL618, BL808 D0, BL808 M0). On BL808 both cores reference
-// the same struct at the start of .hbn_ram, so whichever core boots first
-// can restore wall-clock state seeded by the other.
-//
-// Storage strategy:
-//   D0 build: storage defined in C (hbn_ram.c) and compiled into BAREMETAL
-//             alongside start.S. This file declares the symbol extern.
-//   M0 build: storage defined here in D via @persist, since the M0
-//             BAREMETAL_SRCS does not include hbn_ram.c. The struct layout
-//             must match D0's C definition exactly.
+// HBN (hibernate) RAM, 4K at 0x20010000, survives deep sleep while VBAT holds, and a reset short of the pin or
+// power. Its base holds state every Bouffalo build and both BL808 cores share, at a fixed address: the clock,
+// so whichever core boots first restores what the other seeded. Above it each build's @persist data drifts
+// freely within its own region, and urt.driver.reset keeps each core's reset record in a fixed slot.
 module urt.driver.bl_common.hbn;
-
-import urt.attribute : persist, used;
 
 @nogc nothrow:
 
 
-/// Persistent state across hibernate cycles. Layout must stay byte-identical
-/// to `struct hbn_persist` in third_party/urt/src/urt/driver/bl808/hbn_ram.c.
+/// Every build reads this layout at the same address, so it changes only with HBN_MAGIC.
 struct HbnPersist
 {
     enum uint HBN_MAGIC = 0x4F57_4254; // "OWBT" (OpenWatt Boot Time)
@@ -29,14 +18,10 @@ struct HbnPersist
 }
 
 /// Access the persistent state in HBN RAM.
-HbnPersist* hbn_persist() => &_hbn_persist;
+HbnPersist* hbn_persist() => cast(HbnPersist*)hbn_shared;
 
 
 private:
 
-// @used pins the storage so --gc-sections keeps it even before any M0
-// consumer exists, mirroring D0's hbn_ram.c which uses __attribute__((used)).
-version (BL808_M0)
-    extern(C) @persist @used __gshared HbnPersist _hbn_persist;
-else
-    extern(C) extern __gshared HbnPersist _hbn_persist;
+enum size_t hbn_shared = 0x2001_0000;
+static assert(HbnPersist.sizeof <= 0x40, "the shared HBN state outgrew its 64 bytes below the @persist regions");

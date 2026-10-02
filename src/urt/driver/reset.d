@@ -86,6 +86,7 @@ version (RP2350)        enum bool has_system_reset = true;
 else version (STM32)    enum bool has_system_reset = true;
 else version (Beken)    enum bool has_system_reset = true;
 else version (MT7621)   enum bool has_system_reset = true;
+else version (BL808)    enum bool has_system_reset = true;
 else                    enum bool has_system_reset = false;
 
 version (STM32) version = CortexM;
@@ -128,10 +129,21 @@ noreturn system_reset()
         import urt.driver.mt7621 : mmio_write, sysctl_base, sysc_rstctrl;
         mmio_write(sysctl_base + sysc_rstctrl, 1);
     }
+    else version (BL808)
+    {
+        import urt.driver.bl_common.reset : por_reset;
+        por_reset(false);
+    }
 
     for (;;)
     {}
 }
+
+// Where the hardware cannot name a watchdog reset, a reset the record never saw coming is most likely one.
+version (STM32)       enum bool has_watchdog_cause = true;
+else version (RP2350) enum bool has_watchdog_cause = true;
+else version (MT7621) enum bool has_watchdog_cause = true;
+else                  enum bool has_watchdog_cause = false;
 
 // Read once: the hardware latches its cause across later resets until it is cleared.
 ResetCause reset_cause()
@@ -151,7 +163,7 @@ ResetCause reset_cause()
         import urt.driver.rp2350.watchdog : watchdog_reset_cause;
         return watchdog_reset_cause();
     }
-    else
+    else // BL808: HBN and PDS RESET_EVENT read alike for every reset, and the watchdog's WTS dies with its own reset
         return ResetCause.unknown;
 }
 
@@ -258,11 +270,9 @@ static if (has_reset_record)
 
     version (Bouffalo)
     {
-        // The BL808 cores share HBN RAM and hbn.d keys its struct to the start of .hbn_ram by
-        // link order, so the record takes a fixed slot at the top instead: one per core.
-        enum size_t hbn_top = 0x2001_1000;
-        version (BL808_M0) enum size_t record_address = hbn_top - 2 * ResetRecord.sizeof;
-        else               enum size_t record_address = hbn_top - ResetRecord.sizeof;
+        // a fixed slot at the top of the core's half of HBN RAM, where every build finds it
+        version (BL808_M0) enum size_t record_address = 0x2001_0800 - ResetRecord.sizeof;
+        else               enum size_t record_address = 0x2001_1000 - ResetRecord.sizeof;
         ResetRecord* record() => cast(ResetRecord*)record_address;
     }
     else version (Espressif)

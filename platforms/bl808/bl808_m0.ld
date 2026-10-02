@@ -14,7 +14,7 @@
  *   FLASH   : 0x58000000  2MB    XIP -- .text, .rodata (matches M0 FW partition)
  *   ITCM    : 0x62028000  28KB   @critical code (.ramfunc), copied at boot
  *   DTCM    : 0x6202F000  4KB    fastest heap pool (uncached, single-cycle)
- *   HBNRAM  : 0x20010000  4KB    @persist data (.hbn_ram), survives hibernate
+ *   HBNRAM  : 0x20010040  2KB    @persist data (.hbn_ram): M0's half of HBN RAM, less the shared base and its record
  *   XRAM    : 0x40000000  16K    EMI shared RAM for M0/LP/D0 IPC
  *   OCRAM   : 0x22020000  64K    @fast_data + ocram heap + stack
  *   WIFIRAM : 0x22030000  96K    vendor .wifibss + WiFi-side @fast_data tail
@@ -60,7 +60,7 @@ MEMORY
     FLASH  (rx)  : ORIGIN = 0x58000000, LENGTH = 2M
     ITCM   (rx)  : ORIGIN = 0x62028000, LENGTH = 28K
     DTCM   (rwx) : ORIGIN = 0x6202F000, LENGTH = 4K
-    HBNRAM (rw)  : ORIGIN = 0x20010000, LENGTH = 4K
+    HBNRAM (rw)  : ORIGIN = 0x20010040, LENGTH = 0x7B0
     XRAM   (rw)  : ORIGIN = 0x40000000, LENGTH = 16K
     OCRAM  (rwx) : ORIGIN = 0x22020000, LENGTH = 64K
     /* WIFIRAM base MUST be 0x22030000 (tested 2026-05-26: moving to 0x22024000

@@ -11,7 +11,7 @@
  *   OCRAM : 0x62FC0000  320K  cached; top 64K aliased non-cache for DMA
  *   WRAM  : 0x23010000  160K  reserved (non-cache) for WiFi DMA
  *   PSRAM : 0xA8000000  4M    M0P pseudo-SRAM (needs bl_psram_init before use)
- *   HBN   : 0x20010000  4K    @persist, survives hibernate
+ *   HBN   : 0x20010040  4016  @persist above the shared base and below the reset record; survives hibernate
  *
  * D-cache is still disabled in start.S (see its TODO); until it's enabled the
  * cached windows are simply accessed uncached. The split below keeps the DMA
@@ -33,7 +33,7 @@ MEMORY
     OCRAM_DMA(rw)  : ORIGIN = 0x23000000, LENGTH = 64K
     WRAM     (rwx) : ORIGIN = 0x23010000, LENGTH = 160K
     PSRAM    (rwx) : ORIGIN = 0xA8000000, LENGTH = 4M
-    HBNRAM   (rw)  : ORIGIN = 0x20010000, LENGTH = 4K
+    HBNRAM   (rw)  : ORIGIN = 0x20010040, LENGTH = 0xFB0
 }
 
 SECTIONS

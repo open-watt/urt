@@ -93,10 +93,13 @@ uint port_of(uint gpio)
 ulong reg(uint port, uint offset)
     => pwm_base + (port >> 1) * slice_stride + offset;
 
-// clk_sys over frequency * period as the 8.4 divider, which runs from 1 to 255 15/16
+// clk_sys over frequency * period, rounded, as the 8.4 divider, which runs from 1 to 255 15/16
 bool clock_divider(uint frequency, uint period, out ushort div) pure
 {
-    immutable ulong divider = ulong(clk_sys_hz) * 16 / (ulong(frequency) * period);
+    immutable ulong ticks = ulong(frequency) * period;
+    if (!ticks)
+        return false;
+    immutable ulong divider = (ulong(clk_sys_hz) * 16 + ticks / 2) / ticks;
     if (divider < 16 || divider > 0xFFF)
         return false;
     div = cast(ushort)divider;
@@ -119,7 +122,7 @@ unittest
     assert(port_of(32) == 16 && port_of(47) == 23, "GPIO32-47 are slices 8-11");
 
     ushort div;
-    assert(clock_divider(4000, 256, div) && div == 2343, "4 kHz at period 256 is a divider of 146.4375");
+    assert(clock_divider(4000, 256, div) && div == 2344, "4 kHz at period 256 rounds to a divider of 146.5");
     assert(!clock_divider(1000, 256, div), "1 kHz at period 256 needs a divider above 255");
     assert(!clock_divider(1, 256, div), "1 Hz at period 256 is beyond the divider");
     assert(!clock_divider(2_000_000, 256, div), "2 MHz at period 256 needs a divider below one");

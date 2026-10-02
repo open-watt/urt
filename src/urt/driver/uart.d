@@ -3,12 +3,8 @@ module urt.driver.uart;
 import urt.result : Result, InternalResult;
 import urt.time : Duration;
 
-version (BL808_M0)
-    public import urt.driver.bl618.uart;
-else version (BL808)
-    public import urt.driver.bl808.uart;
-else version (BL618)
-    public import urt.driver.bl618.uart;
+version (Bouffalo)
+    public import urt.driver.bl_common.uart;
 else version (Beken)
     public import urt.driver.bk7231.uart;
 else version (RP2350)

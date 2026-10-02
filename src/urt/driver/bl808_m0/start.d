@@ -9,7 +9,7 @@ module urt.driver.bl808_m0.start;
 
 import core.volatile;
 import urt.zip : gzip_uncompress;
-import urt.driver.bl618.uart : uart0_early_init, uart0_hw_puts;
+import urt.driver.bl_common.uart : uart0_early_init, uart0_hw_puts;
 
 @nogc nothrow:
 

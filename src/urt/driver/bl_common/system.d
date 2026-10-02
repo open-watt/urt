@@ -26,6 +26,10 @@ extern(C) void sys_init()
 {
     exception_init();
 
+    version (BL808_M0) {}
+    else version (BL808)
+        uart_console_init(2_000_000);
+
     uart0_hw_puts(chip_name ~ ": sys_init\n");
 
     irq_init();

@@ -4,7 +4,8 @@ import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_lin
 import urt.driver.gpio : Pull;
 import urt.driver.rp2350 : clk_peri_hz, gpio_route, out_of_reset, reset_io_bank0, reset_pads_bank0, reset_pulse, reset_uart0, reset_uart1, unreset_wait;
 import urt.driver.rp2350.gpio : gpio_set_pull;
-import urt.driver.uart : DriveMode, Parity, StopBits, Uart, UartCallbackContext, UartConfig, UartRxCallback;
+import urt.driver.uart : DriveMode, Parity, StopBits, Uart, UartCallbackContext, UartConfig, UartRxCallback, UartRxTiming,
+    uart_chars_us, uart_gap_tenths, uart_rx_chars;
 import urt.mem.alloc : alloc, free;
 import urt.mem.ring : RingBuffer;
 import urt.sync.spsc : SPSCRing;
@@ -74,8 +75,9 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
     _errors[id] = false;
     _rx_cb[id] = rx_cb;
     immutable base = uart_base(id);
-    immutable uint chars = cfg.rx_threshold ? cfg.rx_threshold : cfg.baud_rate / 10 * rx_latency_us / 1_000_000;
-    uart_write_reg(base, uartifls, rx_level(chars) << 3 | ifls_tx_eighth);
+    immutable uint level = rx_level(uart_rx_chars(cfg));
+    uart_write_reg(base, uartifls, level << 3 | ifls_tx_eighth);
+    _timing[id] = UartRxTiming(uart_chars_us(cfg, rx_level_chars[level]), uart_gap_tenths(cfg, rx_timeout_bits));
     uart_write_reg(base, uarticr, 0x7FF);
     uart_write_reg(base, uartimsc, im_rx | im_rt | im_errors);
     irq_handler_set(uart_irq[id], &uart_isr);
@@ -110,6 +112,9 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     }
     return total;
 }
+
+UartRxTiming uart_hw_rx_timing(uint id)
+    => _timing[id];
 
 ptrdiff_t uart_hw_tx_pending(uint id)
 {
@@ -230,10 +235,10 @@ static immutable ubyte[num_uarts] default_rx_gpio = [1, 21];
 static immutable ubyte[num_uarts] uart_irq = [33, 34];
 
 enum uint rx_ring_size = 512;
-enum uint rx_latency_us = 350;
+enum uint rx_timeout_bits = 32;
 
-// RX signals on the receive timeout, 32 quiet bit times, or on the FIFO reaching the deepest level within the
-// characters that arrive in rx_latency_us, so a steady stream still reaches the main loop every few hundred us.
+// RX signals on the receive timeout, fixed in the PL011 at 32 quiet bit times, or on the FIFO reaching the deepest
+// level within the characters of the RX latency, so a steady stream still reaches the main loop in that time.
 static immutable ubyte[5] rx_level_chars = [ 4, 8, 16, 24, 28 ];
 
 uint rx_level(uint chars) pure
@@ -251,6 +256,7 @@ __gshared RxRing*[num_uarts] rx_ring;
 __gshared TxRing*[num_uarts] tx_ring;
 __gshared UartRxCallback[num_uarts] _rx_cb;
 __gshared bool[num_uarts] _errors;
+__gshared UartRxTiming[num_uarts] _timing;
 
 void release_rings(uint id)
 {

@@ -106,8 +106,39 @@ struct UartConfig
     ubyte rx_gpio = ubyte.max;  // GPIO pin for RX (max = platform default)
     ubyte rts_gpio = ubyte.max; // GPIO pin for RTS (max = platform default)
     ubyte cts_gpio = ubyte.max; // GPIO pin for CTS (max = platform default)
-    ubyte rx_threshold = 0;     // bytes buffered before RX interrupts; 0 = driver default (from baud), clamped to FIFO depth
+    uint rx_latency_us = 350;   // longest received bytes may wait for the RX event
+    ubyte rx_gap = 35;          // quiet line that delivers a burst early, in tenths of a character
     Rs485Config rs485;
+}
+
+// The RX timing a port runs with once its hardware has clamped the request; zero where a backend cannot say.
+struct UartRxTiming
+{
+    uint latency_us;
+    ubyte gap;
+}
+
+// Start, data, parity and stop bits; half a stop bit counts as one, one and a half as two.
+uint uart_frame_bits(ref const UartConfig cfg) pure
+    => 2 + cfg.data_bits + (cfg.parity != Parity.none) + (cfg.stop_bits >= StopBits.one_point_five);
+
+// Whole characters that arrive within rx_latency_us, never fewer than one.
+uint uart_rx_chars(ref const UartConfig cfg) pure
+{
+    immutable uint chars = cast(uint)(ulong(cfg.baud_rate) * cfg.rx_latency_us / (uart_frame_bits(cfg) * 1_000_000UL));
+    return chars ? chars : 1;
+}
+
+uint uart_rx_gap_bits(ref const UartConfig cfg) pure
+    => (cfg.rx_gap * uart_frame_bits(cfg) + 5) / 10;
+
+uint uart_chars_us(ref const UartConfig cfg, uint chars) pure
+    => cast(uint)(ulong(chars) * uart_frame_bits(cfg) * 1_000_000 / cfg.baud_rate);
+
+ubyte uart_gap_tenths(ref const UartConfig cfg, uint bits) pure
+{
+    immutable uint tenths = (bits * 10 + uart_frame_bits(cfg) / 2) / uart_frame_bits(cfg);
+    return cast(ubyte)(tenths < ubyte.max ? tenths : ubyte.max);
 }
 
 enum UartCallbackContext : ubyte
@@ -461,6 +492,14 @@ void uart_poll(ref Uart uart)
         uart_hw_poll(uart.port);
 }
 
+UartRxTiming uart_rx_timing(ref const Uart uart)
+{
+    static if (__traits(compiles, uart_hw_rx_timing(0)))
+        return uart_hw_rx_timing(uart.port);
+    else
+        return UartRxTiming();
+}
+
 // Early boot (pre-driver, polled, blocking)
 
 void uart0_putc(ubyte c)
@@ -482,6 +521,16 @@ void uart0_puts(const(char)[] s)
 
 unittest
 {
+    UartConfig c;
+    assert(uart_frame_bits(c) == 10 && uart_rx_chars(c) == 4 && uart_rx_gap_bits(c) == 35, "8N1 at 115200: 4 characters in 350 us, a 35-bit gap");
+    c.baud_rate = 2_000_000;
+    assert(uart_rx_chars(c) == 70 && uart_chars_us(c, 16) == 80, "16 characters take 80 us at 2 Mbaud");
+    c.parity = Parity.even;
+    c.stop_bits = StopBits.two;
+    assert(uart_frame_bits(c) == 12 && uart_rx_gap_bits(c) == 42 && uart_gap_tenths(c, 32) == 27, "8E2 frames are 12 bits");
+    c.baud_rate = 300;
+    assert(uart_rx_chars(c) == 1, "a slow line still delivers each character");
+
     static if (num_uarts > 0)
     {
         Uart u;

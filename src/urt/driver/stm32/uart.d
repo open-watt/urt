@@ -6,7 +6,8 @@ import urt.driver.gpio : Pull;
 import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_line_enable;
 import urt.driver.stm32 : clock_enable, pclk1_hz, pclk2_hz, rcc_apb1enr, rcc_apb2enr, reg_read, reg_write;
 import urt.driver.stm32.gpio : gpio_set_function;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, Uart, UartCallbackContext, UartConfig, UartRxCallback;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, Uart, UartCallbackContext, UartConfig, UartRxCallback, UartRxTiming,
+    uart_chars_us, uart_rx_chars, uart_rx_gap_bits;
 import urt.mem.alloc : alloc, free;
 import urt.mem.ring : RingBuffer;
 import urt.sync.spsc : SPSCRing;
@@ -46,15 +47,8 @@ bool uart_hw_init(uint id, UartConfig cfg)
             c1 |= cr1_ps;
     }
 
-    uint c2 = 0;
-    uint frame_bits = 1 + cfg.data_bits + (cfg.parity != Parity.none);
-    final switch (cfg.stop_bits)
-    {
-        case StopBits.one:            frame_bits += 1; break;
-        case StopBits.half:           frame_bits += 1; c2 = 1 << 12; break;
-        case StopBits.two:            frame_bits += 2; c2 = 2 << 12; break;
-        case StopBits.one_point_five: frame_bits += 2; c2 = 3 << 12; break;
-    }
+    static immutable ubyte[StopBits.max + 1] stop_field = [ 1, 0, 3, 2 ];
+    uint c2 = stop_field[cfg.stop_bits] << 12;
 
     uint c3 = 0;
     if (cfg.flow_control == FlowControl.hardware)
@@ -104,18 +98,25 @@ bool uart_hw_init(uint id, UartConfig cfg)
     {
         if (has_receiver_timeout(id))
         {
-            reg_write(base + rtor, (7 * frame_bits + 1) / 2);
+            reg_write(base + rtor, uart_rx_gap_bits(cfg));
             c2 |= cr2_rtoen;
         }
     }
-    immutable uint chars = cfg.rx_threshold ? cfg.rx_threshold : cfg.baud_rate / frame_bits * rx_latency_us / 1_000_000;
+    Port* p = &_port[id];
+    p.timing.gap = has_receiver_timeout(id) ? cfg.rx_gap : 10;
+    immutable uint chars = uart_rx_chars(cfg);
     static if (has_fifo)
     {
         c1 |= cr1_fifoen;
-        c3 |= rx_level(chars) << 25 | tx_level_half << 29;
+        immutable uint level = rx_level(chars);
+        c3 |= level << 25 | tx_level_half << 29;
+        p.timing.latency_us = uart_chars_us(cfg, rx_level_bytes[level]);
     }
     else
-        _port[id].rx_chars = cast(ushort)(chars < ushort.max ? chars : ushort.max);
+    {
+        p.rx_chars = cast(ushort)(chars < ushort.max ? chars : ushort.max);
+        p.timing.latency_us = uart_chars_us(cfg, p.rx_chars);
+    }
 
     reg_write(base + cr2, c2);
     reg_write(base + cr3, c3);
@@ -200,6 +201,9 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     }
     return total;
 }
+
+UartRxTiming uart_hw_rx_timing(uint id)
+    => _port[id].timing;
 
 ptrdiff_t uart_hw_tx_pending(uint id)
 {
@@ -320,7 +324,7 @@ static if (has_fifo)
 
     static immutable ubyte[3] rx_level_bytes = [ 2, 4, 8 ];
 
-    // the deepest RX threshold within the characters of rx_latency_us, and never past half the FIFO, which
+    // the deepest RX threshold within the characters of the RX latency, and never past half the FIFO, which
     // leaves eight characters of ISR latency before an overrun
     uint rx_level(uint chars) pure
     {
@@ -378,7 +382,6 @@ else
 }
 
 enum uint rx_ring_size = 512;
-enum uint rx_latency_us = 350;
 enum tx_stall_limit = 50.msecs;
 enum uint puts_stall_spins = 1_000_000;     // tens of milliseconds of register reads: no clock on a fault path
 
@@ -390,6 +393,7 @@ struct Port
     RxRing* rx;
     TxRing* tx;
     UartRxCallback cb;
+    UartRxTiming timing;
     static if (!has_fifo)
     {
         ushort rx_chars;

@@ -13,11 +13,13 @@ else version (RP2350)
     public import urt.driver.rp2350.pwm;
 else version (STM32)
     public import urt.driver.stm32.pwm;
+else version (BL808)
+    public import urt.driver.bl_common.pwm;
 else
     enum uint num_hw_pwm = 0;
 
-// Bouffalo's system tick holds the periodic timer
-version (Bouffalo)
+// the BL808 M0's hang watchdog holds the periodic timer
+version (BL808_M0)
     enum bool has_soft_pwm = false;
 else
     enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;

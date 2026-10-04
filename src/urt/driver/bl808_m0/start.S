@@ -292,6 +292,10 @@ _start:
      * and a SYSMAP that makes everything from 0x40000000 up cacheable; this
      * only makes sure the I-cache is on. m0_bringup narrows SYSMAP so XRAM
      * is uncached, and cleans the D-cache before D0 runs from PSRAM. */
+    /* .ramfunc was copied through the D-cache: write it back, then let instruction fetch see it */
+    .word   0x0010000B          /* th.dcache.call */
+    .word   0x0190000B          /* th.sync.is */
+    .word   0x0000100F          /* fence.i */
     li      t0, (1 << 0)        /* IE: I-cache enable */
     csrs    CSR_MHCR, t0
 

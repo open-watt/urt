@@ -632,7 +632,7 @@ else ifeq ($(USE_LWIP),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)lwIP
 endif
 
-# ESP defaults to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
+# ESP and the BL808 M0 default to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
 ifeq ($(USE_SPIFFS),)
     USE_SPIFFS := 0
 endif
@@ -640,6 +640,8 @@ ifeq ($(USE_LITTLEFS),)
   ifeq ($(USE_SPIFFS),1)
     USE_LITTLEFS := 0
   else ifneq ($(filter esp%,$(PLATFORM)),)
+    USE_LITTLEFS := 1
+  else ifeq ($(PLATFORM),bl808)
     USE_LITTLEFS := 1
   else
     USE_LITTLEFS := 0

@@ -451,6 +451,27 @@ typedef struct {
 static ow_gpio_interrupt_t gpio_interrupts[OW_GPIO_INTERRUPTS];
 static volatile uintptr_t gpio_interrupt_callbacks[OW_GPIO_INTERRUPTS];
 static unsigned gpio_isr_users;
+
+// IDF keeps one handler per pin, so interrupt ports, links and reflexes each claim their pin here first.
+static uint64_t gpio_claimed_pins;
+static portMUX_TYPE gpio_claim_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static bool gpio_pin_claim(unsigned gpio)
+{
+    taskENTER_CRITICAL(&gpio_claim_lock);
+    bool free = !(gpio_claimed_pins & (1ull << gpio));
+    if (free)
+        gpio_claimed_pins |= 1ull << gpio;
+    taskEXIT_CRITICAL(&gpio_claim_lock);
+    return free;
+}
+
+static void gpio_pin_release(unsigned gpio)
+{
+    taskENTER_CRITICAL(&gpio_claim_lock);
+    gpio_claimed_pins &= ~(1ull << gpio);
+    taskEXIT_CRITICAL(&gpio_claim_lock);
+}
 static bool gpio_isr_service_owned;
 
 static int gpio_isr_acquire(void)
@@ -492,8 +513,12 @@ int ow_gpio_interrupt_open(unsigned port, unsigned input_gpio, unsigned trigger)
         return -1;
 
     ow_gpio_interrupt_t *interrupt = &gpio_interrupts[port];
-    if (interrupt->open || gpio_isr_acquire() != 0)
+    if (interrupt->open || !gpio_pin_claim(input_gpio))
         return -1;
+    if (gpio_isr_acquire() != 0) {
+        gpio_pin_release(input_gpio);
+        return -1;
+    }
     static const gpio_int_type_t types[] = {
         GPIO_INTR_POSEDGE,
         GPIO_INTR_NEGEDGE,
@@ -508,6 +533,7 @@ int ow_gpio_interrupt_open(unsigned port, unsigned input_gpio, unsigned trigger)
         gpio_set_intr_type((gpio_num_t)input_gpio, types[trigger]) != ESP_OK ||
         gpio_isr_handler_add((gpio_num_t)input_gpio, gpio_interrupt_handler, (void *)(uintptr_t)port) != ESP_OK) {
         gpio_isr_release();
+        gpio_pin_release(input_gpio);
         return -1;
     }
     interrupt->open = true;
@@ -532,6 +558,7 @@ void ow_gpio_interrupt_close(unsigned port)
     ow_gpio_interrupt_set_callback(port, NULL);
     interrupt->open = false;
     gpio_isr_release();
+    gpio_pin_release(interrupt->input_gpio);
 }
 
 // -- Link fabric gpio events (dispatcher lives in D: ow_link_fire) --
@@ -551,16 +578,19 @@ int ow_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
         GPIO_INTR_NEGEDGE,
         GPIO_INTR_ANYEDGE,
     };
-    if (gpio >= SOC_GPIO_PIN_COUNT || trigger > 2)
+    if (gpio >= SOC_GPIO_PIN_COUNT || trigger > 2 || !gpio_pin_claim(gpio))
         return -1;
-    if (gpio_isr_acquire() != 0)
+    if (gpio_isr_acquire() != 0) {
+        gpio_pin_release(gpio);
         return -1;
+    }
     // Input buffer explicitly: the pin may be muxed to a peripheral output (only the output path is
     // routed), and edge detection needs GPIO_IN regardless of who drives the pad.
     if (gpio_input_enable((gpio_num_t)gpio) != ESP_OK ||
         gpio_set_intr_type((gpio_num_t)gpio, types[trigger]) != ESP_OK ||
         gpio_isr_handler_add((gpio_num_t)gpio, link_gpio_handler, (void *)(uintptr_t)slot) != ESP_OK) {
         gpio_isr_release();
+        gpio_pin_release(gpio);
         return -1;
     }
     return 0;
@@ -573,6 +603,7 @@ void ow_link_gpio_close(unsigned slot, unsigned gpio)
         return;
     gpio_isr_handler_remove((gpio_num_t)gpio);
     gpio_isr_release();
+    gpio_pin_release(gpio);
 }
 
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -589,13 +620,15 @@ int ow_reflex_open(unsigned gpio, unsigned trigger)
         GPIO_INTR_NEGEDGE,
         GPIO_INTR_ANYEDGE,
     };
-    if (gpio >= 32 || trigger > 2)
+    if (gpio >= 32 || trigger > 2 || !gpio_pin_claim(gpio))
         return -1;
     if (!reflex_users) {
         // Route the GPIO NMI matrix source to CPU interrupt 14 (level 7). High-level
         // allocation requires a NULL handler; the vector dispatches to xt_nmi directly.
-        if (esp_intr_alloc(ETS_GPIO_NMI_SOURCE, ESP_INTR_FLAG_NMI, NULL, NULL, &reflex_nmi_handle) != ESP_OK)
+        if (esp_intr_alloc(ETS_GPIO_NMI_SOURCE, ESP_INTR_FLAG_NMI, NULL, NULL, &reflex_nmi_handle) != ESP_OK) {
+            gpio_pin_release(gpio);
             return -1;
+        }
     }
     if (gpio_input_enable((gpio_num_t)gpio) != ESP_OK ||
         gpio_set_intr_type((gpio_num_t)gpio, types[trigger]) != ESP_OK) {
@@ -603,6 +636,7 @@ int ow_reflex_open(unsigned gpio, unsigned trigger)
             esp_intr_free(reflex_nmi_handle);
             reflex_nmi_handle = NULL;
         }
+        gpio_pin_release(gpio);
         return -1;
     }
     ++reflex_users;
@@ -617,6 +651,7 @@ void ow_reflex_close(unsigned gpio)
         return;
     GPIO.pin[gpio].int_ena &= ~BIT(3);
     gpio_set_intr_type((gpio_num_t)gpio, GPIO_INTR_DISABLE);
+    gpio_pin_release(gpio);
     if (--reflex_users == 0 && reflex_nmi_handle) {
         esp_intr_free(reflex_nmi_handle);
         reflex_nmi_handle = NULL;
@@ -1335,9 +1370,13 @@ int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits,
     return 1;
 }
 
+// uart_driver_delete discards what is still queued, so what was written goes out first, as a flush does.
 void ow_uart_close(unsigned port)
 {
-    if (port >= NUM_UARTS || !atomic_exchange_explicit(&uart_initialized[port], false, memory_order_acq_rel))
+    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
+        return;
+    uart_wait_tx_done((uart_port_t)port, pdMS_TO_TICKS(250));
+    if (!atomic_exchange_explicit(&uart_initialized[port], false, memory_order_acq_rel))
         return;
     atomic_store_explicit(&uart_rx_ready[port], NULL, memory_order_release);
     if (uart_event_task[port])
@@ -1384,8 +1423,6 @@ int32_t ow_uart_rx_pending(unsigned port)
     return uart_get_buffered_data_len((uart_port_t)port, &available) == ESP_OK ? (int32_t)available : 0;
 }
 
-// IDF only exposes the ring; the byte in flight and the hardware FIFO tail are
-// not counted, ow_uart_tx_idle covers those.
 int32_t ow_uart_tx_pending(unsigned port)
 {
     if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
@@ -1396,18 +1433,11 @@ int32_t ow_uart_tx_pending(unsigned port)
     return (int32_t)(UART_TX_BUFFER_SIZE - available);
 }
 
-int ow_uart_tx_idle(unsigned port)
-{
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
-        return 1;
-    return uart_wait_tx_done((uart_port_t)port, 0) == ESP_OK;
-}
-
 int32_t ow_uart_flush(unsigned port)
 {
     if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
         return 0;
-    return uart_wait_tx_done((uart_port_t)port, portMAX_DELAY) == ESP_OK ? 0 : -1;
+    return uart_wait_tx_done((uart_port_t)port, pdMS_TO_TICKS(250)) == ESP_OK ? 0 : -1;
 }
 
 int ow_uart_check_errors(unsigned port)

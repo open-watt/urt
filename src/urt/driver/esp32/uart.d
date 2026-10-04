@@ -4,7 +4,7 @@
 // UART0 TX/RX defaults set by bootloader (typically GPIO43/44 on S3).
 module urt.driver.esp32.uart;
 
-import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
+import urt.atomic : MemoryOrder, atomicExchange, atomicLoad, atomicStore;
 import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, Uart, UartCallbackContext, UartError,
     UartConfig, UartRxCallback;
 
@@ -33,10 +33,9 @@ enum uint uart_flow_controls = 1 << FlowControl.none;
 enum bool uart_has_rs485 = true;
 enum bool uart_has_pin_select = true;
 
+// A refused open leaves the callback of whoever holds the port.
 bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
 {
-    if (id >= num_uarts)
-        return false;
     if (cfg.rs485.enabled &&
         (cfg.rs485.de_assert_us != 0 || cfg.rs485.de_deassert_us != 0 ||
          cfg.rs485.turnaround_us != 0))
@@ -46,8 +45,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
     byte rx = cfg.rx_gpio == ubyte.max ? -1 : cast(byte)cfg.rx_gpio;
     byte de = cfg.rs485.enabled && cfg.rs485.de_gpio != ubyte.max
         ? cast(byte)cfg.rs485.de_gpio : -1;
-    atomicStore!(MemoryOrder.release)(_rx_callback_bits[id],
-                                      cast(size_t)rx_cb);
+    immutable size_t held = atomicExchange!(MemoryOrder.acq_rel)(&_rx_callback_bits[id], cast(size_t)rx_cb);
     bool opened = ow_uart_open(id, cfg.baud_rate, cfg.data_bits,
                                cast(ubyte)cfg.stop_bits,
                                cast(ubyte)cfg.parity,
@@ -55,16 +53,13 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
                                cfg.rs485.de_active_high,
                                &rx_ready) != 0;
     if (!opened)
-        atomicStore!(MemoryOrder.release)(_rx_callback_bits[id],
-                                          cast(size_t)0);
+        atomicStore!(MemoryOrder.release)(_rx_callback_bits[id], held);
     return opened;
 }
 
 void uart_hw_close(uint id)
 {
-    if (id < num_uarts)
-        atomicStore!(MemoryOrder.release)(_rx_callback_bits[id],
-                                          cast(size_t)0);
+    atomicStore!(MemoryOrder.release)(_rx_callback_bits[id], cast(size_t)0);
     ow_uart_close(id);
 }
 
@@ -103,11 +98,6 @@ ptrdiff_t uart_hw_flush(uint id)
     return ow_uart_flush(id);
 }
 
-bool uart_tx_idle(uint id)
-{
-    return ow_uart_tx_idle(id) != 0;
-}
-
 void uart0_hw_puts(const(char)[] s)
 {
     foreach (ch; s)
@@ -142,7 +132,6 @@ extern(C) nothrow @nogc
     int ow_uart_write(uint port, const(ubyte)* buf, int len);
     int ow_uart_rx_pending(uint port);
     int ow_uart_tx_pending(uint port);
-    int ow_uart_tx_idle(uint port);
     int ow_uart_flush(uint port);
     int ow_uart_check_errors(uint port);
 }

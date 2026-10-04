@@ -49,12 +49,12 @@ else version (Espressif)
     public import urt.driver.esp32.gpio;
 else version (STM32)
     public import urt.driver.stm32.gpio;
-else version (linux)
-    public import urt.driver.posix.gpio;
 else version (MT7621)
     public import urt.driver.mt7621.gpio;
 else version (RP2350)
     public import urt.driver.rp2350.gpio;
+else version (linux)
+    public import urt.driver.posix.gpio;
 else
 {
     enum uint num_gpio = 0;

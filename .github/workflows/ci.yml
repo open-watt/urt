@@ -73,6 +73,10 @@ jobs:
             exit 1
           fi
 
+      - name: Driver contract tests over register models
+        if: matrix.os == 'ubuntu' && matrix.arch == 'x86_64' && matrix.compiler == 'ldc'
+        run: make -f Makefile -f test/driver/driver.mk driver-contract ARCH=x86_64 OS=linux CONFIG=debug COMPILER=ldc
+
       - name: Build release library
         if: github.ref == 'refs/heads/release'
         run: make ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=release COMPILER=${{ matrix.compiler }}

@@ -178,6 +178,12 @@ alias UartRxCallback = bool function(Uart uart, size_t rx_avail,
 
 enum bool has_rx_callback = __traits(compiles, { UartConfig c; uart_hw_open(0, c, UartRxCallback.init); });
 
+// A backend with has_rx_timing applies UartConfig's RX latency and gap, live too, and reports what it runs with; one
+// that reports no gap says so with uart_reports_rx_gap.
+enum bool has_rx_timing = __traits(compiles, { UartConfig c; uart_hw_set_rx_timing(0, c); });
+static if (!__traits(compiles, uart_reports_rx_gap))
+    enum bool uart_reports_rx_gap = has_rx_timing;
+
 // Called from ISR/DMA when TX buffer space becomes available (e.g. FIFO
 // drains below threshold). The callee should feed more data via uart_write.
 // tx_avail: number of bytes that can be written to the TX buffer.
@@ -521,6 +527,15 @@ void uart_poll(ref Uart uart)
         assert(false, "no UART on this platform");
     else
         uart_hw_poll(uart.port);
+}
+
+// Reprograms an open port's RX latency and gap in place, leaving TX and what is queued alone; the rest of cfg is what
+// the port was opened with. A backend may keep a setting until the port next opens; the result, like uart_rx_timing,
+// is the timing the port now runs with.
+static if (has_rx_timing)
+{
+    UartRxTiming uart_set_rx_timing(ref Uart uart, ref const UartConfig cfg)
+        => is_open(uart) ? uart_hw_set_rx_timing(uart.port, cfg) : UartRxTiming();
 }
 
 UartRxTiming uart_rx_timing(ref const Uart uart)

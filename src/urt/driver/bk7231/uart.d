@@ -22,6 +22,7 @@ enum uint uart_stop_bits = 1 << StopBits.one | 1 << StopBits.two;
 enum uint uart_flow_controls = 1 << FlowControl.none | 1 << FlowControl.hardware;
 enum bool uart_has_rs485 = false;
 enum bool uart_has_pin_select = false;
+enum bool uart_reports_rx_gap = false;
 
 
 // Register offsets (from SDK uart.h)
@@ -279,6 +280,15 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
+
+// The RX threshold takes a new value while the UART runs.
+UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+{
+    immutable uint config = uart_bases[id] + REG_FIFO_CONFIG;
+    reg_write(config, (reg_read(config) & ~FIFO_RX_THRESHOLD_MASK) | rx_threshold(cfg) << FIFO_RX_THRESHOLD_POS);
+    _ports.retime(id, UartRxTiming(uart_chars_us(cfg, rx_threshold(cfg))));
+    return _ports.timing(id);
+}
 
 ptrdiff_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);

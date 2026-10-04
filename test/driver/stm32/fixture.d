@@ -34,6 +34,10 @@ enum UartError line_errors = cast(UartError)(UartError.parity | UartError.framin
 enum bool shows_tx_busy = true;
 enum bool keeps_bad_bytes = false;
 enum bool has_links = true;
+// F4 takes the IDLE line as its gap, so only F7 and H7 program one.
+enum bool programs_rx_gap = !legacy;
+// The H7's RX FIFO trigger is written only with the USART disabled.
+enum bool retimes_latency_live = depth == 1;
 
 void reset()
 {
@@ -94,6 +98,8 @@ uint programmed_baud()
     immutable uint brr = _regs.get(usart + (legacy ? 0x08 : 0x0C));
     return brr ? cast(uint)((fck + brr / 2) / brr) : 0;
 }
+
+uint rx_gap_bits() => _regs.get(usart + 0x14) & 0xFF_FFFF;
 
 // Time passes on the line with no driver call: the shifter works and interrupts are delivered.
 void run_line()
@@ -317,7 +323,12 @@ void usart_write(uint off, uint value)
             _cr1 = value;
             break;
         case cr2: _cr2 = value; break;
-        case cr3: _cr3 = value; break;
+        case cr3:
+            // RXFTCFG is written only with the USART disabled
+            if (depth > 1 && (_cr1 & ue))
+                value = (value & ~(7u << 25)) | (_cr3 & 7u << 25);
+            _cr3 = value;
+            break;
         default:  _regs.set(usart + off, value);
     }
 }

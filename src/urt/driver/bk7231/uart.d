@@ -13,8 +13,8 @@ module urt.driver.bk7231.uart;
 
 import core.volatile;
 
-import urt.driver.uart : FlowControl, Parity, StopBits, Uart, UartCallbackContext,
-    UartConfig, UartRxCallback;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, Uart, UartCallbackContext,
+    UartConfig, UartRxCallback, UartRxTiming, uart_chars_us, uart_rx_chars;
 import urt.driver.gpio : Pull, gpio_set_function;
 import urt.driver.irq : irq_critical, irq_handler_set, irq_line_enable;
 import urt.mem.ring : RingBuffer;
@@ -23,8 +23,13 @@ nothrow @nogc:
 
 enum num_uarts = 2;
 enum uint uart_clock_hz = 26_000_000;
-enum bool has_irq_driven_uart = true;
-enum bool has_dma_driven_uart = false;
+enum uint uart_drive_modes = 1 << DriveMode.interrupt;
+enum uint uart_data_bits = 0xF << 5;
+enum uint uart_parities = 1 << Parity.none | 1 << Parity.even | 1 << Parity.odd;
+enum uint uart_stop_bits = 1 << StopBits.one | 1 << StopBits.two;
+enum uint uart_flow_controls = 1 << FlowControl.none | 1 << FlowControl.hardware;
+enum bool uart_has_rs485 = false;
+enum bool uart_has_pin_select = false;
 
 
 // --- Register offsets (from SDK uart.h) ------------------------------
@@ -216,13 +221,11 @@ bool uart_hw_init(uint id, UartConfig cfg)
 
     // Step 4: Configure FIFO thresholds and RX stop detect time
     // SDK defaults: TX_FIFO_THRD=0x40, RX_FIFO_THRD=0x30, RX_STOP_DETECT=0 (32 clks)
-    // ~100us of bytes per interrupt: per-byte up to 115200, batched above, with the
-    // idle-stop interrupt delivering any sub-threshold tail after ~3 byte-times.
-    uint rx_thresh = cfg.rx_threshold ? cfg.rx_threshold : cfg.baud_rate / 100_000;
-    if (rx_thresh == 0)
-        rx_thresh = 1;
+    // the idle-stop interrupt delivers any sub-threshold tail
+    uint rx_thresh = uart_rx_chars(cfg);
     if (rx_thresh > FIFO_DEPTH / 2)
         rx_thresh = FIFO_DEPTH / 2;
+    _timing[id] = UartRxTiming(uart_chars_us(cfg, rx_thresh));
 
     reg_write(base + REG_FIFO_CONFIG,
         (SDK_TX_FIFO_THRESHOLD << FIFO_TX_THRESHOLD_POS)
@@ -359,6 +362,9 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
     return cast(ptrdiff_t)n;
 }
 
+UartRxTiming uart_hw_rx_timing(uint id)
+    => _timing[id];
+
 ptrdiff_t uart_hw_tx_pending(uint id)
 {
     if (id >= num_uarts)
@@ -460,6 +466,7 @@ private immutable uint[2] uart_irq = [0, 1];
 private alias TxRing = RingBuffer!1024;
 private __gshared TxRing[num_uarts] tx_ring;
 private __gshared uint[num_uarts] _latched_errors;
+private __gshared UartRxTiming[num_uarts] _timing;
 private __gshared UartRxCallback[2] _rx_cb;
 
 private void uart_isr(uint irq) nothrow @nogc

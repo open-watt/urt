@@ -3,12 +3,8 @@ module urt.driver.uart;
 import urt.result : Result, InternalResult;
 import urt.time : Duration;
 
-version (BL808_M0)
-    public import urt.driver.bl618.uart;
-else version (BL808)
-    public import urt.driver.bl808.uart;
-else version (BL618)
-    public import urt.driver.bl618.uart;
+version (Bouffalo)
+    public import urt.driver.bl_common.uart;
 else version (Beken)
     public import urt.driver.bk7231.uart;
 else version (RP2350)
@@ -106,8 +102,63 @@ struct UartConfig
     ubyte rx_gpio = ubyte.max;  // GPIO pin for RX (max = platform default)
     ubyte rts_gpio = ubyte.max; // GPIO pin for RTS (max = platform default)
     ubyte cts_gpio = ubyte.max; // GPIO pin for CTS (max = platform default)
-    ubyte rx_threshold = 0;     // bytes buffered before RX interrupts; 0 = driver default (from baud), clamped to FIFO depth
+    uint rx_latency_us = 350;   // how long a continuous stream batches before the RX event; a pause delivers at rx_gap
+    ubyte rx_gap = 35;          // quiet line that delivers what preceded it, in tenths of a character
     Rs485Config rs485;
+}
+
+// Each backend declares a bit per setting it can run (uart_drive_modes, uart_data_bits by width, uart_parities,
+// uart_stop_bits, uart_flow_controls) and whether it honours RS-485 and pin requests; uart_open refuses the rest.
+bool uart_config_supported(ref const UartConfig cfg) pure
+{
+    static if (num_uarts == 0)
+        return false;
+    else
+        return (cfg.drive_mode == DriveMode.auto_ || (uart_drive_modes & 1 << cfg.drive_mode))
+            && cfg.data_bits < 32 && (uart_data_bits & 1 << cfg.data_bits)
+            && (uart_parities & 1 << cfg.parity)
+            && (uart_stop_bits & 1 << cfg.stop_bits)
+            && (uart_flow_controls & 1 << cfg.flow_control)
+            && (uart_has_rs485 || !cfg.rs485.enabled)
+            && (uart_has_pin_select || (cfg.tx_gpio & cfg.rx_gpio & cfg.rts_gpio & cfg.cts_gpio) == ubyte.max);
+}
+
+// The RX timing a port runs with once its hardware has clamped the request; zero where a backend cannot say.
+struct UartRxTiming
+{
+    uint latency_us;
+    ubyte gap;
+}
+
+// Start, data, parity and stop bits; half a stop bit counts as one, one and a half as two.
+uint uart_frame_bits(ref const UartConfig cfg) pure
+    => 2 + cfg.data_bits + (cfg.parity != Parity.none) + (cfg.stop_bits >= StopBits.one_point_five);
+
+// Whole characters that arrive within rx_latency_us, never fewer than one.
+uint uart_rx_chars(ref const UartConfig cfg) pure
+{
+    immutable uint chars = cast(uint)(ulong(cfg.baud_rate) * cfg.rx_latency_us / (uart_frame_bits(cfg) * 1_000_000UL));
+    return chars ? chars : 1;
+}
+
+// Whether clock / divisor lands within 3% of the requested rate; a receiver samples mid-bit and tolerates about 5%.
+bool uart_rate_close(uint baud, ulong clock, ulong divisor) pure
+{
+    immutable ulong rate = (clock + divisor / 2) / divisor;
+    immutable ulong miss = rate > baud ? rate - baud : baud - rate;
+    return miss * 100 <= ulong(baud) * 3;
+}
+
+uint uart_rx_gap_bits(ref const UartConfig cfg) pure
+    => (cfg.rx_gap * uart_frame_bits(cfg) + 5) / 10;
+
+uint uart_chars_us(ref const UartConfig cfg, uint chars) pure
+    => cast(uint)(ulong(chars) * uart_frame_bits(cfg) * 1_000_000 / cfg.baud_rate);
+
+ubyte uart_gap_tenths(ref const UartConfig cfg, uint bits) pure
+{
+    immutable uint tenths = (bits * 10 + uart_frame_bits(cfg) / 2) / uart_frame_bits(cfg);
+    return cast(ubyte)(tenths < ubyte.max ? tenths : ubyte.max);
 }
 
 enum UartCallbackContext : ubyte
@@ -124,6 +175,8 @@ enum UartCallbackContext : ubyte
 // yield to a woken thread. Thread-context backends ignore the return value.
 alias UartRxCallback = bool function(Uart uart, size_t rx_avail,
                                      UartCallbackContext context) nothrow @nogc;
+
+enum bool has_rx_callback = __traits(compiles, { UartConfig c; uart_hw_open(0, c, UartRxCallback.init); });
 
 // Called from ISR/DMA when TX buffer space becomes available (e.g. FIFO
 // drains below threshold). The callee should feed more data via uart_write.
@@ -211,14 +264,20 @@ void uart_deinit()
 
 // Port operations
 
+// No backend sizes its buffers or signals TX space yet, so buf_size and tx_cb are refused.
 Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, size_t buf_size = 0, UartRxCallback rx_cb = null, UartTxCallback tx_cb = null)
 {
     static if (num_uarts == 0)
         assert(false, "no UART on this platform");
     else
     {
-        if (port < first_uart || port >= first_uart + num_uarts)
+        if (port < first_uart || port >= first_uart + num_uarts || cfg.baud_rate == 0)
             return InternalResult.invalid_parameter;
+        if (!uart_config_supported(cfg) || buf_size != 0 || tx_cb !is null)
+            return InternalResult.unsupported;
+        immutable uint owned = 1 << (port - first_uart);
+        if (uart.is_open || (_open_ports & owned))
+            return InternalResult.already_exists;
 
         static if (__traits(compiles, uart_hw_open(port, cfg, rx_cb)))
             bool opened = uart_hw_open(port, cfg, rx_cb);
@@ -232,6 +291,7 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, size_t buf
         if (!opened)
             return InternalResult.failed;
 
+        _open_ports |= owned;
         uart.port = port;
         return Result.success;
     }
@@ -244,10 +304,15 @@ Result uart_reconfigure(ref Uart uart, ref const UartConfig cfg)
 
 void uart_close(ref Uart uart)
 {
+    if (!is_open(uart))
+        return;
     static if (num_uarts == 0)
         assert(false, "no UART on this platform");
     else
+    {
         uart_hw_close(uart.port);
+        _open_ports &= ~(1 << (uart.port - first_uart));
+    }
     uart.port = ubyte.max;
 }
 
@@ -366,6 +431,7 @@ size_t uart_tx_available(ref const Uart uart)
     assert(false, "TODO: uart_tx_available");
 }
 
+// Bytes accepted that have not yet reached the transmitter FIFO.
 size_t uart_tx_queued(ref const Uart uart)
 {
     static if (num_uarts == 0)
@@ -457,6 +523,14 @@ void uart_poll(ref Uart uart)
         uart_hw_poll(uart.port);
 }
 
+UartRxTiming uart_rx_timing(ref const Uart uart)
+{
+    static if (__traits(compiles, uart_hw_rx_timing(0)))
+        return is_open(uart) ? uart_hw_rx_timing(uart.port) : UartRxTiming();
+    else
+        return UartRxTiming();
+}
+
 // Early boot (pre-driver, polled, blocking)
 
 void uart0_putc(ubyte c)
@@ -478,6 +552,17 @@ void uart0_puts(const(char)[] s)
 
 unittest
 {
+    UartConfig c;
+    assert(uart_frame_bits(c) == 10 && uart_rx_chars(c) == 4 && uart_rx_gap_bits(c) == 35, "8N1 at 115200: 4 characters in 350 us, a 35-bit gap");
+    c.baud_rate = 2_000_000;
+    assert(uart_rx_chars(c) == 70 && uart_chars_us(c, 16) == 80, "16 characters take 80 us at 2 Mbaud");
+    c.parity = Parity.even;
+    c.stop_bits = StopBits.two;
+    assert(uart_frame_bits(c) == 12 && uart_rx_gap_bits(c) == 42 && uart_gap_tenths(c, 32) == 27, "8E2 frames are 12 bits");
+    c.baud_rate = 300;
+    assert(uart_rx_chars(c) == 1, "a slow line still delivers each character");
+    assert(uart_rate_close(115_200, 50_000_000, 16 * 27) && !uart_rate_close(4_000_000, 50_000_000, 16), "3.125 Mbaud is no 4 Mbaud");
+
     static if (num_uarts > 0)
     {
         Uart u;
@@ -490,6 +575,18 @@ unittest
         assert(!u.is_open);
         static if (first_uart > 0)
             assert(!uart_open(u, 0, cfg));
+
+        UartConfig bad;
+        bad.baud_rate = 0;
+        assert(!uart_open(u, cast(ubyte)console_uart, bad), "a zero baud rate is refused");
+        bad = UartConfig.init;
+        foreach (m; DriveMode.polled .. DriveMode.auto_)
+        {
+            if (uart_drive_modes & 1 << m)
+                continue;
+            bad.drive_mode = m;
+            assert(!uart_open(u, cast(ubyte)console_uart, bad), "a drive mode the backend lacks is refused");
+        }
 
         // Open/close each valid port; reconfiguring the console would kill it
         foreach (p; first_uart .. first_uart + num_uarts)
@@ -524,3 +621,4 @@ unittest
 private:
 
 __gshared ubyte _init_refcount;
+__gshared uint _open_ports;

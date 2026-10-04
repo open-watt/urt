@@ -1,6 +1,6 @@
 module urt.driver.mt7621.uart;
 
-import urt.driver.uart : Parity, StopBits, UartConfig;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig;
 
 import core.volatile;
 
@@ -10,8 +10,13 @@ enum num_uarts = 3;
 enum uint first_uart = 1;
 enum uint console_uart = 1;
 enum uint uart_clock_hz = 50_000_000;
-enum bool has_irq_driven_uart = false;
-enum bool has_dma_driven_uart = false;
+enum uint uart_drive_modes = 1 << DriveMode.polled;
+enum uint uart_data_bits = 0xF << 5;
+enum uint uart_parities = 1 << Parity.none | 1 << Parity.even | 1 << Parity.odd;
+enum uint uart_stop_bits = 1 << StopBits.one | 1 << StopBits.two;
+enum uint uart_flow_controls = 1 << FlowControl.none;
+enum bool uart_has_rs485 = false;
+enum bool uart_has_pin_select = false;
 
 bool uart_hw_init(uint id, UartConfig cfg)
 {

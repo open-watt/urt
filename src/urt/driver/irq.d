@@ -73,7 +73,7 @@ bool irq_global_set(bool enabled)
     return enabled ? irq_global_enable() : irq_global_disable();
 }
 
-// RAII-style critical section guard.
+// RAII-style critical section guard; a host has no interrupts to hold off.
 // Usage: auto guard = irq_critical();
 struct IrqGuard
 {
@@ -83,14 +83,16 @@ struct IrqGuard
 
     ~this() nothrow @nogc
     {
-        irq_global_set(_prev);
+        static if (irq_max > 0)
+            irq_global_set(_prev);
     }
 }
 
 IrqGuard irq_critical()
 {
     IrqGuard g = void;
-    g._prev = irq_global_disable();
+    static if (irq_max > 0)
+        g._prev = irq_global_disable();
     return g;
 }
 

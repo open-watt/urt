@@ -21,6 +21,7 @@ enum uint xosc_hz     = 12_000_000;
 enum uint clk_sys_hz  = 150_000_000;
 enum uint clk_peri_hz = clk_sys_hz;
 
+enum ulong reg_alias_set    = 0x00002000;
 enum ulong reg_alias_clr    = 0x00003000;
 
 enum ulong resets_reset     = 0x00;
@@ -40,6 +41,17 @@ void unreset_wait(uint bits)
     mmio_write(resets_base + resets_reset + reg_alias_clr, bits);
     while ((mmio_read(resets_base + resets_done) & bits) != bits)
     {}
+}
+
+// A block held in reset must not be touched; its registers may stall the bus.
+bool out_of_reset(uint bits)
+    => (mmio_read(resets_base + resets_done) & bits) == bits;
+
+// Puts a block through reset, so it starts from its reset state whatever a warm reset left behind.
+void reset_pulse(uint bits)
+{
+    mmio_write(resets_base + resets_reset + reg_alias_set, bits);
+    unreset_wait(bits);
 }
 
 void mmio_write(ulong addr, uint val)

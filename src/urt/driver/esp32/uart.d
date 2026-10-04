@@ -5,7 +5,7 @@
 module urt.driver.esp32.uart;
 
 import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
-import urt.driver.uart : Parity, StopBits, Uart, UartCallbackContext, UartError,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, Uart, UartCallbackContext, UartError,
     UartConfig, UartRxCallback;
 
 nothrow @nogc:
@@ -25,8 +25,13 @@ else version (ESP32_H2)  enum num_uarts = 2;
 else static assert(false, "unknown Espressif chip -- add num_uarts");
 
 enum uint uart_clock_hz = 80_000_000;
-enum bool has_irq_driven_uart = true;
-enum bool has_dma_driven_uart = false;
+enum uint uart_drive_modes = 1 << DriveMode.interrupt;
+enum uint uart_data_bits = 0xF << 5;
+enum uint uart_parities = 1 << Parity.none | 1 << Parity.even | 1 << Parity.odd;
+enum uint uart_stop_bits = 1 << StopBits.one | 1 << StopBits.one_point_five | 1 << StopBits.two;
+enum uint uart_flow_controls = 1 << FlowControl.none;
+enum bool uart_has_rs485 = true;
+enum bool uart_has_pin_select = true;
 
 bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
 {

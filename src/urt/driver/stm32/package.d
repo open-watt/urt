@@ -17,12 +17,14 @@ version (STM32H7)
     enum uint hclk_hz   = 200_000_000;
     enum uint pclk1_hz  = 100_000_000;
     enum uint pclk2_hz  = 100_000_000;
+    enum uint pclk4_hz  = 100_000_000;
 
     enum ulong rcc_base = 0x5802_4400;
     enum uint rcc_ahb2enr = 0xDC;
     enum uint rcc_gpioenr = 0xE0;
     enum uint rcc_apb1enr = 0xE8;
     enum uint rcc_apb2enr = 0xF0;
+    enum uint rcc_apb4enr = 0xF4;
     enum uint rcc_gpiorstr = 0x88;
     enum uint rcc_otgfs_enr = 0xD8;         // AHB1ENR.USB2OTGFSEN
     enum uint rcc_otgfs_bit = 27;

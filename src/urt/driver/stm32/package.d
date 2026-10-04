@@ -64,8 +64,9 @@ else
     }
 }
 
-// Timers on APB1 run at twice PCLK1 whenever the APB1 prescaler divides.
+// Timers run at twice their APB clock whenever that bus's prescaler divides, as both do here.
 enum uint apb1_timer_hz = pclk1_hz * 2;
+enum uint apb2_timer_hz = pclk2_hz * 2;
 
 uint reg_read(ulong addr) => volatileLoad(cast(uint*)addr);
 void reg_write(ulong addr, uint value) { volatileStore(cast(uint*)addr, value); }

@@ -131,16 +131,9 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
         _ports.release(id);
         return false;
     }
-    immutable uint chars = uart_rx_chars(cfg);
-    immutable ubyte gap = has_receiver_timeout(id) ? cfg.rx_gap : 10;
-    static if (has_fifo)
-        _ports.start(id, rx_cb, UartRxTiming(uart_chars_us(cfg, rx_level_bytes[rx_level(chars)]), gap));
-    else
-    {
-        _rx_chars[id] = cast(ushort)(chars < ushort.max ? chars : ushort.max);
+    static if (!has_fifo)
         _rx_count[id] = 0;
-        _ports.start(id, rx_cb, UartRxTiming(uart_chars_us(cfg, _rx_chars[id]), gap));
-    }
+    _ports.start(id, rx_cb, rx_timing(id, cfg));
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
     immutable base = uart_base[id];
@@ -171,6 +164,24 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
+
+// The receiver timeout takes a new value while the USART runs; the H7 FIFO trigger only with it disabled, so its
+// latency waits for the next open.
+UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+{
+    auto guard = irq_critical();
+    static if (!legacy_usart)
+    {
+        if (has_receiver_timeout(id))
+            reg_write(uart_base[id] + rtor, uart_rx_gap_bits(cfg));
+    }
+    immutable UartRxTiming timing = rx_timing(id, cfg);
+    static if (has_fifo)
+        _ports.retime(id, UartRxTiming(_ports.timing(id).latency_us, timing.gap));
+    else
+        _ports.retime(id, timing);
+    return _ports.timing(id);
+}
 
 ptrdiff_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
@@ -365,6 +376,20 @@ uint gap_flag(uint id) pure
         return st_idle;
     else
         return has_receiver_timeout(id) ? st_rtof : st_idle;
+}
+
+// The RX trigger: the FIFO level, or without a FIFO the character count the ISR delivers at.
+UartRxTiming rx_timing(uint id, ref const UartConfig cfg)
+{
+    immutable uint chars = uart_rx_chars(cfg);
+    immutable ubyte gap = has_receiver_timeout(id) ? cfg.rx_gap : 10;
+    static if (has_fifo)
+        return UartRxTiming(uart_chars_us(cfg, rx_level_bytes[rx_level(chars)]), gap);
+    else
+    {
+        _rx_chars[id] = cast(ushort)(chars < ushort.max ? chars : ushort.max);
+        return UartRxTiming(uart_chars_us(cfg, _rx_chars[id]), gap);
+    }
 }
 
 // DE assertion and deassertion in sample times, sixteenths of a bit, which DEAT and DEDT hold up to 31.

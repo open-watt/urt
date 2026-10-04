@@ -17,6 +17,8 @@ enum uint output_pin = 10;
 static immutable uint[2] batch_pins = [ 8, 9 ];
 enum UartError line_errors = cast(UartError)(UartError.parity | UartError.framing);
 enum bool shows_tx_busy = false;
+enum bool retimes_latency_live = true;
+enum bool programs_rx_gap = false;
 enum bool keeps_bad_bytes = true;
 enum bool has_links = false;
 

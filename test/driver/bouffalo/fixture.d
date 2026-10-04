@@ -41,6 +41,8 @@ static immutable uint[2] batch_pins = [ 8, 9 ];
 enum UartError line_errors = UartError.parity;
 enum bool shows_tx_busy = true;
 enum bool keeps_bad_bytes = true;
+enum bool retimes_latency_live = true;
+enum bool programs_rx_gap = true;
 
 void reset()
 {
@@ -95,6 +97,8 @@ uint programmed_baud()
         return 0;
     return cast(uint)((40_000_000UL + ((v & 0xFFFF) + 1) / 2) / ((v & 0xFFFF) + 1));
 }
+
+uint rx_gap_bits() => _regs.get(uart_base + 0x18) + 1;
 
 // Time passes on the line with no driver call: the shifter works and interrupts are delivered.
 void run_line()

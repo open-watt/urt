@@ -163,19 +163,8 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb)
 
     reg_write(base, FIFO_CONFIG_0, (reg_read(base, FIFO_CONFIG_0) & DMA_EN) | TX_FIFO_CLR | RX_FIFO_CLR);
 
-    // the FIFO interrupt fires above its threshold, and the RX timeout counts one more than its field
-    uint rx_chars = uart_rx_chars(cfg);
-    rx_chars = rx_chars < FIFO_DEPTH / 2 ? rx_chars : FIFO_DEPTH / 2;
-    uint gap_bits = uart_rx_gap_bits(cfg);
-    gap_bits = gap_bits < 1 ? 1 : gap_bits > 256 ? 256 : gap_bits;
-    _ports.start(id, rx_cb, UartRxTiming(uart_chars_us(cfg, rx_chars), uart_gap_tenths(cfg, gap_bits)));
-
-    auto fifo1 = reg_read(base, FIFO_CONFIG_1);
-    fifo1 &= ~(TX_FIFO_TH_MASK | RX_FIFO_TH_MASK);
-    fifo1 |= (TX_FIFO_THRESHOLD - 1) << TX_FIFO_TH_SHIFT;
-    fifo1 |= (rx_chars - 1) << RX_FIFO_TH_SHIFT;
-    reg_write(base, FIFO_CONFIG_1, fifo1);
-    reg_write(base, URX_RTO_TIMER, gap_bits - 1);
+    reg_write(base, FIFO_CONFIG_1, (reg_read(base, FIFO_CONFIG_1) & ~TX_FIFO_TH_MASK) | (TX_FIFO_THRESHOLD - 1) << TX_FIFO_TH_SHIFT);
+    _ports.start(id, rx_cb, set_rx_timing(id, cfg));
 
     reg_write(base, INT_CLEAR, INT_MASK_ALL);
     reg_write(base, INT_EN, INT_UTX_FIFO | INT_RX);
@@ -213,6 +202,14 @@ ptrdiff_t uart_hw_write(uint port, const(void)[] data)
 
 UartRxTiming uart_hw_rx_timing(uint port)
     => _ports.timing(port - first_uart);
+
+// The RX threshold and timeout take new values while the UART runs.
+UartRxTiming uart_hw_set_rx_timing(uint port, ref const UartConfig cfg)
+{
+    immutable id = port - first_uart;
+    _ports.retime(id, set_rx_timing(id, cfg));
+    return _ports.timing(id);
+}
 
 ptrdiff_t uart_hw_tx_pending(uint port)
     => _ports.tx_pending(port - first_uart);
@@ -252,6 +249,19 @@ bool tx_idle(uint id)
 {
     immutable base = uart_base[id];
     return (reg_read(base, FIFO_CONFIG_1) & TX_FIFO_CNT_MASK) == FIFO_DEPTH && !(reg_read(base, STATUS) & STS_UTX_BUS_BUSY);
+}
+
+// The FIFO interrupt fires above its threshold, and the RX timeout counts one more than its field.
+UartRxTiming set_rx_timing(uint id, ref const UartConfig cfg)
+{
+    immutable base = uart_base[id];
+    uint rx_chars = uart_rx_chars(cfg);
+    rx_chars = rx_chars < FIFO_DEPTH / 2 ? rx_chars : FIFO_DEPTH / 2;
+    uint gap_bits = uart_rx_gap_bits(cfg);
+    gap_bits = gap_bits < 1 ? 1 : gap_bits > 256 ? 256 : gap_bits;
+    reg_write(base, FIFO_CONFIG_1, (reg_read(base, FIFO_CONFIG_1) & ~RX_FIFO_TH_MASK) | (rx_chars - 1) << RX_FIFO_TH_SHIFT);
+    reg_write(base, URX_RTO_TIMER, gap_bits - 1);
+    return UartRxTiming(uart_chars_us(cfg, rx_chars), uart_gap_tenths(cfg, gap_bits));
 }
 
 uint drain_rx_fifo(uint id)

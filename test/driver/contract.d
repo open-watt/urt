@@ -37,6 +37,9 @@ bool on_rx(Uart, size_t avail, UartCallbackContext)
     return false;
 }
 
+uint chars_in(ref const UartConfig cfg, UartRxTiming timing)
+    => cast(uint)((ulong(timing.latency_us) * cfg.baud_rate + 10_000_000 - 1) / 10_000_000);
+
 Duration timed(alias f)()
 {
     immutable t0 = getTime();
@@ -165,6 +168,67 @@ void uart_contract()
     run_line();
     assert(wire() == big[0 .. accepted] && uart_tx_queued(u) == 0, "a released line sends everything accepted, in order, with no further call");
 
+    ubyte[600] buf;
+    static if (has_rx_timing)
+    {
+        wire_clear();
+        tx_hold(true);
+        uart_write(u, big[0 .. 100]);
+        immutable size_t queued = uart_tx_queued(u);
+        rx_overrun();
+        rx('<');
+        UartConfig slow = cfg;
+        slow.rx_latency_us = 2000;
+        slow.rx_gap = 50;
+        assert(uart_set_rx_timing(u, slow) == uart_rx_timing(u), "a retime reports the timing the port runs with");
+        assert(uart_tx_queued(u) == queued, "and leaves queued TX alone");
+        tx_hold(false);
+        run_line();
+        assert(wire() == big[0 .. 100], "which is sent");
+        line_idle();
+        assert(uart_read(u, buf[]) == 1 && buf[0] == '<', "as is what arrived before the retime");
+        assert(uart_check_errors(u) & UartError.overrun, "and the errors it had not reported");
+        immutable UartRxTiming retimed = uart_rx_timing(u);
+        static if (retimes_latency_live)
+            assert(retimed.latency_us > timing.latency_us, "the new latency runs at once");
+        else
+            assert(retimed.latency_us == timing.latency_us, "or the old one, reported as such, until the port next opens");
+        static if (programs_rx_gap)
+            assert(uart_gap_tenths(slow, rx_gap_bits()) == retimed.gap, "with the gap it reports programmed");
+        static if (has_rx_callback)
+        {
+            immutable uint trigger = chars_in(slow, retimed);
+            rx_calls = 0;
+            foreach (i; 0 .. trigger - 1)
+                rx(cast(ubyte)i);
+            assert(rx_calls == 0, "a burst short of the reported threshold waits");
+            rx(cast(ubyte)(trigger - 1));
+            assert(rx_calls > 0, "and the threshold delivers it");
+            assert(uart_read(u, buf[]) == trigger && buf[trigger - 1] == trigger - 1);
+        }
+
+        assert(uart_set_rx_timing(u, cfg) == timing, "a retime back restores the timing");
+        static if (programs_rx_gap)
+            assert(uart_gap_tenths(cfg, rx_gap_bits()) == timing.gap);
+        static if (has_rx_callback)
+        {
+            immutable uint threshold = chars_in(cfg, timing);
+            rx_calls = 0;
+            foreach (i; 0 .. threshold - 1)
+                rx(cast(ubyte)i);
+            assert(rx_calls == 0);
+            rx(cast(ubyte)(threshold - 1));
+            assert(rx_calls > 0, "and the threshold");
+            assert(uart_read(u, buf[]) == threshold);
+        }
+
+        uart_close(u);
+        assert(uart_open(u, uart_port, slow, 0, cb));
+        assert(uart_rx_timing(u).latency_us > timing.latency_us, "an open applies the latency");
+        uart_close(u);
+        assert(uart_open(u, uart_port, cfg, 0, cb));
+    }
+
     static if (shows_tx_busy)
     {
         wire_clear();
@@ -176,7 +240,6 @@ void uart_contract()
         assert(wire() == "x");
     }
 
-    ubyte[600] buf;
     rx_calls = 0;
     rx('a');
     line_idle();
@@ -186,7 +249,7 @@ void uart_contract()
 
     static if (has_rx_callback)
     {
-        immutable uint burst = cast(uint)((ulong(timing.latency_us) * cfg.baud_rate + 10_000_000 - 1) / 10_000_000);
+        immutable uint burst = chars_in(cfg, timing);
         rx_calls = 0;
         foreach (i; 0 .. burst)
             rx(cast(ubyte)('0' + i));
@@ -236,6 +299,8 @@ void uart_contract()
     uart_close(u);
     assert(!u.is_open && wire() == "bye" && tx_disabled_while_busy() == 0, "a close sends everything written before it stops the transmitter");
     assert(uart_rx_timing(u) == UartRxTiming(), "a closed port reports no RX timing");
+    static if (has_rx_timing)
+        assert(uart_set_rx_timing(u, cfg) == UartRxTiming(), "and takes no retime");
 
     cfg.parity = Parity.even;
     assert(uart_open(u, uart_port, cfg, 0, cb));

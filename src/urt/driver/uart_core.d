@@ -52,6 +52,11 @@ nothrow @nogc:
     void start(uint id, UartRxCallback cb, UartRxTiming timing)
     {
         _port[id].cb = cb;
+        retime(id, timing);
+    }
+
+    void retime(uint id, UartRxTiming timing)
+    {
         _port[id].latency_us = timing.latency_us;
         _port[id].gap = timing.gap;
     }

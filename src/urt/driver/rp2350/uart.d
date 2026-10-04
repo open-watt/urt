@@ -71,9 +71,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
         return false;
     }
     immutable base = uart_base(id);
-    immutable uint level = rx_level(uart_rx_chars(cfg));
-    uart_write_reg(base, uartifls, level << 3 | ifls_tx_eighth);
-    _ports.start(id, rx_cb, UartRxTiming(uart_chars_us(cfg, rx_level_chars[level]), uart_gap_tenths(cfg, rx_timeout_bits)));
+    _ports.start(id, rx_cb, set_rx_level(id, cfg));
     uart_write_reg(base, uarticr, 0x7FF);
     uart_write_reg(base, uartimsc, im_rx | im_rt | im_errors);
     irq_handler_set(uart_irq[id], &uart_isr);
@@ -99,6 +97,13 @@ ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
+
+// UARTIFLS takes a new level while the UART runs; the receive timeout is fixed.
+UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+{
+    _ports.retime(id, set_rx_level(id, cfg));
+    return _ports.timing(id);
+}
 
 ptrdiff_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
@@ -222,6 +227,13 @@ uint divider_x64(uint baud) pure
 {
     immutable ulong d = (ulong(uart_clock_hz) * 8 / baud + 1) / 2;
     return d >= 64 && d <= 0xFFFF * 64 && uart_rate_close(baud, ulong(uart_clock_hz) * 4, d) ? cast(uint)d : 0;
+}
+
+UartRxTiming set_rx_level(uint id, ref const UartConfig cfg)
+{
+    immutable uint level = rx_level(uart_rx_chars(cfg));
+    uart_write_reg(uart_base(id), uartifls, level << 3 | ifls_tx_eighth);
+    return UartRxTiming(uart_chars_us(cfg, rx_level_chars[level]), uart_gap_tenths(cfg, rx_timeout_bits));
 }
 
 uint rx_level(uint chars) pure

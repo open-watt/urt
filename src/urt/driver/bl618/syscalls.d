@@ -30,7 +30,7 @@ extern(C) void* _sbrk(ptrdiff_t incr)
 
 extern(C) int _write(int fd, const void* buf, size_t count)
 {
-    import urt.driver.bl618.uart : uart0_hw_puts;
+    import urt.driver.bl_common.uart : uart0_hw_puts;
     if (fd == 1 || fd == 2)
         uart0_hw_puts((cast(const(char)*) buf)[0 .. count]);
     return cast(int) count;

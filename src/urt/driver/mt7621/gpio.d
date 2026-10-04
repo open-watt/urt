@@ -82,6 +82,7 @@ Result line_irq_open(uint line, GpioInterruptTrigger trigger, ubyte owner)
         return InternalResult.already_exists;
     gpio_input_init(line);
     _owner[line] = owner;
+    ++_generation[line];
     mmio_write(bank(stat, line), bit(line));
     reg_set(redge, line, trigger == GpioInterruptTrigger.rising || trigger == GpioInterruptTrigger.change);
     reg_set(fedge, line, trigger == GpioInterruptTrigger.falling || trigger == GpioInterruptTrigger.change);
@@ -149,6 +150,7 @@ static immutable Group[12] groups = [
 ];
 
 __gshared ubyte[num_gpio] _owner = no_owner;
+__gshared ubyte[num_gpio] _generation;
 __gshared bool _irq_hooked;
 
 uint bank(uint reg, uint pin)
@@ -177,30 +179,47 @@ void claim(uint pin)
     }
 }
 
+// An edge belongs to the registration that owned its line when the edge was taken, not to one opened since.
 void gpio_irq_handler(uint)
 {
+    import urt.internal.bitop : bsf;
+
     foreach (b; 0 .. (num_gpio + 31) / 32)
     {
-        uint pending = mmio_read(gpio_base + stat + b * 4);
-        mmio_write(gpio_base + stat + b * 4, pending);
+        uint pending;
+        ubyte[32] owner = void, generation = void;
+        {
+            auto guard = irq_critical();
+            pending = mmio_read(gpio_base + stat + b * 4);
+            mmio_write(gpio_base + stat + b * 4, pending);
+            if (b == num_gpio / 32)
+                pending &= (1u << num_gpio % 32) - 1;
+            for (uint p = pending; p; p &= p - 1)
+            {
+                owner[bsf(p)] = _owner[b * 32 + bsf(p)];
+                generation[bsf(p)] = _generation[b * 32 + bsf(p)];
+            }
+        }
         while (pending)
         {
-            import urt.internal.bitop : bsf;
-            immutable line = b * 32 + bsf(pending);
+            immutable i = bsf(pending);
             pending &= pending - 1;
-            if (line >= num_gpio)
-                continue;
-            immutable owner = _owner[line];
-            if (owner == no_owner)
-                continue;
-            if (owner & link_owner)
-            {
-                import urt.driver.mt7621.event : link_fire;
-                link_fire(owner & ~link_owner);
-            }
-            else
-                gpio_interrupt_dispatch(owner);
+            dispatch(b * 32 + i, owner[i], generation[i]);
         }
     }
 }
 
+// held through the call, so a nested interrupt cannot replace the registration between the check and the call
+void dispatch(uint line, ubyte owner, ubyte generation)
+{
+    auto guard = irq_critical();
+    if (owner == no_owner || _owner[line] != owner || _generation[line] != generation)
+        return;
+    if (owner & link_owner)
+    {
+        import urt.driver.mt7621.event : link_fire;
+        link_fire(owner & ~link_owner);
+    }
+    else
+        gpio_interrupt_dispatch(owner);
+}

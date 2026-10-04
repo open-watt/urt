@@ -1,10 +1,10 @@
 /// BL808 newlib syscall stubs and POSIX networking stubs
 ///
-/// _write routes stdout/stderr to UART0.
+/// _write routes stdout/stderr to the console UART.
 /// Network stubs return -1 until replaced by XRAM WiFi IPC.
 module urt.driver.bl808.syscalls;
 
-import urt.driver.bl808.uart;
+import urt.driver.bl_common.uart : uart0_hw_puts;
 
 private:
 

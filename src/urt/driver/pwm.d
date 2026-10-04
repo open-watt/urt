@@ -11,14 +11,14 @@ version (Espressif)
     public import urt.driver.esp32.pwm;
 else version (RP2350)
     public import urt.driver.rp2350.pwm;
+else version (STM32)
+    public import urt.driver.stm32.pwm;
+else version (BL808)
+    public import urt.driver.bl_common.pwm;
 else
     enum uint num_hw_pwm = 0;
 
-// Bouffalo's system tick holds the periodic timer
-version (Bouffalo)
-    enum bool has_soft_pwm = false;
-else
-    enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;
+enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;
 
 static if (has_soft_pwm)
     import urt.driver.soft_pwm;

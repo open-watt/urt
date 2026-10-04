@@ -7,7 +7,7 @@
 module urt.driver.rp2350.ws2812;
 
 import urt.driver.gpio : GpioLine;
-import urt.driver.rp2350 : clk_sys_hz, gpio_route, mmio_read, mmio_write, reset_io_bank0, reset_pads_bank0, reset_pio0, unreset_wait;
+import urt.driver.rp2350 : clk_sys_hz, gpio_route, mmio_read, mmio_write, reset_io_bank0, reset_pads_bank0, reset_pio0, reset_pulse, unreset_wait;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
@@ -21,7 +21,8 @@ Result ws2812_hw_open(uint chain, GpioLine line)
         return InternalResult.unsupported;
     if (!_loaded)
     {
-        unreset_wait(reset_pio0 | reset_io_bank0 | reset_pads_bank0);
+        unreset_wait(reset_io_bank0 | reset_pads_bank0);
+        reset_pulse(reset_pio0);
         foreach (i, word; program)
             mmio_write(pio0_base + instr_mem + i * 4, word);
         _loaded = true;
@@ -42,25 +43,24 @@ Result ws2812_hw_open(uint chain, GpioLine line)
     return Result.success;
 }
 
-void ws2812_hw_send(uint chain, const(uint)[] grb)
+bool ws2812_hw_send(uint chain, const(uint)[] grb)
 {
     foreach (pixel; grb)
     {
-        while (mmio_read(pio0_base + fstat) & 1u << (16 + chain))
-        {}
+        if (!wait(fstat, 1u << (16 + chain), false))
+            return false;
         mmio_write(pio0_base + txf + chain * 4, pixel << 8);
     }
+    return true;
 }
 
 // A send only queues words. Once the FIFO is empty the state machine holds the last word; TXSTALL is raised
 // while it sits stalled for want of another, so cleared then it returns only when the last bit has left.
 void ws2812_hw_close(uint chain)
 {
-    while (!(mmio_read(pio0_base + fstat) & 1u << (24 + chain)))
-    {}
+    wait(fstat, 1u << (24 + chain), true);
     mmio_write(pio0_base + fdebug, 1u << (24 + chain));
-    while (!(mmio_read(pio0_base + fdebug) & 1u << (24 + chain)))
-    {}
+    wait(fdebug, 1u << (24 + chain), true);
     mmio_write(pio0_base + ctrl, mmio_read(pio0_base + ctrl) & ~(1u << chain));
     gpio_route(_lines[chain], funcsel_null, false);
 }
@@ -96,6 +96,19 @@ enum uint clock_div = cast(uint)(ulong(clk_sys_hz) * 256 / 8_000_000) << 8;
 
 __gshared bool _loaded;
 __gshared ubyte[num_ws2812] _lines;
+
+// A stalled state machine must not hang the main loop; a chain's longest frame is well inside this.
+bool wait(uint reg, uint bit, bool set)
+{
+    import urt.time : getTime, msecs;
+    immutable deadline = getTime() + 2.msecs;
+    while (((mmio_read(pio0_base + reg) & bit) != 0) != set)
+    {
+        if (getTime() > deadline)
+            return false;
+    }
+    return true;
+}
 
 ulong sm(uint chain, uint reg)
     => pio0_base + reg + chain * sm_stride;

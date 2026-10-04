@@ -5,6 +5,7 @@ public import urt.driver.stm32.irq;
 public import urt.driver.stm32.timer;
 
 import urt.attribute : persist, used;
+import urt.driver.reset : ResetCause;
 import urt.driver.uart : UartConfig, console_uart;
 
 import core.volatile;
@@ -17,12 +18,14 @@ version (STM32H7)
     enum uint hclk_hz   = 200_000_000;
     enum uint pclk1_hz  = 100_000_000;
     enum uint pclk2_hz  = 100_000_000;
+    enum uint pclk4_hz  = 100_000_000;
 
     enum ulong rcc_base = 0x5802_4400;
     enum uint rcc_ahb2enr = 0xDC;
     enum uint rcc_gpioenr = 0xE0;
     enum uint rcc_apb1enr = 0xE8;
     enum uint rcc_apb2enr = 0xF0;
+    enum uint rcc_apb4enr = 0xF4;
     enum uint rcc_gpiorstr = 0x88;
     enum uint rcc_otgfs_enr = 0xD8;         // AHB1ENR.USB2OTGFSEN
     enum uint rcc_otgfs_bit = 27;
@@ -61,8 +64,9 @@ else
     }
 }
 
-// Timers on APB1 run at twice PCLK1 whenever the APB1 prescaler divides.
+// Timers run at twice their APB clock whenever that bus's prescaler divides, as both do here.
 enum uint apb1_timer_hz = pclk1_hz * 2;
+enum uint apb2_timer_hz = pclk2_hz * 2;
 
 uint reg_read(ulong addr) => volatileLoad(cast(uint*)addr);
 void reg_write(ulong addr, uint value) { volatileStore(cast(uint*)addr, value); }
@@ -76,6 +80,32 @@ void clock_enable(uint enr, uint bit)
 {
     reg_set(rcc_base + enr, 1u << bit);
     reg_read(rcc_base + enr);
+}
+
+// Latched once at boot and cleared, so a run that dies early cannot leave its flags for the next to misread.
+ResetCause rcc_reset_cause()
+    => _reset_cause;
+
+// Every reset source drives NRST, so the pin flag alone is the reset line itself.
+ResetCause latch_reset_cause()
+{
+    version (STM32H7)
+    {
+        enum uint rsr = 0xD0, rmvf = 1 << 16, bor = 1 << 21, pin = 1 << 22, por = 1 << 23, sft = 1 << 24, iwdg = 1 << 26, wwdg = 1 << 28;
+    }
+    else
+    {
+        enum uint rsr = 0x74, rmvf = 1 << 24, bor = 1 << 25, pin = 1 << 26, por = 1 << 27, sft = 1 << 28, iwdg = 1 << 29, wwdg = 1 << 30;
+    }
+    immutable uint flags = reg_read(rcc_base + rsr);
+    reg_set(rcc_base + rsr, rmvf);
+    if (flags & (iwdg | wwdg))
+        return ResetCause.watchdog;
+    if (flags & (por | bor))
+        return ResetCause.power;
+    if (flags & sft)
+        return ResetCause.software;
+    return flags & pin ? ResetCause.pin : ResetCause.unknown;
 }
 
 // Flash size in KB as the factory programmed it; the part number can undersell it.
@@ -114,6 +144,7 @@ extern(C) void sys_early()
 
 extern(C) void sys_init()
 {
+    _reset_cause = latch_reset_cause();
     bool on_hse = clocks_init();
     version (STM32F4) {} else
         caches_enable();
@@ -129,7 +160,10 @@ extern(C) void sys_init()
 }
 
 
+
 private:
+
+__gshared ResetCause _reset_cause;
 
 enum uint bootloader_magic = 0xB007_10AD;
 @persist @used __gshared uint _bootloader_request;

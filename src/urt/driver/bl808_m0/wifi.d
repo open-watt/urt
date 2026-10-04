@@ -51,10 +51,16 @@ void wifi_hw_set_ready_callback(WifiReadyCallback cb)
     urt.driver.bl808_m0.bl_ops.wifi_set_ready_callback(cb);
 }
 
+private bool failed(const(char)[] step)
+{
+    import urt.log : writeError;
+    writeError("wifi: ", step, " failed");
+    return false;
+}
+
 bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 {
     import urt.driver.bl808_m0.bl_ops : bl_ops_task_create;
-    import urt.driver.uart : uart0_puts;
     import urt.driver.irq : irq_handler_set, irq_line_enable;
     import urt.driver.bl618.timer : mtime_read;
 
@@ -79,17 +85,11 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
     install_msg_hdlrs();
 
     if (bl_shim_ipc_init(&_bl_hw, &ipc_shared_env) != 0)
-    {
-        uart0_puts("wifi: ipc_init FAILED\n");
-        return false;
-    }
+        return failed("ipc_init");
     ipc_emb2app_ack_clear(0xFFFFFFFF);
 
     if (bl_irqs_init(&_bl_hw) != 0)
-    {
-        uart0_puts("wifi: irqs_init FAILED\n");
-        return false;
-    }
+        return failed("irqs_init");
 
     {
         auto reg = cast(uint*)cast(size_t)0x200003B0;
@@ -118,10 +118,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 
     void* fw_handle;
     if (bl_ops_task_create("fw".ptr, cast(void*)&wifi_main, 1536, null, 30, fw_handle) != 0)
-    {
-        uart0_puts("wifi: spawn wifi_main FAILED\n");
-        return false;
-    }
+        return failed("spawn wifi_main");
 
     {
         import urt.driver.bl808_m0.bl_ops : wifi_fibre_pump, wifi_main_in_main_loop;
@@ -132,10 +129,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
             ++pumps;
         }
         if (!wifi_main_in_main_loop)
-        {
-            uart0_puts("wifi: wifi_main never reached event loop\n");
-            return false;
-        }
+            return failed("wifi_main start");
     }
 
     _bl_hw.mod_params = &bl_mod_params;
@@ -143,10 +137,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
     _bl_hw.vifs.prev = &_bl_hw.vifs;
 
     if (bl_send_reset(&_bl_hw) != 0)
-    {
-        uart0_puts("wifi: bl_send_reset FAILED\n");
-        return false;
-    }
+        return failed("bl_send_reset");
 
     {
         import urt.driver.bl808_m0.bl_ops : wifi_fibre_pump;
@@ -158,36 +149,21 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 
     ubyte[128] version_cfm = 0;
     if (bl_send_version_req(&_bl_hw, version_cfm.ptr) != 0)
-    {
-        uart0_puts("wifi: bl_send_version_req FAILED\n");
-        return false;
-    }
+        return failed("bl_send_version_req");
 
     if (bl_handle_dynparams(&_bl_hw) != 0)
-    {
-        uart0_puts("wifi: bl_handle_dynparams FAILED\n");
-        return false;
-    }
+        return failed("bl_handle_dynparams");
 
     if (bl_send_me_config_req(&_bl_hw) != 0)
-    {
-        uart0_puts("wifi: bl_send_me_config_req FAILED\n");
-        return false;
-    }
+        return failed("bl_send_me_config_req");
 
     bl_msg_update_channel_cfg("CN".ptr);
 
     if (bl_send_me_chan_config_req(&_bl_hw) != 0)
-    {
-        uart0_puts("wifi: bl_send_me_chan_config_req FAILED\n");
-        return false;
-    }
+        return failed("bl_send_me_chan_config_req");
 
     if (bl_send_start(&_bl_hw) != 0)
-    {
-        uart0_puts("wifi: bl_send_start FAILED\n");
-        return false;
-    }
+        return failed("bl_send_start");
 
     _bl_hw.is_up = 1;
     return true;

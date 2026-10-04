@@ -109,7 +109,7 @@ struct bl_ops_funcs_t
 }
 
 
-import urt.driver.bl618.uart : uart0_hw_puts;
+import urt.driver.bl_common.uart : uart0_hw_puts;
 
 void bl_ops_printf(const(char)* fmt, ...)
 {

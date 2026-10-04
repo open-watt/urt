@@ -831,7 +831,7 @@ ifeq ($(COMPILER),ldc)
       ifeq ($(PLATFORM),bl808)
         ifeq ($(PROCESSOR),c906)
           BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808
-          BAREMETAL_SRCS := start.S hbn_ram.c
+          BAREMETAL_SRCS := start.S
         else ifeq ($(PROCESSOR),e907)
           BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808_m0
           BAREMETAL_SRCS := start.S

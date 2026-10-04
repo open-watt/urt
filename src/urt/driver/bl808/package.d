@@ -4,7 +4,7 @@
 /// urt.driver.bl_common.system and is shared with M0 / BL618.
 module urt.driver.bl808;
 
-public import urt.driver.bl808.uart;
+public import urt.driver.bl_common.uart;
 public import urt.driver.bl808.irq;
 public import urt.driver.bl808.timer;
 public import urt.driver.bl808.xram;

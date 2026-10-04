@@ -2,9 +2,10 @@
 // only the interrupt tier exists: GPIO edges dispatch through the GPIO block's GIC line.
 module urt.driver.mt7621.event;
 
-import urt.atomic : MemoryOrder, atomicLoad, atomicStore;
 import urt.driver.event;
-import urt.driver.gpio : GpioInterruptTrigger, gpio_output_set;
+import urt.driver.event_core : EventLinks, gpio_link_check, gpio_link_trigger;
+import urt.driver.gpio : gpio_output_set;
+import urt.driver.irq : irq_critical;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
@@ -20,68 +21,36 @@ Result link_hw_open(uint slot, EventSource event, Task task, LinkTier minimum, o
     import urt.driver.mt7621.gpio : line_irq_open, link_owner, num_gpio;
 
     hardware = false;
-    if (minimum > LinkTier.interrupt || event.chip != 0 || task.chip != 0 || task.kind == TaskKind.counter_reload)
-        return InternalResult.unsupported;
-    if (atomicLoad!(MemoryOrder.acquire)(_slots[slot].active))
-        return InternalResult.already_exists;
-
-    GpioInterruptTrigger trigger;
-    switch (event.kind)
-    {
-        case EventKind.gpio_rising:  trigger = GpioInterruptTrigger.rising;  break;
-        case EventKind.gpio_falling: trigger = GpioInterruptTrigger.falling; break;
-        case EventKind.gpio_change:  trigger = GpioInterruptTrigger.change;  break;
-        default:
-            return InternalResult.unsupported;
-    }
-    if (event.index >= num_gpio || ((task.kind == TaskKind.gpio_set || task.kind == TaskKind.gpio_clear) && task.index >= num_gpio))
-        return InternalResult.invalid_parameter;
-
-    _slots[slot].event = event;
-    _slots[slot].task = task;
-    atomicStore!(MemoryOrder.release)(_slots[slot].active, true);
-    Result result = line_irq_open(event.index, trigger, cast(ubyte)(link_owner | slot));
+    Result result = gpio_link_check(event, task, minimum, num_gpio);
     if (!result)
-        atomicStore!(MemoryOrder.release)(_slots[slot].active, false);
+        return result;
+
+    // a callback may open or close a link from the ISR
+    auto guard = irq_critical();
+    if (_links.active(slot))
+        return InternalResult.already_exists;
+    result = line_irq_open(event.index, gpio_link_trigger(event.kind), cast(ubyte)(link_owner | slot));
+    if (result)
+        _links.claim(slot, event, task);
     return result;
 }
 
 void link_hw_close(uint slot)
 {
     import urt.driver.mt7621.gpio : line_irq_close;
-    if (!atomicLoad!(MemoryOrder.acquire)(_slots[slot].active))
+
+    auto guard = irq_critical();
+    if (!_links.active(slot))
         return;
-    line_irq_close(_slots[slot].event.index);
-    atomicStore!(MemoryOrder.release)(_slots[slot].active, false);
+    line_irq_close(_links.pin(slot));
+    _links.release(slot);
 }
 
+// The GPIO ISR calls this only while the registration that took the edge still owns its line.
 bool link_fire(uint slot)
-{
-    if (slot >= num_links || !atomicLoad!(MemoryOrder.acquire)(_slots[slot].active))
-        return false;
-    ref task = _slots[slot].task;
-    switch (task.kind)
-    {
-        case TaskKind.isr:
-            return task.callback(task.context, LinkContext.interrupt);
-        case TaskKind.gpio_set:
-        case TaskKind.gpio_clear:
-            gpio_output_set(task.index, task.kind == TaskKind.gpio_set);
-            return false;
-        default:
-            return false;
-    }
-}
+    => _links.fire(_links.owner(cast(ubyte)slot));
 
 
 private:
 
-struct LinkSlot
-{
-    EventSource event;
-    Task task;
-    shared bool active;
-}
-
-__gshared LinkSlot[num_links] _slots;
-
+__gshared EventLinks!(num_links, gpio_output_set) _links;

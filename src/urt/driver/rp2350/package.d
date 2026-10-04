@@ -16,11 +16,14 @@ enum ulong pll_sys_base     = 0x40050000;
 enum ulong io_bank0_base    = 0x40028000;
 enum ulong pads_bank0_base  = 0x40038000;
 enum ulong ticks_base       = 0x40108000;
+enum ulong watchdog_base    = 0x400D8000;
+enum ulong psm_base         = 0x40018000;
 
 enum uint xosc_hz     = 12_000_000;
 enum uint clk_sys_hz  = 150_000_000;
 enum uint clk_peri_hz = clk_sys_hz;
 
+enum ulong reg_alias_set    = 0x00002000;
 enum ulong reg_alias_clr    = 0x00003000;
 
 enum ulong resets_reset     = 0x00;
@@ -42,6 +45,17 @@ void unreset_wait(uint bits)
     {}
 }
 
+// A block held in reset must not be touched; its registers may stall the bus.
+bool out_of_reset(uint bits)
+    => (mmio_read(resets_base + resets_done) & bits) == bits;
+
+// Puts a block through reset, so it starts from its reset state whatever a warm reset left behind.
+void reset_pulse(uint bits)
+{
+    mmio_write(resets_base + resets_reset + reg_alias_set, bits);
+    unreset_wait(bits);
+}
+
 void mmio_write(ulong addr, uint val)
 {
     volatileStore(cast(uint*)addr, val);
@@ -50,6 +64,15 @@ void mmio_write(ulong addr, uint val)
 uint mmio_read(ulong addr)
 {
     return volatileLoad(cast(uint*)addr);
+}
+
+// An edge is seen only through an enabled, unisolated pad; this leaves the pin's function and pulls alone.
+void pad_input_enable(uint gpio)
+{
+    enum uint pad_ie  = 1 << 6;
+    enum uint pad_iso = 1 << 8;
+    immutable ulong pad = pads_bank0_base + 0x04 + gpio * 4;
+    mmio_write(pad, (mmio_read(pad) & ~pad_iso) | pad_ie);
 }
 
 void gpio_route(uint gpio, uint funcsel, bool input)
@@ -71,6 +94,9 @@ void gpio_route(uint gpio, uint funcsel, bool input)
 
 extern(C) void sys_init()
 {
+    import urt.driver.rp2350.watchdog : watchdog_latch_cause;
+
+    watchdog_latch_cause();
     clocks_init();
     uart_hw_init(console_uart, UartConfig.init);
     uart0_hw_puts("RP2350: sys_init\r\n");
@@ -80,6 +106,13 @@ extern(C) void sys_init()
     mtime_init();
 
     uart0_hw_puts("RP2350: ready\r\n");
+}
+
+// A watchdog reset normally spares most of the chip; select every block but the oscillators.
+void watchdog_reset_all()
+{
+    enum uint wdsel_all = 0x01FF_FFFF, wdsel_rosc = 1 << 2, wdsel_xosc = 1 << 3;
+    mmio_write(psm_base + 0x08, wdsel_all & ~(wdsel_rosc | wdsel_xosc));
 }
 
 private:

@@ -15,6 +15,15 @@ enum ResetMark : ubyte
     updated,        // the record was left by another build: a firmware update
 }
 
+enum ResetCause : ubyte
+{
+    unknown,        // the hardware keeps no cause, or none it reports
+    power,          // power-on or brownout
+    pin,            // the reset line alone
+    software,
+    watchdog,
+}
+
 enum bool has_reset_record = has_persist;
 
 // Runs before anything reads @persist: another build's record reads `updated`, its floating @persist is zeroed.
@@ -77,16 +86,24 @@ version (RP2350)        enum bool has_system_reset = true;
 else version (STM32)    enum bool has_system_reset = true;
 else version (Beken)    enum bool has_system_reset = true;
 else version (MT7621)   enum bool has_system_reset = true;
+else version (BL808)    enum bool has_system_reset = true;
 else                    enum bool has_system_reset = false;
 
-version (RP2350) version = CortexM;
-else version (STM32) version = CortexM;
+version (STM32) version = CortexM;
 
 noreturn system_reset()
 {
     import core.volatile : volatileLoad, volatileStore;
 
-    version (CortexM)
+    version (RP2350)
+    {
+        // A core reset leaves the peripherals configured, so the watchdog resets the chip as the ROM's reboot()
+        // does, without the parameters it leaves in SCRATCH2-3.
+        import urt.driver.rp2350 : mmio_write, watchdog_base, watchdog_reset_all;
+        watchdog_reset_all();
+        mmio_write(watchdog_base, 1u << 31);
+    }
+    else version (CortexM)
     {
         asm @nogc nothrow { "dsb sy" ::: "memory"; }
         volatileStore(cast(uint*)0xE000ED0C, 0x05FA_0004);    // AIRCR SYSRESETREQ
@@ -112,9 +129,42 @@ noreturn system_reset()
         import urt.driver.mt7621 : mmio_write, sysctl_base, sysc_rstctrl;
         mmio_write(sysctl_base + sysc_rstctrl, 1);
     }
+    else version (BL808)
+    {
+        import urt.driver.bl_common.reset : por_reset;
+        por_reset(false);
+    }
 
     for (;;)
     {}
+}
+
+// Where the hardware cannot name a watchdog reset, a reset the record never saw coming is most likely one.
+version (STM32)       enum bool has_watchdog_cause = true;
+else version (RP2350) enum bool has_watchdog_cause = true;
+else version (MT7621) enum bool has_watchdog_cause = true;
+else                  enum bool has_watchdog_cause = false;
+
+// Read once: the hardware latches its cause across later resets until it is cleared.
+ResetCause reset_cause()
+{
+    version (STM32)
+    {
+        import urt.driver.stm32 : rcc_reset_cause;
+        return rcc_reset_cause();
+    }
+    else version (MT7621)
+    {
+        import urt.driver.mt7621.watchdog : reset_by_watchdog;
+        return reset_by_watchdog() ? ResetCause.watchdog : ResetCause.unknown;
+    }
+    else version (RP2350)
+    {
+        import urt.driver.rp2350.watchdog : watchdog_reset_cause;
+        return watchdog_reset_cause();
+    }
+    else // BL808: HBN and PDS RESET_EVENT read alike for every reset, and the watchdog's WTS dies with its own reset
+        return ResetCause.unknown;
 }
 
 // Two bytes that ride with the record, zeroed when retained memory was lost or another build took over.
@@ -220,11 +270,9 @@ static if (has_reset_record)
 
     version (Bouffalo)
     {
-        // The BL808 cores share HBN RAM and hbn.d keys its struct to the start of .hbn_ram by
-        // link order, so the record takes a fixed slot at the top instead: one per core.
-        enum size_t hbn_top = 0x2001_1000;
-        version (BL808_M0) enum size_t record_address = hbn_top - 2 * ResetRecord.sizeof;
-        else               enum size_t record_address = hbn_top - ResetRecord.sizeof;
+        // a fixed slot at the top of the core's half of HBN RAM, where every build finds it
+        version (BL808_M0) enum size_t record_address = 0x2001_0800 - ResetRecord.sizeof;
+        else               enum size_t record_address = 0x2001_1000 - ResetRecord.sizeof;
         ResetRecord* record() => cast(ResetRecord*)record_address;
     }
     else version (Espressif)

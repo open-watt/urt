@@ -14,11 +14,7 @@ else version (RP2350)
 else
     enum uint num_hw_pwm = 0;
 
-// Bouffalo's system tick holds the periodic timer
-version (Bouffalo)
-    enum bool has_soft_pwm = false;
-else
-    enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;
+enum bool has_soft_pwm = has_timer_compare && num_gpio > 0;
 
 static if (has_soft_pwm)
     import urt.driver.soft_pwm;

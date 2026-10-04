@@ -8,7 +8,7 @@
  * in driver/bl808_m0/start.d, and with partition.toml D0FW size):
  *   PSRAM:   0x50100000, 60MB  (D0 firmware image + .data + .bss + heap, contiguous)
  *   SRAM:    0x3eff8000, 64KB  (.got + .sram_data fast globals + .tdata/.tbss + stack)
- *   HBNRAM:  0x20010000, 4KB   (survives hibernate if VBAT maintained)
+ *   HBNRAM:  0x20010800, 2KB   (D0's half of HBN RAM, less its record; survives hibernate if VBAT maintained)
  *
  * @fast_data globals land in SRAM (fast on-chip, single-cycle); everything
  * else lives in PSRAM.
@@ -38,7 +38,7 @@ MEMORY
 {
     PSRAM  (rwx) : ORIGIN = 0x50100000, LENGTH = 60M
     SRAM   (rwx) : ORIGIN = 0x3eff8000, LENGTH = 64K
-    HBNRAM (rw)  : ORIGIN = 0x20010000, LENGTH = 4K
+    HBNRAM (rw)  : ORIGIN = 0x20010800, LENGTH = 0x7F0
 }
 
 SECTIONS

@@ -5,6 +5,7 @@ public import urt.driver.stm32.irq;
 public import urt.driver.stm32.timer;
 
 import urt.attribute : persist, used;
+import urt.driver.reset : ResetCause;
 import urt.driver.uart : UartConfig, console_uart;
 
 import core.volatile;
@@ -80,6 +81,32 @@ void clock_enable(uint enr, uint bit)
     reg_read(rcc_base + enr);
 }
 
+// Latched once at boot and cleared, so a run that dies early cannot leave its flags for the next to misread.
+ResetCause rcc_reset_cause()
+    => _reset_cause;
+
+// Every reset source drives NRST, so the pin flag alone is the reset line itself.
+ResetCause latch_reset_cause()
+{
+    version (STM32H7)
+    {
+        enum uint rsr = 0xD0, rmvf = 1 << 16, bor = 1 << 21, pin = 1 << 22, por = 1 << 23, sft = 1 << 24, iwdg = 1 << 26, wwdg = 1 << 28;
+    }
+    else
+    {
+        enum uint rsr = 0x74, rmvf = 1 << 24, bor = 1 << 25, pin = 1 << 26, por = 1 << 27, sft = 1 << 28, iwdg = 1 << 29, wwdg = 1 << 30;
+    }
+    immutable uint flags = reg_read(rcc_base + rsr);
+    reg_set(rcc_base + rsr, rmvf);
+    if (flags & (iwdg | wwdg))
+        return ResetCause.watchdog;
+    if (flags & (por | bor))
+        return ResetCause.power;
+    if (flags & sft)
+        return ResetCause.software;
+    return flags & pin ? ResetCause.pin : ResetCause.unknown;
+}
+
 // Flash size in KB as the factory programmed it; the part number can undersell it.
 uint flash_size_kb() => volatileLoad(cast(ushort*)flash_size_reg);
 
@@ -116,6 +143,7 @@ extern(C) void sys_early()
 
 extern(C) void sys_init()
 {
+    _reset_cause = latch_reset_cause();
     bool on_hse = clocks_init();
     version (STM32F4) {} else
         caches_enable();
@@ -131,7 +159,10 @@ extern(C) void sys_init()
 }
 
 
+
 private:
+
+__gshared ResetCause _reset_cause;
 
 enum uint bootloader_magic = 0xB007_10AD;
 @persist @used __gshared uint _bootloader_request;

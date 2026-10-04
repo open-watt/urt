@@ -59,6 +59,14 @@ void gpio_release(uint pin)
     set_field(base + pupdr, pin, 2, Pull.none);
 }
 
+// An analog pin (the H7's reset mode) feeds EXTI nothing; any other mode, and the pull, stay as the owner set them.
+void gpio_input_if_analog(uint pin)
+{
+    immutable base = port_open(pin);
+    if ((reg_read(base + moder) >> (pin & 15) * 2 & 3) == mode_analog)
+        set_field(base + moder, pin, 2, mode_input);
+}
+
 // function_id is the alternate function number, AF0..AF15.
 void gpio_set_function(uint pin, uint function_id, Pull pull = Pull.none, DriveMode mode = DriveMode.push_pull)
 {

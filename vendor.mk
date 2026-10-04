@@ -26,9 +26,9 @@ ifeq ($(PLATFORM),bl808)
   BL_WIFI_LIBS := $(BL_WIFI_DIR)/lib/libwifi.a $(BL_WIFI_DIR)/lib/libbl606p_phyrf.a
   DFLAGS := $(DFLAGS) $(addprefix -L,$(BL_WIFI_LIBS))
 
-  BL_PSRAM_DIR  := $(URT_ROOT)platforms/bl808_m0/vendor/psram
-  BL_PSRAM_INC  := $(BL_PSRAM_DIR)/include
-  BL_PSRAM_SRCS := $(wildcard $(BL_PSRAM_DIR)/src/*.c)
+  BL_STD_DIR  := $(URT_ROOT)platforms/bl808_m0/vendor/bl808_std
+  BL_STD_INC  := $(BL_STD_DIR)/include
+  BL_STD_SRCS := $(wildcard $(BL_STD_DIR)/src/*.c)
 endif
 
 endif
@@ -54,10 +54,10 @@ ifdef BL_WIFI_DIR
       -fcommon -fshort-enums
 endif
 
-ifdef BL_PSRAM_DIR
-  BL_PSRAM_OBJS    = $(patsubst $(BL_PSRAM_DIR)/src/%.c,$(OBJDIR)/bl_psram/%.o,$(BL_PSRAM_SRCS))
-  BL_PSRAM_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
-      -I$(BL_PSRAM_INC) -DBL808 -DARCH_RISCV -fcommon
+ifdef BL_STD_DIR
+  BL_STD_OBJS    = $(patsubst $(BL_STD_DIR)/src/%.c,$(OBJDIR)/bl_std/%.o,$(BL_STD_SRCS))
+  BL_STD_CFLAGS := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Os \
+      -I$(BL_STD_INC) -DBL808 -DARCH_RISCV -fcommon
 endif
 
 ifdef MBEDTLS_LIB
@@ -81,10 +81,10 @@ $(OBJDIR)/bl_wifi/%.o: $(BL_WIFI_DIR)/src/%.c
 	$(BAREMETAL_GCC) $(BL_WIFI_CFLAGS) -c -o $@ $<
 endif
 
-ifdef BL_PSRAM_DIR
-$(OBJDIR)/bl_psram/%.o: $(BL_PSRAM_DIR)/src/%.c
-	@mkdir -p $(OBJDIR)/bl_psram
-	$(BAREMETAL_GCC) $(BL_PSRAM_CFLAGS) -c -o $@ $<
+ifdef BL_STD_DIR
+$(OBJDIR)/bl_std/%.o: $(BL_STD_DIR)/src/%.c
+	@mkdir -p $(OBJDIR)/bl_std
+	$(BAREMETAL_GCC) $(BL_STD_CFLAGS) -c -o $@ $<
 endif
 
 ifdef MBEDTLS_LIB
@@ -94,4 +94,4 @@ $(OBJDIR)/mbedtls/%.o: $(dir $(MBEDTLS_SHIM_SRC))%.c
 endif
 
 # Single aggregate for consumers to link; the per-blob lists above are private.
-VENDOR_OBJS = $(TLSF_OBJS) $(BL_WIFI_OBJS) $(BL_PSRAM_OBJS) $(MBEDTLS_OBJS)
+VENDOR_OBJS = $(TLSF_OBJS) $(BL_WIFI_OBJS) $(BL_STD_OBJS) $(MBEDTLS_OBJS)

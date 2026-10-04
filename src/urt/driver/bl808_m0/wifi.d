@@ -62,7 +62,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 {
     import urt.driver.bl808_m0.bl_ops : bl_ops_task_create;
     import urt.driver.irq : irq_handler_set, irq_line_enable;
-    import urt.driver.bl618.timer : mtime_read;
+    import urt.driver.bl618.timer : mtime_freq_hz, mtime_read;
 
     if (port != 0)
         return false;
@@ -77,7 +77,7 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
         uint pll0_pre = *cast(uint*)cast(size_t)GLB_WIFI_PLL_CFG0;
         *cast(uint*)cast(size_t)GLB_WIFI_PLL_CFG0 = pll0_pre | PU_WIFIPLL_POSTDIV;
         ulong start = mtime_read();
-        while (mtime_read() - start < 100) {}
+        while (mtime_read() - start < 100 * (mtime_freq_hz / 1_000_000)) {}
     }
 
     bl_wifi_register_wpa_cb_internal(&_wpa_stub_table);
@@ -141,9 +141,9 @@ bool wifi_hw_open(ubyte port, ref const WifiConfig cfg)
 
     {
         import urt.driver.bl808_m0.bl_ops : wifi_fibre_pump;
-        import urt.driver.bl618.timer : mtime_read;
+        import urt.driver.bl618.timer : mtime_freq_hz, mtime_read;
         ulong start = mtime_read();
-        while (mtime_read() - start < 5_000)
+        while (mtime_read() - start < 5_000 * (mtime_freq_hz / 1_000_000))
             wifi_fibre_pump();
     }
 

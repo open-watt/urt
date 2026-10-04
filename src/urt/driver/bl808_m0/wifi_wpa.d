@@ -79,8 +79,8 @@ bool ap_auth_has_pmk()
 
 void ap_auth_tick()
 {
-    import urt.driver.bl618.timer : mtime_read;
-    _ap_auth.tick(mtime_read());
+    import urt.driver.bl618.timer : mtime_freq_hz, mtime_read;
+    _ap_auth.tick(mtime_read() / (mtime_freq_hz / 1_000_000));
 }
 
 // Compute the PMK + GTK and bind the driver hooks for a secured BSS. Called at

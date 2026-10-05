@@ -515,7 +515,7 @@ bool wifi_hw_tx(ubyte port, WifiVif vif, const(ubyte)[] data)
     host.eth_src_addr.array_[] = data[6 .. 12];
     host.ethertype = cast(ushort)(cast(ushort)data[12] | (cast(ushort)data[13] << 8));
     host.tid = 0;
-    host.vif_idx = cast(ubyte)(vif == WifiVif.sta ? 1 : 0);
+    host.vif_idx = cast(ubyte)fw_vif;
     int fw_staid = vif == WifiVif.sta
         ? (_bl_hw.sta_idx >= 0 ? _bl_hw.sta_idx : cast(int)_sta_ap_idx)
         : bl_utils_idx_lookup(&_bl_hw, cast(ubyte*)data.ptr);
@@ -1298,6 +1298,7 @@ private bool ensure_vif_sta()
     _bl_hw.vif_index_sta = cfm.inst_nbr;
     _bl_hw.vif_table[cfm.inst_nbr].dev = &_wifi_dummy_netif;
     _bl_hw.vif_table[cfm.inst_nbr].up = true;
+    queue_event(WifiEvent.sta_started, null);
     return true;
 }
 
@@ -1307,6 +1308,7 @@ private bool tear_down_vif_sta()
         return true;
     bl_send_remove_if(&_bl_hw, cast(ubyte)_bl_hw.vif_index_sta);
     _bl_hw.vif_index_sta = -1;
+    queue_event(WifiEvent.sta_stopped, null);
     return true;
 }
 

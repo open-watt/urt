@@ -88,6 +88,23 @@ nothrow @nogc:
         return true;
     }
 
+    // Single-consumer ONLY: overwrites the queued items that match, where they stand. An item a
+    // producer is still writing is passed over, so this cannot reach one enqueued concurrently.
+    uint replace(scope bool delegate(ref const T) nothrow @nogc match, T replacement)
+    {
+        uint replaced;
+        uint tail = atomicLoad!(MemoryOrder.acquire)(_tail);
+        for (uint pos = _head; pos != tail; ++pos)
+        {
+            Slot* slot = &_slots[pos & mask];
+            if (atomicLoad!(MemoryOrder.acquire)(slot.sequence) != pos + 1 || !match(slot.data))
+                continue;
+            slot.data = replacement;
+            ++replaced;
+        }
+        return replaced;
+    }
+
     // Approximate emptiness check. Safe from the consumer thread only.
     // A `false` return is authoritative ("not empty right now"); a `true`
     // return may race against a producer that's mid-enqueue.
@@ -142,4 +159,12 @@ unittest
     assert(q.dequeue(v) && v == 100);
     assert(q.dequeue(v) && v == 200);
     assert(q.empty);
+
+    // replacement rewrites queued items in place, across the wrap, and leaves the order alone
+    assert(q.enqueue(1) && q.enqueue(2) && q.enqueue(1));
+    assert(q.replace((ref const int x) => x == 1, 7) == 2);
+    assert(q.dequeue(v) && v == 7);
+    assert(q.dequeue(v) && v == 2);
+    assert(q.dequeue(v) && v == 7);
+    assert(q.replace((ref const int x) => true, 0) == 0 && q.empty);
 }

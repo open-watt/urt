@@ -159,6 +159,7 @@ template PagePool(
                 return;
         }
         free_payload(page);
+        page_freed();
     }
 
     bool page_unique(const Page* page)

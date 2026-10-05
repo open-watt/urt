@@ -10,7 +10,7 @@
 #                Auto-detected from `uname` if undefined.
 #   PROCESSOR  - CPU core (e907, c906, lx7, cortex-m33, ...). Usually derived
 #                from PLATFORM; override only for multi-core SoCs (e.g.
-#                PROCESSOR=e907 for the BL808 M0 core).
+#                bl808 and bl808_d0 for the BL808's two cores).
 #   CONFIG     - debug | release | unittest
 #   COMPILER   - dmd | ldc | gdc. Auto-promoted to ldc for cross-compile.
 #   URT_SRCDIR - path to URT's src/ tree. Default `src` (URT in-tree); outer
@@ -66,12 +66,6 @@ endif
 # Sets: BUILDNAME, PROCESSOR (default), OS, vendor version flags,
 #       platform source paths, vendor-specific GCC wrappers (Xtensa).
 # =======================================================================
-
-# Normalize CI-friendly platform aliases before platform detection
-ifeq ($(PLATFORM),bl808_m0)
-    override PLATFORM := bl808
-    PROCESSOR := e907
-endif
 
 ifeq ($(PLATFORM),esp8266)
     # ESP8266 has no FPU!
@@ -141,17 +135,15 @@ else ifeq ($(PLATFORM),esp32-p4x)
     PROCESSOR := esp32p4
     OS = freertos
 else ifeq ($(PLATFORM),bl808)
-    # BL808 multi-core SoC -- default to D0 (C906 RV64GC)
-    # Override with PROCESSOR=e907 for M0 core (E907 RV32IMAFC)
-    PROCESSOR ?= c906
+    # BL808 M0, the T-Head E907 RV32IMAFC that owns the chip; D0 is an optional expansion core
+    BUILDNAME := bl808
+    PROCESSOR := e907
     OS = baremetal
-    ifeq ($(PROCESSOR),c906)
-        BUILDNAME := bl808-d0
-    else ifeq ($(PROCESSOR),e907)
-        BUILDNAME := bl808-m0
-    else
-        $(error "BL808: unsupported PROCESSOR=$(PROCESSOR) (expected c906 or e907)")
-    endif
+else ifeq ($(PLATFORM),bl808_d0)
+    # BL808 D0, the T-Head C906 RV64GC multimedia core, started by M0
+    BUILDNAME := bl808_d0
+    PROCESSOR := c906
+    OS = baremetal
 else ifeq ($(PLATFORM),bl618)
     # Sipeed M0P -- Bouffalo BL618, single-core T-Head E907 RV32IMAFC, 320MHz
     BUILDNAME := bl618
@@ -430,7 +422,7 @@ endif
 ifneq ($(filter esp%,$(PLATFORM)),)
     USE_MBEDTLS ?= 1
 endif
-ifneq ($(filter bl808 bl618,$(PLATFORM)),)
+ifneq ($(filter bl808 bl808_d0 bl618,$(PLATFORM)),)
     USE_MBEDTLS ?= 1
 endif
 
@@ -444,16 +436,17 @@ ifeq ($(filter freertos baremetal,$(OS)),)
 endif
 endif
 
+ifneq ($(filter bl808 bl808_d0,$(PLATFORM)),)
+  URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl_common" "$(URT_SRCDIR)/urt/driver/bl808" -type f -name '*.d')
+endif
 ifeq ($(PLATFORM),bl808)
-  URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl_common" -type f -name '*.d')
-  ifeq ($(PROCESSOR),c906)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808" -type f -name '*.d')
-  else ifeq ($(PROCESSOR),e907)
-    # BL808 M0 core -- E907 uses same peripheral drivers as BL618.
+    # M0 is an E907 with the BL618's peripheral drivers.
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808_m0" -type f -name '*.d')
-  endif
+endif
+ifeq ($(PLATFORM),bl808_d0)
+    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808_d0" -type f -name '*.d')
 endif
 ifeq ($(PLATFORM),bl618)
     URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
@@ -524,11 +517,6 @@ endif
 ifneq ($(filter esp8266 bk7231n bk7231t esp32-c2 esp32-h2 esp32-s2,$(PLATFORM)),)
     TINY ?= 1
 endif
-ifeq ($(PLATFORM),bl808)
-  ifeq ($(PROCESSOR),e907)
-    TINY ?= 1
-  endif
-endif
 ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) -d-version=Tiny
 endif
@@ -546,11 +534,10 @@ ifneq ($(filter esp%,$(PLATFORM)),)
     USE_LWIP := 1
 endif
 ifeq ($(PLATFORM),bl808)
-  ifeq ($(PROCESSOR),c906)
-    DFLAGS := $(DFLAGS) -d-version=BL808 -d-version=Bouffalo -d-version=CRuntime_Picolibc
-  else ifeq ($(PROCESSOR),e907)
     DFLAGS := $(DFLAGS) -d-version=BL808 -d-version=BL808_M0 -d-version=Bouffalo -d-version=CRuntime_Picolibc
-  endif
+endif
+ifeq ($(PLATFORM),bl808_d0)
+    DFLAGS := $(DFLAGS) -d-version=BL808 -d-version=BL808_D0 -d-version=Bouffalo -d-version=CRuntime_Picolibc
 endif
 ifeq ($(PLATFORM),bl618)
     DFLAGS := $(DFLAGS) -d-version=BL618 -d-version=Bouffalo -d-version=CRuntime_Picolibc
@@ -645,7 +632,7 @@ else ifeq ($(USE_LWIP),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)lwIP
 endif
 
-# ESP defaults to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
+# ESP and the BL808 M0 default to LittleFS; USE_SPIFFS=1 selects SPIFFS. Do not mount both on the same partition.
 ifeq ($(USE_SPIFFS),)
     USE_SPIFFS := 0
 endif
@@ -653,6 +640,8 @@ ifeq ($(USE_LITTLEFS),)
   ifeq ($(USE_SPIFFS),1)
     USE_LITTLEFS := 0
   else ifneq ($(filter esp%,$(PLATFORM)),)
+    USE_LITTLEFS := 1
+  else ifeq ($(PLATFORM),bl808)
     USE_LITTLEFS := 1
   else
     USE_LITTLEFS := 0
@@ -829,13 +818,11 @@ ifeq ($(COMPILER),ldc)
     # (compile-only; sufficient for CI link-check of URT-only builds).
     ifneq ($(filter freertos baremetal,$(OS)),)
       ifeq ($(PLATFORM),bl808)
-        ifeq ($(PROCESSOR),c906)
-          BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808
-          BAREMETAL_SRCS := start.S
-        else ifeq ($(PROCESSOR),e907)
-          BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808_m0
-          BAREMETAL_SRCS := start.S
-        endif
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808_m0
+        BAREMETAL_SRCS := start.S
+      else ifeq ($(PLATFORM),bl808_d0)
+        BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl808_d0
+        BAREMETAL_SRCS := start.S
       else ifeq ($(PLATFORM),bl618)
         BAREMETAL_DIR  := $(URT_SRCDIR)/urt/driver/bl618
         BAREMETAL_SRCS := start.S

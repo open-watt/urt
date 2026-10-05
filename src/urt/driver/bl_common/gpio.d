@@ -211,7 +211,7 @@ version (BL808_M0)
                 continue;
             if (owner & link_owner)
             {
-                import urt.driver.bl_common.event : link_fire;
+                import urt.driver.bl808_m0.event : link_fire;
                 link_fire(owner & ~link_owner);
             }
             else

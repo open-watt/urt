@@ -1,12 +1,10 @@
 // BL808 chip reset from either core: the vendor's GLB_SW_POR_Reset, with the boot ROM's hand-off choice.
-module urt.driver.bl_common.reset;
-
-version (BL808):
+module urt.driver.bl808.reset;
 
 import core.volatile : volatileLoad, volatileStore;
 
 import urt.attribute : critical;
-import urt.driver.bl_common.watchdog : wdt_stop;
+import urt.driver.bl808.watchdog : wdt_stop;
 
 nothrow @nogc:
 
@@ -44,7 +42,6 @@ nothrow @nogc:
     set_field(glb_swrst_cfg2, 0, 1, 0);
     for (;;) {}
 }
-
 
 private:
 

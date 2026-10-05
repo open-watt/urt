@@ -49,7 +49,7 @@ else version (RP2350)
 else version (STM32)
     public import urt.driver.stm32.event;
 else version (BL808_M0)
-    public import urt.driver.bl_common.event;
+    public import urt.driver.bl808_m0.event;
 else
 {
     enum uint num_links = 0;

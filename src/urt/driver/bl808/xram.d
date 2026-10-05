@@ -1,225 +1,417 @@
-/// BL808 XRAM inter-processor communication
-///
-/// D0 ↔ M0 shared memory ring buffers at 0x2202_0000 (16KB).
-/// Each ring has 16-bit head/tail cursors in shared memory,
-/// requiring volatile access and memory barriers.
-///
-/// Ring IDs (fixed by M0 firmware):
-///   0 = LOG_C906    D0 log output
-///   1 = LOG_E902    LP core log
-///   2 = NET         Ethernet frames (WiFi bridge)
-///   3 = PERIPHERAL  GPIO/SPI/PWM/Flash control
-///   4 = RPC         Remote procedure calls
+// BL808 frame channels: a ring per channel and direction in the cores' shared XRAM, each frame built in place
+// and announced as {position, length} through the mailbox. Frames carry no header; a channel carries one kind.
+// Opening a channel tells the peer, which drops what remained of the last session and answers; the link is up
+// from that answer, or from the peer's own open, until either end closes or reopens.
 module urt.driver.bl808.xram;
 
-import core.volatile;
+import core.volatile : volatileLoad, volatileStore;
 
-@nogc nothrow:
+import urt.atomic;
+import urt.driver.bl808.ipc;
+import urt.driver.irq : irq_critical;
 
-// ================================================================
-// Constants
-// ================================================================
+nothrow @nogc:
 
-enum ulong XRAM_BASE = 0x2202_0000;
-enum uint  XRAM_SIZE = 16 * 1024;
+enum uint xram_channels = 1;
+enum uint xram_frames_in_flight = 32;
 
-enum RingId : uint
+// Runs in the doorbell interrupt when frames arrive or the peer releases room.
+alias XramNotify = void function(uint channel) nothrow @nogc;
+
+// The largest frame a channel carries: a quarter ring, so three are in flight even across a wrap.
+size_t xram_mtu()
+    => (ring_capacity / 4) & ~7u;
+
+bool xram_open(uint channel, ubyte frame_id, ubyte space_id, XramNotify notify)
 {
-    log_c906    = 0,
-    log_e902    = 1,
-    net         = 2,
-    peripheral  = 3,
-    rpc         = 4,
-    max         = 5,
-}
-
-// ================================================================
-// Peripheral message header (4 bytes)
-// Used on PERIPHERAL ring for GPIO/SPI/PWM/Flash ops
-// ================================================================
-
-struct PeriHeader
-{
-    ubyte  type;
-    ubyte  err;
-    ushort len;
-}
-
-enum PeriType : ubyte
-{
-    flash = 0x31,
-    pwm   = 0x32,
-    spi   = 0x33,
-}
-
-// ================================================================
-// Net message header (12 bytes)
-// Used on NET ring for Ethernet frames and WiFi commands
-// ================================================================
-
-struct NetHeader
-{
-    ubyte[4] magic;     // "ring" = [0x72, 0x69, 0x6e, 0x67]
-    ushort   len;
-    ubyte    type;      // high nibble: msg type, low nibble: dev type
-    ubyte    flag;
-    ushort   crc16;
-    ushort   reserved;
-}
-
-enum NetMsgType : ubyte
-{
-    command      = 0,
-    frame        = 1,
-    sniffer_pkt  = 2,
-}
-
-// ================================================================
-// WiFi operation commands
-// ================================================================
-
-enum WifiOp : uint
-{
-    init_           = 0,
-    deinit          = 1,
-    connect         = 2,
-    disconnect      = 3,
-    upload_stream   = 4,
-}
-
-struct WifiConnect
-{
-    char[32] ssid;
-    char[63] passwd;
-}
-
-// ================================================================
-// Shared-memory ring buffer
-//
-// Layout in XRAM (set by M0 firmware):
-//   struct { uint16_t head, tail; uint32_t buffer_size; uint8_t buffer[]; }
-//
-// Head is advanced by the reader, tail by the writer.
-// Both cores access these via volatile loads/stores.
-// ================================================================
-
-struct XramRing
-{
-    @nogc nothrow @trusted:
-
-    ushort* head_ptr;
-    ushort* tail_ptr;
-    ubyte*  buffer_ptr;
-    uint    buffer_size;
-
-    /// Bytes available to read
-    uint pending()
+    if (channel >= xram_channels)
+        return false;
+    Channel* c = &g_channels[channel];
     {
-        uint h = volatileLoad(head_ptr);
-        uint t = volatileLoad(tail_ptr);
-        if (t >= h)
-            return t - h;
-        else
-            return buffer_size - h + t;
+        auto guard = irq_critical();
+        c.rx_head = c.rx_tail = c.answered = 0;
+        c.reserving = c.unannounced = c.linked = c.reopened = false;
+        c.pending = 0;
+        c.frame_id = frame_id;
+        c.space_id = space_id;
+        c.notify = notify;
     }
+    ipc_handle(frame_id, &on_frame);
+    ipc_handle(space_id, &on_space);
+    ipc_on_space(&on_mailbox_space);
+    Ring tx = Ring(tx_ring(channel));
+    c.sent = tx.load(produced);
+    c.requested = tx.load(space_requested);
 
-    /// Bytes available to write
-    uint available()
+    auto guard = irq_critical();
+    drop_received(channel);
+    signal(c, Signal.open);
+    return true;
+}
+
+void xram_close(uint channel)
+{
+    if (channel >= xram_channels)
+        return;
+    Channel* c = &g_channels[channel];
+    auto guard = irq_critical();
+    c.pending = 0;
+    signal(c, Signal.close);
+    c.notify = null;
+    c.reserving = c.unannounced = c.linked = c.reopened = false;
+}
+
+// The peer's session: 0 while the link is down, and a new number each time the peer opens. A reopened peer's
+// earlier frames are dropped here, so call this before receiving.
+uint xram_link(uint channel)
+{
+    if (channel >= xram_channels)
+        return 0;
+    Channel* c = &g_channels[channel];
+    auto guard = irq_critical();
+    if (c.reopened)
     {
-        uint h = volatileLoad(head_ptr);
-        uint t = volatileLoad(tail_ptr);
-        if (t >= h)
-            return buffer_size - t + h - 1;
-        else
-            return h - t - 1;
+        c.reopened = false;
+        drop_received(channel);
+        link_up(c);
+        signal(c, Signal.ack);
     }
+    return c.linked ? c.epoch : 0;
+}
 
-    bool empty()
+// Room for two frames of the channel's MTU and a few spare frames: a producer that waits for this leaves room
+// for any frame that cannot wait. When there is none, notify runs once the peer releases some.
+bool xram_writable(uint channel)
+{
+    uint start;
+    return channel < xram_channels && fits(channel, 2 * xram_mtu(), spare_frames, start);
+}
+
+// A frame of up to max_length bytes, 8-aligned in XRAM, to build in place; null when the ring has no room,
+// and notify runs once the peer releases some. One reservation at a time per channel.
+void[] xram_reserve(uint channel, size_t max_length)
+{
+    uint start;
+    if (channel >= xram_channels || max_length == 0 || max_length > xram_mtu() || !fits(channel, max_length, 0, start))
+        return null;
+    Channel* c = &g_channels[channel];
+    c.start = start;
+    c.reserved = cast(uint)max_length;
+    c.reserving = true;
+    return Ring(tx_ring(channel)).data[offset_of(start) .. offset_of(start) + max_length];
+}
+
+// Announces the reserved frame, trimmed to length.
+bool xram_post(uint channel, size_t length)
+{
+    if (channel >= xram_channels)
+        return false;
+    Channel* c = &g_channels[channel];
+    if (!c.reserving || length == 0 || length > c.reserved)
+        return false;
+    Ring tx = Ring(tx_ring(channel));
+    ipc_shared_clean(tx.data[offset_of(c.start) .. offset_of(c.start) + length]);
+    c.sent = cursor(frames_of(c.sent) + 1, advance(c.start, round8(length)));
+    tx.store(produced, c.sent);
+
+    auto guard = irq_critical();
+    c.reserving = false;
+    c.announce = [c.start, cast(uint)length];
+    c.unannounced = !ipc_send(c.frame_id, c.announce[]);
+    return true;
+}
+
+void xram_abandon(uint channel)
+{
+    if (channel < xram_channels)
+        g_channels[channel].reserving = false;
+}
+
+// The next frame, read in place and valid until xram_release; null when none has arrived.
+const(void)[] xram_receive(uint channel)
+{
+    if (channel >= xram_channels)
+        return null;
+    Channel* c = &g_channels[channel];
+    if (!c.linked)
+        return null;
+    if (c.rx_tail == atomicLoad(c.rx_head))
+        return null;
+    immutable uint[2] entry = c.rx_queue[c.rx_tail % xram_frames_in_flight];
+    immutable uint offset = offset_of(entry[0]);
+    if (offset + entry[1] > ring_capacity)
+        return null;
+    const(ubyte)[] frame = Ring(rx_ring(channel)).data[offset .. offset + entry[1]];
+    ipc_shared_invalidate(frame);
+    return frame;
+}
+
+void xram_release(uint channel)
+{
+    if (channel >= xram_channels)
+        return;
+    Channel* c = &g_channels[channel];
+    if (c.rx_tail == atomicLoad(c.rx_head))
+        return;
+    immutable uint[2] entry = c.rx_queue[c.rx_tail % xram_frames_in_flight];
+    ++c.rx_tail;
+
+    Ring rx = Ring(rx_ring(channel));
+    c.released = cursor(frames_of(c.released) + 1, advance(entry[0], round8(entry[1])));
+    rx.store(consumed, c.released);
+    signal_space(channel);
+}
+
+
+private:
+
+// Each ring: the sender's words on one cache line, the receiver's on the next, then the frames. Each side's
+// cursor is one word, its frame count over its position, so the peer reads both at once. Positions run modulo
+// twice the capacity, so a wrap never breaks the offset sequence and a full ring is told from an empty one. A
+// sender out of room bumps its request; the receiver signals space until it has answered the latest. Each side
+// keeps its own words in RAM and only writes them through, so an interrupt never invalidates a store D0 has
+// yet to clean.
+enum size_t cache_line = 64;
+enum uint produced = 0, space_requested = 4, consumed = cache_line;
+enum uint spare_frames = 4;
+enum size_t ring_header = 2 * cache_line;
+enum uint ring_stride = cast(uint)((ipc_shared_size / (xram_channels * 2)) & ~(cache_line - 1));
+enum uint ring_capacity = cast(uint)(ring_stride - ring_header);
+
+static assert(2 * ring_capacity <= ushort.max + 1);
+
+// A one-byte message on the frame id; announcements are eight.
+enum Signal : ubyte { open = 1, ack = 2, close = 4 }
+
+struct Channel
+{
+    XramNotify notify;
+    uint start;
+    uint reserved;
+    uint sent;
+    uint requested;
+    uint released;
+    uint answered;
+    uint epoch;
+    uint[2] announce;
+    uint[2][xram_frames_in_flight] rx_queue;
+    shared uint rx_head;
+    uint rx_tail;
+    ubyte frame_id, space_id;
+    ubyte pending;
+    bool reserving, unannounced, linked, reopened;
+}
+
+__gshared Channel[xram_channels] g_channels;
+
+// Ring 2c carries M0 to D0 on channel c, ring 2c + 1 D0 to M0.
+version (BL808_M0)
+{
+    uint tx_ring(uint channel) => channel * 2;
+    uint rx_ring(uint channel) => channel * 2 + 1;
+}
+else
+{
+    uint tx_ring(uint channel) => channel * 2 + 1;
+    uint rx_ring(uint channel) => channel * 2;
+}
+
+enum uint span = 2 * ring_capacity;
+
+uint round8(size_t length) pure
+    => cast(uint)(length + 7) & ~7u;
+
+uint advance(uint position, uint length) pure
+{
+    immutable uint p = position + length;
+    return p >= span ? p - span : p;
+}
+
+uint distance(uint from, uint to) pure
+    => to >= from ? to - from : to + span - from;
+
+uint offset_of(uint position) pure
+    => position >= ring_capacity ? position - ring_capacity : position;
+
+uint cursor(uint frames, uint position) pure
+    => frames << 16 | position;
+
+uint frames_of(uint cursor) pure
+    => cursor >> 16;
+
+uint position_of(uint cursor) pure
+    => cursor & 0xFFFF;
+
+// The request goes up before the second look, and the receiver looks at it after releasing room, so one of
+// the two sees the other.
+bool fits(uint channel, size_t length, uint spare, out uint start)
+{
+    Channel* c = &g_channels[channel];
+    if (!c.linked || c.pending || c.reserving || c.unannounced)
+        return false;
+    Ring tx = Ring(tx_ring(channel));
+    if (room(c, tx, length, spare, start))
+        return true;
+    tx.store(space_requested, ++c.requested);
+    return room(c, tx, length, spare, start);
+}
+
+// The position a frame of length starts at, past any skip to the ring's start, if it fits.
+bool room(Channel* c, ref Ring tx, size_t length, uint spare, out uint start)
+{
+    immutable uint freed = tx.load(consumed);
+    if (((frames_of(c.sent) - frames_of(freed)) & 0xFFFF) + spare >= xram_frames_in_flight)
+        return false;
+    immutable uint head = position_of(c.sent), size = round8(length);
+    immutable uint at = offset_of(head);
+    immutable uint skip = ring_capacity - at < size ? ring_capacity - at : 0;
+    start = advance(head, skip);
+    return ring_capacity - distance(position_of(freed), head) >= skip + size;
+}
+
+Channel* channel_of(ubyte id, bool frame)
+{
+    foreach (ref c; g_channels)
+        if (c.notify !is null && (frame ? c.frame_id : c.space_id) == id)
+            return &c;
+    return null;
+}
+
+// Discards the peer's frames not yet received, and tells it of the room if it waits on them.
+void drop_received(uint channel)
+{
+    Channel* c = &g_channels[channel];
+    c.rx_tail = atomicLoad(c.rx_head);
+    Ring rx = Ring(rx_ring(channel));
+    c.released = rx.load(produced);
+    rx.store(consumed, c.released);
+    signal_space(channel);
+}
+
+// Tells a sender waiting on room that it has some; a full mailbox leaves it to on_mailbox_space.
+void signal_space(uint channel)
+{
+    Channel* c = &g_channels[channel];
+    immutable uint request = Ring(rx_ring(channel)).load(space_requested);
+    if (request != c.answered && ipc_send(c.space_id, null))
+        c.answered = request;
+}
+
+void link_up(Channel* c)
+{
+    if (c.linked)
+        return;
+    c.linked = true;
+    if (++c.epoch == 0)
+        c.epoch = 1;
+}
+
+// Under irq_critical. Signals the mailbox cannot take now go in the order sent once it has room.
+void signal(Channel* c, Signal s)
+{
+    ubyte[1] message = [s];
+    if (c.pending || !ipc_send(c.frame_id, message[]))
+        c.pending |= s;
+}
+
+void on_frame(ubyte id, const(void)[] payload)
+{
+    Channel* c = channel_of(id, true);
+    if (c is null)
+        return;
+    if (payload.length == 1)
     {
-        return volatileLoad(head_ptr) == volatileLoad(tail_ptr);
-    }
-
-    void reset()
-    {
-        volatileStore(head_ptr, cast(ushort) 0);
-        volatileStore(tail_ptr, cast(ushort) 0);
-        fence();
-    }
-
-    /// Read up to dst.length bytes from the ring. Returns bytes read.
-    uint read(ubyte[] dst)
-    {
-        fence(); // ensure we see latest writes from other core
-
-        uint h = volatileLoad(head_ptr);
-        uint t = volatileLoad(tail_ptr);
-        uint avail = (t >= h) ? (t - h) : (buffer_size - h + t);
-        uint len = (dst.length < avail) ? cast(uint) dst.length : avail;
-
-        if (len == 0)
-            return 0;
-
-        uint first = buffer_size - h;
-        if (len <= first)
+        switch (*cast(const(ubyte)*)payload.ptr)
         {
-            dst[0 .. len] = buffer_ptr[h .. h + len];
-            h += len;
-            if (h == buffer_size)
-                h = 0;
+            case Signal.open:
+                c.linked = false;
+                c.reopened = true;
+                break;
+            case Signal.ack:
+                if (!c.reopened)
+                    link_up(c);
+                break;
+            case Signal.close:
+                c.linked = c.reopened = false;
+                break;
+            default:
+                return;
         }
-        else
-        {
-            dst[0 .. first] = buffer_ptr[h .. buffer_size];
-            uint second = len - first;
-            dst[first .. len] = buffer_ptr[0 .. second];
-            h = second;
-        }
-
-        fence(); // ensure our reads complete before advancing head
-        volatileStore(head_ptr, cast(ushort) h);
-        return len;
+        c.notify(cast(uint)(c - g_channels.ptr));
+        return;
     }
+    if (payload.length != 2 * uint.sizeof)
+        return;
+    // a ring or more behind the consumed position is a frame dropped when this session began
+    immutable uint[2] entry = *cast(const(uint[2])*)payload.ptr;
+    if (entry[0] >= span || entry[1] > ring_capacity || distance(position_of(c.released), entry[0]) >= ring_capacity)
+        return;
+    immutable uint head = atomicLoad(c.rx_head);
+    if (head - c.rx_tail >= xram_frames_in_flight)
+        return;
+    c.rx_queue[head % xram_frames_in_flight] = entry;
+    atomicStore(c.rx_head, head + 1);
+    c.notify(cast(uint)(c - g_channels.ptr));
+}
 
-    /// Write data to the ring. Returns bytes written.
-    uint write(const(ubyte)[] src)
+void on_space(ubyte id, const(void)[])
+{
+    if (Channel* c = channel_of(id, false))
+        c.notify(cast(uint)(c - g_channels.ptr));
+}
+
+void on_mailbox_space()
+{
+    foreach (i, ref c; g_channels)
     {
-        uint h = volatileLoad(head_ptr);
-        uint t = volatileLoad(tail_ptr);
-        uint space = (t >= h) ? (buffer_size - t + h - 1) : (h - t - 1);
-        uint len = (src.length < space) ? cast(uint) src.length : space;
-
-        if (len == 0)
-            return 0;
-
-        uint tail_room = buffer_size - t;
-        if (len <= tail_room)
+        if (c.notify)
+            signal_space(cast(uint)i);
+        if (!c.pending && !c.unannounced)
+            continue;
+        foreach (s; [Signal.open, Signal.ack, Signal.close])
         {
-            buffer_ptr[t .. t + len] = src[0 .. len];
-            t += len;
-            if (t == buffer_size)
-                t = 0;
+            if (!(c.pending & s))
+                continue;
+            ubyte[1] message = [s];
+            if (!ipc_send(c.frame_id, message[]))
+                break;
+            c.pending &= ~s;
         }
-        else
-        {
-            buffer_ptr[t .. buffer_size] = src[0 .. tail_room];
-            uint second = len - tail_room;
-            buffer_ptr[0 .. second] = src[tail_room .. len];
-            t = second;
-        }
-
-        fence(); // ensure writes visible before advancing tail
-        volatileStore(tail_ptr, cast(ushort) t);
-        return len;
+        if (!c.pending && c.unannounced && ipc_send(c.frame_id, c.announce[]))
+            c.unannounced = false;
+        if (c.notify && !c.pending && !c.unannounced)
+            c.notify(cast(uint)i);
     }
 }
 
-/// Memory barrier - RISC-V fence instruction
-private void fence() @nogc nothrow
+struct Ring
 {
-    version (RISCV64)
-        asm @nogc nothrow { "fence rw, rw"; }
-    else version (RISCV32)
-        asm @nogc nothrow { "fence rw, rw"; }
-    else
-        asm @nogc nothrow { ""; }
+nothrow @nogc:
+    ubyte* base;
+
+    this(uint index)
+    {
+        base = cast(ubyte*)ipc_shared().ptr + index * ring_stride;
+    }
+
+    ubyte[] data()
+        => (base + ring_header)[0 .. ring_capacity];
+
+    uint load(uint offset)
+    {
+        uint* p = cast(uint*)(base + offset);
+        ipc_shared_invalidate(p[0 .. 1]);
+        immutable uint v = volatileLoad(p);
+        atomic_fence();
+        return v;
+    }
+
+    void store(uint offset, uint value)
+    {
+        uint* p = cast(uint*)(base + offset);
+        atomic_fence();
+        volatileStore(p, value);
+        ipc_shared_clean(p[0 .. 1]);
+        atomic_fence();
+    }
 }

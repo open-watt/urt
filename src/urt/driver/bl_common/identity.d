@@ -13,10 +13,6 @@ import core.volatile;
 import urt.driver.timer : mtime_freq_hz, mtime_read;
 import urt.hash : fnv1a64;
 
-// The M0 build sets BL808 as well, so D0 has no flag of its own.
-version (BL808_M0) {}
-else version (BL808) version = BL808_D0;
-
 @nogc nothrow:
 
 

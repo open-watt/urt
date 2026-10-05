@@ -229,11 +229,11 @@ int wifi_hosal_rf_turn_on(void* arg)
     enum uint PU_SFREG       = 1u << 2;
     enum uint SW_WB_EN       = 1u << 1;
 
-    import urt.driver.bl618.timer : mtime_read;
+    import urt.driver.bl618.timer : mtime_freq_hz, mtime_read;
     static void delay_us(ulong us)
     {
         ulong start = mtime_read();
-        while (mtime_read() - start < us) {}
+        while (mtime_read() - start < us * (mtime_freq_hz / 1_000_000)) {}
     }
 
     auto rf = cast(uint*)cast(size_t)AON_RF_TOP_AON;

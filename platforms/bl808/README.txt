@@ -42,49 +42,32 @@ Build the unittest image
 
 From the URT root:
 
-    make PLATFORM=bl808 PROCESSOR=c906 CONFIG=unittest    (D0 image)
-    make PLATFORM=bl808 PROCESSOR=e907 CONFIG=unittest    (M0 image)
+    make PLATFORM=bl808 CONFIG=unittest       (M0, the core that owns the chip)
+    make PLATFORM=bl808_d0 CONFIG=unittest    (D0, the C906 expansion core)
 
 Outputs:
 
-    bin/bl808-d0_unittest/urt_test.bin    D0 firmware, loads to PSRAM
-    bin/bl808-m0_unittest/urt_test.bin    M0 firmware, runs XIP from flash
+    bin/bl808_unittest/urt_test.bin       M0 firmware, runs XIP from flash
+    bin/bl808_d0_unittest/urt_test.bin    D0 firmware, loads to PSRAM
 
-Linker scripts: bl808_d0.ld (D0 expects to run from PSRAM at 0x50100000;
-M0 firmware copies it from flash at boot). bl808_m0.ld (M0 runs XIP from
-flash at 0x58000000).
+Linker scripts: bl808_m0/bl808_m0.ld (M0 runs XIP from flash at
+0x58000000) and bl808_d0/bl808_d0.ld (D0 runs from PSRAM at 0x50100000).
 
 Boot dependency
 ---------------
 
-D0 cannot boot standalone -- only M0 starts at power-on. Before D0 can
-fetch its first instruction, M0 must:
-
-  1. Initialize clocks and PLLs.
-  2. Bring up the flash controller and PSRAM controller.
-  3. Copy the D0 firmware from flash (typically 0x580F0000) to PSRAM.
-  4. Release D0 from reset by writing its boot-address register.
-
-This means a D0-only urt_test.bin is a valid build artifact but is NOT
-flashable on its own. To run the D0 unittests on hardware, flash both
-images together: an M0 firmware that performs the handoff, plus the D0
-image at the address M0 expects.
+Only M0 starts at power-on, and it is a complete part on its own. D0 runs
+only if M0 starts it: M0 brings up the clocks and PSRAM, inflates a D0
+payload appended to its own image (tools/bl808_image.py) into PSRAM, and
+releases D0 at the payload's entry. An image without a payload leaves D0
+halted.
 
 Flash
 -----
 
-Same tool as BL618, with chipname=bl808:
-
-    pip install bflb-mcu-tool
-    bflb-mcu-tool --chipname bl808 --interface uart \
-                  --port /dev/ttyUSB0 --baudrate 2000000 \
-                  --firmware bin/bl808-m0_unittest/urt_test.bin \
-                  --addr 0x58000000
-
-For a paired D0+M0 image, flash D0 at 0x580F0000 in the same command
-(refer to BLDevCube's partition table editor for the proper layout).
-
-Hold BOOT, tap RESET, release BOOT to enter ROM bootloader.
+Hold BOOT, tap RESET, release BOOT to enter the ROM bootloader, then flash
+the M0 image (with any D0 payload appended) with Bouffalo's DevCube or
+bflb tools, chipname=bl808, through the partition table's FW slot.
 
 Console
 -------

@@ -2,20 +2,17 @@
 // block * 4 + channel. Pin n reaches output n % 8 of either block (function 16 or 17): channel (n % 8) / 2,
 // negative on odd pins, whose polarity is flipped so both show the channel's duty. The channels of a block
 // share its counter, so they must agree on period and clock.
-module urt.driver.bl_common.pwm;
-
-version (BL808):
+module urt.driver.bl808.pwm;
 
 import core.volatile : volatileLoad, volatileStore;
 
-import urt.driver.bl_common.clock : xclk_hz;
+import urt.driver.bl808.clock : xclk_hz;
 import urt.driver.bl_common.gpio : gpio_release, gpio_set_function;
 import urt.driver.gpio : GpioLine;
 import urt.driver.pwm : PwmConfig;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
-
 
 enum uint num_hw_pwm = 8;
 
@@ -84,7 +81,6 @@ void pwm_hw_close(uint port)
     if (--_blocks[port / 4].users == 0)
         stop(base);
 }
-
 
 private:
 
@@ -168,7 +164,6 @@ bool clock_divider(uint frequency, uint period, out ushort div) pure
     div = cast(ushort)divider;
     return true;
 }
-
 
 unittest
 {

@@ -12,7 +12,7 @@ import urt.time : Duration, dur;
 version (BL808_M0)
     public import urt.driver.bl618.timer;
 else version (BL808)
-    public import urt.driver.bl808.timer;
+    public import urt.driver.bl808_d0.timer;
 else version (BL618)
     public import urt.driver.bl618.timer;
 else version (Beken)

@@ -6,8 +6,8 @@
  * Boot flow:
  *   1. CPU setup    — wait for M0, disable IRQ, extensions, FPU, trap vectors
  *   2. Core regs    — gp, tp, sp
- *   3. Memory access — TZC release, clear PLIC
- *   4. Section init — .got, .tdata, .tbss, .bss, .data
+ *   3. Memory access — clear PLIC
+ *   4. Section init — zero .tbss and .bss (M0 places everything else)
  *   5. Caches       — I-cache, D-cache, prefetch
  *   6. Interrupts   — dispatch table, enable MIE+MEIE
  *   7. D runtime    — sys_init, .init_array, main
@@ -65,12 +65,6 @@ _start:
 
     /* ── 3. Memory access ─────────────────────────────────────────── */
 
-    /* TZC for D0 (CPU group + PSRAMA/B region enable) is configured by M0
-     * in urt.driver.bl808_m0.start.tzc_config_for_d0() before this core is
-     * released from reset.  Earlier versions cleared bit 16 of 0x20005380
-     * here, which was wrong polarity (bit 16 is region-enable; clearing it
-     * disables PSRAM access). */
-
     /* Clear PLIC interrupt enables and pending bits */
     li      t0, 0xE0002000      /* PLIC enable base */
     li      t1, 0xE0001000      /* PLIC pending base */
@@ -85,46 +79,6 @@ _start:
     bnez    t3, .Lclear_plic
 
     /* ── 4. Section init ──────────────────────────────────────────── */
-
-    /* Copy .got from flash to SRAM (must come first — gp-relative access) */
-    la      t0, _got_load
-    la      t1, _got_start
-    la      t2, _got_end
-.Lcopy_got:
-    bgeu    t1, t2, .Lgot_done
-    ld      t3, 0(t0)
-    sd      t3, 0(t1)
-    addi    t0, t0, 8
-    addi    t1, t1, 8
-    j       .Lcopy_got
-.Lgot_done:
-
-    /* Copy .sram_data from PSRAM (LMA) to SRAM (VMA) -- @fast_data globals.
-     * Empty when no @fast_data is in use; loop is a no-op. */
-    la      t0, _sram_data_load
-    la      t1, _sram_data_start
-    la      t2, _sram_data_end
-.Lcopy_sram_data:
-    bgeu    t1, t2, .Lsram_data_done
-    ld      t3, 0(t0)
-    sd      t3, 0(t1)
-    addi    t0, t0, 8
-    addi    t1, t1, 8
-    j       .Lcopy_sram_data
-.Lsram_data_done:
-
-    /* Copy .tdata from flash to SRAM (TLS initialized data) */
-    la      t0, _tdata_load
-    la      t1, _tdata_start
-    la      t2, _tdata_end
-.Lcopy_tdata:
-    bgeu    t1, t2, .Ltdata_done
-    ld      t3, 0(t0)
-    sd      t3, 0(t1)
-    addi    t0, t0, 8
-    addi    t1, t1, 8
-    j       .Lcopy_tdata
-.Ltdata_done:
 
     la      t0, _stack_low
     li      t1, 0xa5a5a5a5
@@ -155,18 +109,6 @@ _start:
     j       .Lzero_bss
 .Lbss_done:
 
-    /* Copy .data from flash to PSRAM */
-    la      t0, _data_load
-    la      t1, _data_start
-    la      t2, _data_end
-.Lcopy_data:
-    bgeu    t1, t2, .Ldata_done
-    ld      t3, 0(t0)
-    sd      t3, 0(t1)
-    addi    t0, t0, 8
-    addi    t1, t1, 8
-    j       .Lcopy_data
-.Ldata_done:
 
     /* ── 5. Caches ────────────────────────────────────────────────── */
 

@@ -16,7 +16,7 @@ import urt.time;
 version (RP2350)
     public import urt.driver.rp2350.ws2812;
 else version (BL808)
-    public import urt.driver.bl_common.ws2812;
+    public import urt.driver.bl808.ws2812;
 else
     enum uint num_ws2812 = 0;
 

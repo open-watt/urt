@@ -181,6 +181,7 @@ void page_release(Page* page)
             return;
     }
     free_payload(page);
+    page_freed();
 }
 
 bool page_unique(const Page* page)

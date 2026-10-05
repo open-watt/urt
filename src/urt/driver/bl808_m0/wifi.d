@@ -596,6 +596,21 @@ bool wifi_hw_set_channel(ubyte port, ubyte primary)
     return false;
 }
 
+// The vendor hands received frames over without their RX vector, so a station's RSSI is unknown (0).
+bool wifi_hw_get_sta_link_info(ubyte port, ref WifiStaLinkInfo info)
+{
+    if (port != 0 || _bl_hw.vif_index_sta < 0 || _sta_ap_idx >= STA_TABLE_LEN)
+        return false;
+    info = WifiStaLinkInfo.init;
+    info.bssid = _bl_hw.sta_table[_sta_ap_idx].sta_addr.array_;
+    info.rssi = _bl_hw.sta_table[_sta_ap_idx].rssi;
+    info.band = WifiBand._2_4ghz;
+    info.phy_mode = WifiPhyMode.n;
+    info.bandwidth = WifiBandwidth.bw_20mhz;
+    info.nss = 1;
+    return true;
+}
+
 byte wifi_hw_get_rssi(ubyte port)
 {
     // STA RSSI lands in sta_table[ap_idx].rssi via SM_CONNECT_IND. We

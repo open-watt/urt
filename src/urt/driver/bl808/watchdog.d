@@ -1,13 +1,10 @@
 // The MCU timer block's watchdog, counting the 32 kHz clock divided to 1024 Hz and resetting the chip at
 // its match. Every write to its registers must follow the two access keys.
-module urt.driver.bl_common.watchdog;
-
-version (BL808):
+module urt.driver.bl808.watchdog;
 
 import core.volatile : volatileLoad, volatileStore;
 
 nothrow @nogc:
-
 
 enum uint wdt_max_ms = 0xFFFF * 1000 / tick_hz;
 
@@ -36,7 +33,6 @@ void wdt_stop()
     unlock();
     write(wmer, 0);
 }
-
 
 private:
 

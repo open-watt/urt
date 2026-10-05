@@ -2,7 +2,7 @@
 ///
 /// _write routes stdout/stderr to the console UART.
 /// Network stubs return -1 until replaced by XRAM WiFi IPC.
-module urt.driver.bl808.syscalls;
+module urt.driver.bl808_d0.syscalls;
 
 import urt.driver.bl_common.uart : uart0_hw_puts;
 

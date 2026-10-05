@@ -23,7 +23,7 @@
 ///   HBN_TIME_H  @ +0x08   - compare value high (alarm)
 ///   HBN_RTC_TIME_L @ +0x0C - latched counter low (read-only)
 ///   HBN_RTC_TIME_H @ +0x10 - latched counter high [7:0] + latch trigger [31]
-module urt.driver.bl808.timer;
+module urt.driver.bl808_d0.timer;
 
 import core.volatile;
 import urt.driver.riscv.clint : mtimecmp_write;

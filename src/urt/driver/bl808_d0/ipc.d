@@ -2,9 +2,9 @@
 ///
 /// Initializes XRAM ring buffers and provides typed send/receive
 /// for peripheral commands and network frames.
-module urt.driver.bl808.ipc;
+module urt.driver.bl808_d0.ipc;
 
-import urt.driver.bl808.xram;
+import urt.driver.bl808_d0.xram;
 
 @nogc nothrow:
 

@@ -1,7 +1,5 @@
 // BL808 clocks.
-module urt.driver.bl_common.clock;
-
-version (BL808):
+module urt.driver.bl808.clock;
 
 nothrow @nogc:
 

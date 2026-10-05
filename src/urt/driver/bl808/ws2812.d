@@ -1,17 +1,14 @@
 // WS2812 chains on the GPIO block's transmit FIFO. Each 16-bit word is one bit period for a group of 16 pins,
 // and the hardware shapes each bit as a code0 or code1 pulse counted in XCLK, so no core keeps the timing.
-module urt.driver.bl_common.ws2812;
-
-version (BL808):
+module urt.driver.bl808.ws2812;
 
 import core.volatile : volatileLoad, volatileStore;
 
-import urt.driver.bl_common.clock : xclk_hz;
+import urt.driver.bl808.clock : xclk_hz;
 import urt.driver.gpio : GpioLine;
 import urt.result : InternalResult, Result;
 
 nothrow @nogc:
-
 
 enum uint num_ws2812 = 1;
 
@@ -48,7 +45,6 @@ void ws2812_hw_close(uint chain)
     write(gpio_cfg + _line * 4, func_swgpio << 8 | output_en);
     write(cfg142, 0);
 }
-
 
 private:
 

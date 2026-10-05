@@ -5,7 +5,7 @@ TLSF_DIR  := $(URT_ROOT)third_party/tlsf
 TLSF_SRCS := $(TLSF_DIR)/tlsf.c
 endif
 
-ifneq ($(filter bl808 bl618,$(PLATFORM)),)
+ifneq ($(filter bl808 bl808_d0 bl618,$(PLATFORM)),)
 
 # rv32 cores (BL618 + BL808 M0) share the BL618 .a; rv64 D0 uses its own. Key
 # on ARCH so a defaulted PROCESSOR can't pick the wrong-width archive.
@@ -14,12 +14,12 @@ ifeq ($(USE_MBEDTLS),1)
   ifeq ($(ARCH),riscv)
     MBEDTLS_LIB := $(URT_ROOT)platforms/bl618/lib/libmbedtls.a
   else
-    MBEDTLS_LIB := $(URT_ROOT)platforms/bl808/lib/libmbedtls.a
+    MBEDTLS_LIB := $(URT_ROOT)platforms/bl808_d0/lib/libmbedtls.a
   endif
   DFLAGS := $(DFLAGS) -L$(MBEDTLS_LIB)
 endif
 
-ifeq ($(BUILDNAME),bl808-m0)
+ifeq ($(PLATFORM),bl808)
   BL_WIFI_DIR  := $(URT_ROOT)platforms/bl808_m0/vendor/wifi
   BL_WIFI_INC  := $(BL_WIFI_DIR)/include
   BL_WIFI_SRCS := $(wildcard $(BL_WIFI_DIR)/src/*.c)
@@ -35,7 +35,7 @@ endif
 
 # BAREMETAL_SPECS routes a bare cross-gcc to picolibc's hosted headers.
 ifdef TLSF_DIR
-  ifneq ($(BUILDNAME),bl808-d0)
+  ifneq ($(PLATFORM),bl808_d0)
     TLSF_DEFINES += -DTLSF_ALIGN_SIZE_LOG2=3
   endif
   TLSF_OBJS    = $(patsubst $(TLSF_DIR)/%.c,$(OBJDIR)/tlsf/%.o,$(TLSF_SRCS))

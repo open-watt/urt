@@ -131,7 +131,7 @@ noreturn system_reset()
     }
     else version (BL808)
     {
-        import urt.driver.bl_common.reset : por_reset;
+        import urt.driver.bl808.reset : por_reset;
         por_reset(false);
     }
 

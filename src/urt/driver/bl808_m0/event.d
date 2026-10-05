@@ -1,8 +1,6 @@
 // BL808 M0 link backend. There is no trigger matrix, so only the interrupt tier exists: GPIO edges
 // dispatch through the GPIO block's CLIC line.
-module urt.driver.bl_common.event;
-
-version (BL808_M0):
+module urt.driver.bl808_m0.event;
 
 import urt.driver.event;
 import urt.driver.event_core : EventLinks, gpio_link_check, gpio_link_trigger;
@@ -51,7 +49,6 @@ void link_hw_close(uint slot)
 // The GPIO ISR calls this inside the critical section that took the edge, so the slot's owner is current.
 bool link_fire(uint slot)
     => _links.fire(_links.owner(cast(ubyte)slot));
-
 
 private:
 

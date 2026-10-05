@@ -7,7 +7,7 @@ module urt.driver.irq;
 version (BL808_M0)
     public import urt.driver.bl618.irq;
 else version (BL808)
-    public import urt.driver.bl808.irq;
+    public import urt.driver.bl808_d0.irq;
 else version (BL618)
     public import urt.driver.bl618.irq;
 else version (Beken)

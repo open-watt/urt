@@ -10,7 +10,7 @@
 ///   2 = NET         Ethernet frames (WiFi bridge)
 ///   3 = PERIPHERAL  GPIO/SPI/PWM/Flash control
 ///   4 = RPC         Remote procedure calls
-module urt.driver.bl808.xram;
+module urt.driver.bl808_d0.xram;
 
 import core.volatile;
 

@@ -42,17 +42,17 @@ Build the unittest image
 
 From the URT root:
 
-    make PLATFORM=bl808 PROCESSOR=c906 CONFIG=unittest    (D0 image)
-    make PLATFORM=bl808 PROCESSOR=e907 CONFIG=unittest    (M0 image)
+    make PLATFORM=bl808 CONFIG=unittest       (M0, the core that owns the chip)
+    make PLATFORM=bl808_d0 CONFIG=unittest    (D0, the C906 expansion core)
 
 Outputs:
 
-    bin/bl808-d0_unittest/urt_test.bin    D0 firmware, loads to PSRAM
-    bin/bl808-m0_unittest/urt_test.bin    M0 firmware, runs XIP from flash
+    bin/bl808_unittest/urt_test.bin       M0 firmware, runs XIP from flash
+    bin/bl808_d0_unittest/urt_test.bin    D0 firmware, loads to PSRAM
 
-Linker scripts: bl808_d0.ld (D0 expects to run from PSRAM at 0x50100000;
-M0 firmware copies it from flash at boot). bl808_m0.ld (M0 runs XIP from
-flash at 0x58000000).
+Linker scripts: bl808_d0/bl808_d0.ld (D0 expects to run from PSRAM at
+0x50100000; M0 firmware copies it from flash at boot). bl808_m0/bl808_m0.ld
+(M0 runs XIP from flash at 0x58000000).
 
 Boot dependency
 ---------------
@@ -78,7 +78,7 @@ Same tool as BL618, with chipname=bl808:
     pip install bflb-mcu-tool
     bflb-mcu-tool --chipname bl808 --interface uart \
                   --port /dev/ttyUSB0 --baudrate 2000000 \
-                  --firmware bin/bl808-m0_unittest/urt_test.bin \
+                  --firmware bin/bl808_unittest/urt_test.bin \
                   --addr 0x58000000
 
 For a paired D0+M0 image, flash D0 at 0x580F0000 in the same command

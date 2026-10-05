@@ -99,8 +99,8 @@ jobs:
       matrix:
         target:
           - { name: bl618,    toolchain: riscv, args: PLATFORM=bl618 }
-          - { name: bl808-d0, toolchain: riscv, args: 'PLATFORM=bl808 PROCESSOR=c906' }
-          - { name: bl808-m0, toolchain: riscv, args: 'PLATFORM=bl808 PROCESSOR=e907' }
+          - { name: bl808,    toolchain: riscv, args: PLATFORM=bl808 }
+          - { name: bl808_d0, toolchain: riscv, args: PLATFORM=bl808_d0 }
           - { name: rp2350,   toolchain: arm,   args: PLATFORM=rp2350 }
           - { name: bk7231n,  toolchain: arm,   args: PLATFORM=bk7231n }
           - { name: bk7231t,  toolchain: arm,   args: PLATFORM=bk7231t }

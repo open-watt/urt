@@ -23,11 +23,9 @@ include platforms.mk
 # BAREMETAL_LD isn't set.
 ifeq ($(CONFIG),unittest)
   ifeq ($(PLATFORM),bl808)
-    ifeq ($(PROCESSOR),c906)
-      BAREMETAL_LD := platforms/bl808/bl808_d0.ld
-    else ifeq ($(PROCESSOR),e907)
-      BAREMETAL_LD := platforms/bl808/bl808_m0.ld
-    endif
+    BAREMETAL_LD := platforms/bl808_m0/bl808_m0.ld
+  else ifeq ($(PLATFORM),bl808_d0)
+    BAREMETAL_LD := platforms/bl808_d0/bl808_d0.ld
   else ifeq ($(PLATFORM),bl618)
     BAREMETAL_LD := platforms/bl618/bl618.ld
   else ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
@@ -155,7 +153,7 @@ endif
 
 CI_PLATFORMS := \
     esp32 esp32-s2 esp32-s3 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2 esp32-p4 \
-    bl618 bk7231n bk7231t rp2350 stm32f4 stm32f7 stm32h7 bl808-d0 bl808-m0
+    bl618 bk7231n bk7231t rp2350 stm32f4 stm32f7 stm32h7 bl808 bl808_d0
 
 # Optional host regression: make check-invariants CONFIG=debug COMPILER=ldc
 .PHONY: check-invariants
@@ -182,13 +180,8 @@ endif
 .PHONY: ci-build
 ci-build:
 	@set -e; for p in $(CI_PLATFORMS); do \
-	    case $$p in \
-	        bl808-d0) args="PLATFORM=bl808 PROCESSOR=c906" ;; \
-	        bl808-m0) args="PLATFORM=bl808 PROCESSOR=e907" ;; \
-	        *)        args="PLATFORM=$$p" ;; \
-	    esac; \
-	    echo "=== ci-build: $$p ($$args) ==="; \
-	    $(MAKE) --no-print-directory $$args CONFIG=unittest || exit 1; \
+	    echo "=== ci-build: $$p ==="; \
+	    $(MAKE) --no-print-directory PLATFORM=$$p CONFIG=unittest || exit 1; \
 	done
 	@echo ""
 	@echo "=== ci-build complete ==="

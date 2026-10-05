@@ -5,7 +5,7 @@ import urt.driver.gpio : Pull;
 import urt.driver.rp2350 : clk_peri_hz, gpio_route, out_of_reset, reset_io_bank0, reset_pads_bank0, reset_pulse, reset_uart0, reset_uart1, unreset_wait;
 import urt.driver.rp2350.gpio : gpio_set_pull;
 import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars;
+    UartTxCallback, uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
 
 import core.volatile;
@@ -57,7 +57,7 @@ bool uart_hw_init(uint id, UartConfig cfg)
 }
 
 // A warm reset spares the UART, so it is reset here: what is queued goes out first, then it starts clean.
-bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
     if (!divider_x64(cfg.baud_rate))
         return false;
@@ -71,7 +71,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
         return false;
     }
     immutable base = uart_base(id);
-    _ports.start(id, rx_cb, set_rx_level(id, cfg));
+    _ports.start(id, rx_cb, set_rx_level(id, cfg), tx_cb);
     uart_write_reg(base, uarticr, 0x7FF);
     uart_write_reg(base, uartimsc, im_rx | im_rt | im_errors);
     irq_handler_set(uart_irq[id], &uart_isr);
@@ -284,7 +284,10 @@ void uart_isr(uint irq)
     if (read || (status & (im_rt | im_errors)))
         _ports.notify(id);
     if (status & im_tx)
+    {
         tx_fill(id);
+        _ports.tx_room(id);
+    }
 }
 
 

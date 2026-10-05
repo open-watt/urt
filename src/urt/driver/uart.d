@@ -176,7 +176,7 @@ enum UartCallbackContext : ubyte
 alias UartRxCallback = bool function(Uart uart, size_t rx_avail,
                                      UartCallbackContext context) nothrow @nogc;
 
-enum bool has_rx_callback = __traits(compiles, { UartConfig c; uart_hw_open(0, c, UartRxCallback.init); });
+enum bool has_rx_callback = has_tx_callback || __traits(compiles, { UartConfig c; uart_hw_open(0, c, UartRxCallback.init); });
 
 // A backend with has_rx_timing applies UartConfig's RX latency and gap, live too, and reports what it runs with; one
 // that reports no gap says so with uart_reports_rx_gap.
@@ -184,16 +184,13 @@ enum bool has_rx_timing = __traits(compiles, { UartConfig c; uart_hw_set_rx_timi
 static if (!__traits(compiles, uart_reports_rx_gap))
     enum bool uart_reports_rx_gap = has_rx_timing;
 
-// Called from ISR/DMA when TX buffer space becomes available (e.g. FIFO
-// drains below threshold). The callee should feed more data via uart_write.
-// tx_avail: number of bytes that can be written to the TX buffer.
-alias UartTxCallback = void function(Uart uart, size_t tx_avail) nothrow @nogc;
+// Raised once after a short write, when the TX buffer has room again. Like the RX callback it only
+// signals the writer, must not call back into the driver, and in interrupt context returns whether
+// the interrupted platform should yield.
+alias UartTxCallback = bool function(Uart uart, UartCallbackContext context) nothrow @nogc;
 
-// Called from ISR to pull the next chunk of data for an async transmit.
-// offset: bytes already supplied so far (including initial buffer).
-// The driver provides a buffer; the callee fills it and returns how many
-// bytes were written. Called repeatedly until the transfer length is met.
-alias UartTxSupplyCallback = size_t function(Uart uart, size_t offset, void[] buf) nothrow @nogc;
+// A backend without it never signals TX room; its writer retries on its own schedule.
+enum bool has_tx_callback = __traits(compiles, { UartConfig c; uart_hw_open(0, c, UartRxCallback.init, UartTxCallback.init); });
 
 // Called when the RX line has been idle for the configured threshold.
 // Used for RS-485 frame boundary detection and bus arbitration.
@@ -270,7 +267,7 @@ void uart_deinit()
 
 // Port operations
 
-// No backend sizes its buffers or signals TX space yet, so buf_size and tx_cb are refused.
+// No backend sizes its buffers, so buf_size is refused; tx_cb needs has_tx_callback.
 Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, size_t buf_size = 0, UartRxCallback rx_cb = null, UartTxCallback tx_cb = null)
 {
     static if (num_uarts == 0)
@@ -279,13 +276,15 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, size_t buf
     {
         if (port < first_uart || port >= first_uart + num_uarts || cfg.baud_rate == 0)
             return InternalResult.invalid_parameter;
-        if (!uart_config_supported(cfg) || buf_size != 0 || tx_cb !is null)
+        if (!uart_config_supported(cfg) || buf_size != 0 || (!has_tx_callback && tx_cb !is null))
             return InternalResult.unsupported;
         immutable uint owned = 1 << (port - first_uart);
         if (uart.is_open || (_open_ports & owned))
             return InternalResult.already_exists;
 
-        static if (__traits(compiles, uart_hw_open(port, cfg, rx_cb)))
+        static if (has_tx_callback)
+            bool opened = uart_hw_open(port, cfg, rx_cb, tx_cb);
+        else static if (__traits(compiles, uart_hw_open(port, cfg, rx_cb)))
             bool opened = uart_hw_open(port, cfg, rx_cb);
         else
         {
@@ -355,6 +354,7 @@ ptrdiff_t uart_read(ref Uart uart, void[] buffer, Duration timeout = Duration.ze
     }
 }
 
+// Never waits for the line: takes what the TX buffer holds now and returns how much that was.
 ptrdiff_t uart_write(ref Uart uart, const(void)[] data, UartWriteOp* op = null)
 {
     static if (num_uarts == 0)
@@ -407,16 +407,6 @@ ptrdiff_t uart_writev(ref Uart uart, const(void[])[] buffers, UartWriteOp* op = 
         }
         return total;
     }
-}
-
-ptrdiff_t uart_write_async(ref Uart uart, size_t total_len, UartTxSupplyCallback supply_cb, const(void)[] initial = null, UartWriteOp* op = null)
-{
-    assert(false, "TODO: uart_write_async (needs ISR integration)");
-}
-
-void uart_write_cancel(ref Uart uart, UartWriteOp* op)
-{
-    assert(false, "TODO: uart_write_cancel");
 }
 
 // Buffer queries

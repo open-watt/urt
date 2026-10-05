@@ -3,7 +3,7 @@
 module urt.driver.uart_core;
 
 import urt.driver.irq : irq_critical;
-import urt.driver.uart : Uart, UartCallbackContext, UartError, UartRxCallback, UartRxTiming;
+import urt.driver.uart : Uart, UartCallbackContext, UartError, UartRxCallback, UartRxTiming, UartTxCallback;
 import urt.mem.alloc : MemFlags, alloc, free;
 import urt.mem.ring : RingBuffer;
 import urt.sync.spsc : SPSCRing;
@@ -11,7 +11,6 @@ import urt.time : getTime, msecs;
 
 nothrow @nogc:
 
-enum tx_stall_limit = 50.msecs;
 enum tx_drain_limit = 250.msecs;
 enum uint puts_stall_spins = 1_000_000;     // tens of milliseconds of register reads: no clock on a fault path
 
@@ -49,9 +48,11 @@ nothrow @nogc:
         return true;
     }
 
-    void start(uint id, UartRxCallback cb, UartRxTiming timing)
+    void start(uint id, UartRxCallback cb, UartRxTiming timing, UartTxCallback tx_cb = null)
     {
         _port[id].cb = cb;
+        static if (queues_tx)
+            _port[id].tx_cb = tx_cb;
         retime(id, timing);
     }
 
@@ -82,31 +83,28 @@ nothrow @nogc:
 
     static if (queues_tx)
     {
-        // Blocks while the ring is full and the line drains it; a line that stops, as CTS can hold it, ends the write short.
+        // Takes what the ring holds now; a short write raises the TX callback once the ring is half empty.
         ptrdiff_t write(uint id, const(void)[] data)
         {
-            if (!_port[id].tx)
+            Port* p = &_port[id];
+            if (!p.tx)
                 return 0;
-            size_t total = 0;
-            auto give_up = getTime() + tx_stall_limit;
-            while (total < data.length)
-            {
-                size_t n;
-                {
-                    auto guard = irq_critical();
-                    n = _port[id].tx.write(data[total .. $]);
-                    tx_fill(id);
-                }
-                immutable now = getTime();
-                if (n)
-                {
-                    total += n;
-                    give_up = now + tx_stall_limit;
-                }
-                else if (now >= give_up)
-                    break;
-            }
-            return total;
+            auto guard = irq_critical();
+            size_t n = p.tx.write(data);
+            tx_fill(id);
+            if (n < data.length)
+                p.tx_wait = true;
+            return n;
+        }
+
+        // ISR side, after a refill.
+        bool tx_room(uint id)
+        {
+            Port* p = &_port[id];
+            if (!p.tx_wait || p.tx.pending > UartTxRing.capacity / 2)
+                return false;
+            p.tx_wait = false;
+            return p.tx_cb ? p.tx_cb(Uart(cast(ubyte)(id + first)), UartCallbackContext.interrupt) : false;
         }
     }
 
@@ -181,13 +179,18 @@ private:
     {
         UartRxRing* rx;
         static if (queues_tx)
+        {
             UartTxRing* tx;
+            UartTxCallback tx_cb;
+        }
         else
             enum UartTxRing* tx = null;
         UartRxCallback cb;
         uint latency_us;
         ubyte gap;
         UartError errors;
+        static if (queues_tx)
+            bool tx_wait;
     }
 
     Port[count] _port;
@@ -202,7 +205,7 @@ unittest
         static __gshared ubyte[64] wire;
         static __gshared size_t sent;
         static __gshared UartPorts!(2, 1, idle, fill) ports;
-        static __gshared size_t calls, last_avail;
+        static __gshared size_t calls, last_avail, tx_calls;
 
     nothrow @nogc:
         static void fill(uint id)
@@ -226,22 +229,34 @@ unittest
             last_avail = avail;
             return false;
         }
+
+        static bool tx_cb(Uart u, UartCallbackContext context)
+        {
+            assert(u.port == 2 && context == UartCallbackContext.interrupt);
+            ++tx_calls;
+            return false;
+        }
     }
     alias ports = Model.ports;
 
     assert(ports.read(1, null) == 0 && ports.write(1, "x") == 0 && ports.tx_pending(1) == 0, "a closed port moves nothing");
 
     assert(ports.acquire(1));
-    ports.start(1, &Model.cb, UartRxTiming(80, 35));
+    ports.start(1, &Model.cb, UartRxTiming(80, 35), &Model.tx_cb);
     assert(ports.timing(1).latency_us == 80);
 
     assert(ports.write(1, "hello") == 5 && Model.sent == 5 && Model.wire[0 .. 5] == "hello", "a running line takes the whole write");
 
+    ports.tx_room(1);
+    assert(Model.tx_calls == 0, "a whole write leaves no writer waiting");
+
     Model.stalled = true;
     ubyte[1500] big;
     immutable t0 = getTime();
-    assert(ports.write(1, big[]) == 1023 && ports.tx_pending(1) == 1023, "a stalled line ends the write when the ring fills");
-    assert(getTime() - t0 >= tx_stall_limit, "and only after the stall limit");
+    assert(ports.write(1, big[]) == 1023 && ports.tx_pending(1) == 1023, "a stalled line takes what the ring holds");
+    assert(getTime() - t0 < 10.msecs, "and the write does not wait for the line");
+    ports.tx_room(1);
+    assert(Model.tx_calls == 0, "a full ring has no room to report");
 
     Model.busy = true;
     immutable t1 = getTime();
@@ -252,6 +267,10 @@ unittest
     Model.busy = false;
     ports.drain(1);
     assert(ports.tx_pending(1) == 0 && Model.sent == 5 + 1023, "a drain empties the ring into the line");
+    ports.tx_room(1);
+    assert(Model.tx_calls == 1, "the short writer hears once the ring has room");
+    ports.tx_room(1);
+    assert(Model.tx_calls == 1, "and only once");
 
     assert(ports.receive(1, 'a') && ports.receive(1, 'b'));
     ports.notify(1);

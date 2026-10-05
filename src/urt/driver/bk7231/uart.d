@@ -6,7 +6,7 @@ import core.volatile;
 
 import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
     uart_chars_us, uart_rate_close, uart_rx_chars;
-import urt.driver.uart_core : UartPorts, puts_stall_spins, tx_stall_limit;
+import urt.driver.uart_core : UartPorts, puts_stall_spins;
 import urt.driver.gpio : Pull, gpio_set_function;
 import urt.driver.irq : irq_handler_set, irq_line_enable;
 import urt.time : MonoTime, getTime, usecs;
@@ -256,24 +256,14 @@ ptrdiff_t uart_hw_read(uint id, void[] buffer)
     => _ports.read(id, buffer);
 
 // TODO: TX_FIFO_NEED_WRITE never fires on this part, as the vendor's busy-wait in uart_write_byte suggests, so a
-// write goes straight into the FIFO and returns what it took, ending short once the line has stalled.
+// write goes straight into the FIFO, takes what it holds, and raises no TX callback.
 ptrdiff_t uart_hw_write(uint id, const(void)[] data)
 {
     immutable uint base = uart_bases[id];
     auto bytes = cast(const(ubyte)[])data;
     size_t n = 0;
-    auto give_up = getTime() + tx_stall_limit;
-    while (n < bytes.length)
-    {
-        immutable size_t was = n;
-        while (n < bytes.length && (reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
-            reg_write(base + REG_FIFO_PORT, bytes[n++]);
-        immutable now = getTime();
-        if (n != was)
-            give_up = now + tx_stall_limit;
-        else if (now >= give_up)
-            break;
-    }
+    while (n < bytes.length && (reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
+        reg_write(base + REG_FIFO_PORT, bytes[n++]);
     _fifo_empty[id] = false;
     return n;
 }

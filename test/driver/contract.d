@@ -27,13 +27,19 @@ int main()
 
 private:
 
-__gshared uint rx_calls;
+__gshared uint rx_calls, tx_calls;
 __gshared size_t rx_avail;
 
 bool on_rx(Uart, size_t avail, UartCallbackContext)
 {
     ++rx_calls;
     rx_avail = avail;
+    return false;
+}
+
+bool on_tx(Uart, UartCallbackContext)
+{
+    ++tx_calls;
     return false;
 }
 
@@ -49,7 +55,7 @@ Duration timed(alias f)()
 
 void uart_contract()
 {
-    import urt.driver.uart_core : tx_drain_limit, tx_stall_limit;
+    import urt.driver.uart_core : tx_drain_limit;
 
     reset();
     UartConfig cfg;
@@ -86,7 +92,8 @@ void uart_contract()
     static if (!has_rx_callback)
         assert(uart_open(u, uart_port, cfg, 0, &on_rx) == InternalResult.unsupported, "a backend without an RX event refuses a callback");
     assert(uart_open(u, uart_port, cfg, 64) == InternalResult.unsupported, "a buffer size nothing honours is refused");
-    assert(uart_open(u, uart_port, cfg, 0, null, (Uart, size_t) {}) == InternalResult.unsupported, "as is a TX callback nothing raises");
+    static if (!has_tx_callback)
+        assert(uart_open(u, uart_port, cfg, 0, null, &on_tx) == InternalResult.unsupported, "as is a TX callback nothing raises");
     static if (uart_has_pin_select)
     {
         bad = cfg;
@@ -124,6 +131,10 @@ void uart_contract()
         UartRxCallback cb = &on_rx;
     else
         UartRxCallback cb = null;
+    static if (has_tx_callback)
+        UartTxCallback tx_cb = &on_tx;
+    else
+        UartTxCallback tx_cb = null;
     enum bool queues = (uart_drive_modes & 1 << DriveMode.interrupt) != 0;
 
     immutable int baseline = live;
@@ -140,7 +151,7 @@ void uart_contract()
     }
     fail_after = uint.max;
 
-    assert(uart_open(u, uart_port, cfg, 0, cb));
+    assert(uart_open(u, uart_port, cfg, 0, cb, tx_cb));
     assert(uart_open(dup, uart_port, cfg) == InternalResult.already_exists, "an open port is not opened twice");
     assert(uart_open(u, other_port, cfg) == InternalResult.already_exists && u.port == uart_port, "an open handle is not opened again");
 
@@ -158,15 +169,16 @@ void uart_contract()
     foreach (i, ref b; big)
         b = cast(ubyte)(i * 7);
     ptrdiff_t accepted;
+    tx_calls = 0;
     immutable stall = timed!(() { accepted = uart_write(u, big[]); })();
-    assert(accepted > 0 && accepted < big.length && stall < tx_stall_limit + tx_drain_limit + 100.msecs, "a stalled line ends a write short");
-    static if (queues)
-        assert(stall >= tx_stall_limit, "after the stall limit");
+    assert(accepted > 0 && accepted < big.length && stall < 20.msecs, "a stalled line takes what fits, and the write does not wait for it");
     assert(uart_tx_queued(u) <= accepted, "what is still queued was accepted");
     assert(timed!(() => uart_tx_flush(u))() < tx_drain_limit + 200.msecs, "a flush against a stalled line is bounded");
     tx_hold(false);
     run_line();
     assert(wire() == big[0 .. accepted] && uart_tx_queued(u) == 0, "a released line sends everything accepted, in order, with no further call");
+    static if (has_tx_callback)
+        assert(tx_calls == 1, "and tells the short writer once that it has room");
 
     ubyte[600] buf;
     static if (has_rx_timing)

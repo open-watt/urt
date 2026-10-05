@@ -6,7 +6,7 @@ module urt.driver.esp32.uart;
 
 import urt.atomic : MemoryOrder, atomicExchange, atomicLoad, atomicStore;
 import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, Uart, UartCallbackContext, UartError,
-    UartConfig, UartRxCallback;
+    UartConfig, UartRxCallback, UartTxCallback;
 
 nothrow @nogc:
 
@@ -34,7 +34,7 @@ enum bool uart_has_rs485 = true;
 enum bool uart_has_pin_select = true;
 
 // A refused open leaves the callback of whoever holds the port.
-bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
     if (cfg.rs485.enabled &&
         (cfg.rs485.de_assert_us != 0 || cfg.rs485.de_deassert_us != 0 ||
@@ -46,20 +46,25 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
     byte de = cfg.rs485.enabled && cfg.rs485.de_gpio != ubyte.max
         ? cast(byte)cfg.rs485.de_gpio : -1;
     immutable size_t held = atomicExchange!(MemoryOrder.acq_rel)(&_rx_callback_bits[id], cast(size_t)rx_cb);
+    immutable size_t held_tx = atomicExchange!(MemoryOrder.acq_rel)(&_tx_callback_bits[id], cast(size_t)tx_cb);
     bool opened = ow_uart_open(id, cfg.baud_rate, cfg.data_bits,
                                cast(ubyte)cfg.stop_bits,
                                cast(ubyte)cfg.parity,
                                tx, rx, cfg.rs485.enabled, de,
                                cfg.rs485.de_active_high,
-                               &rx_ready) != 0;
+                               &rx_ready, &tx_ready) != 0;
     if (!opened)
+    {
         atomicStore!(MemoryOrder.release)(_rx_callback_bits[id], held);
+        atomicStore!(MemoryOrder.release)(_tx_callback_bits[id], held_tx);
+    }
     return opened;
 }
 
 void uart_hw_close(uint id)
 {
     atomicStore!(MemoryOrder.release)(_rx_callback_bits[id], cast(size_t)0);
+    atomicStore!(MemoryOrder.release)(_tx_callback_bits[id], cast(size_t)0);
     ow_uart_close(id);
 }
 
@@ -107,6 +112,7 @@ void uart0_hw_puts(const(char)[] s)
 private:
 
 shared size_t[num_uarts] _rx_callback_bits;
+shared size_t[num_uarts] _tx_callback_bits;
 
 extern(C) void rx_ready(uint port, size_t available)
 {
@@ -118,6 +124,16 @@ extern(C) void rx_ready(uint port, size_t available)
         callback(Uart(cast(ubyte)port), available, UartCallbackContext.thread);
 }
 
+extern(C) void tx_ready(uint port)
+{
+    if (port >= num_uarts)
+        return;
+    auto callback = cast(UartTxCallback)
+        atomicLoad!(MemoryOrder.acquire)(_tx_callback_bits[port]);
+    if (callback !is null)
+        callback(Uart(cast(ubyte)port), UartCallbackContext.thread);
+}
+
 extern(C) nothrow @nogc
 {
     void esp_rom_uart_putc(char c) nothrow @nogc;
@@ -125,7 +141,8 @@ extern(C) nothrow @nogc
     int ow_uart_open(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits,
                      ubyte parity, byte tx_gpio, byte rx_gpio,
                      bool rs485_enabled, byte de_gpio, bool de_active_high,
-                     void function(uint, size_t) nothrow @nogc rx_ready);
+                     void function(uint, size_t) nothrow @nogc rx_ready,
+                     void function(uint) nothrow @nogc tx_ready);
     void ow_uart_close(uint port);
     void ow_uart_poll(uint port);
     int ow_uart_read(uint port, ubyte* buf, int len);

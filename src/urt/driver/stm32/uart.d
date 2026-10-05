@@ -7,7 +7,7 @@ import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_lin
 import urt.driver.stm32 : clock_enable, pclk1_hz, pclk2_hz, rcc_apb1enr, rcc_apb2enr, reg_read, reg_write;
 import urt.driver.stm32.gpio : gpio_set_function;
 import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
+    UartTxCallback, uart_chars_us, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
 
 nothrow @nogc:
@@ -122,7 +122,7 @@ bool uart_hw_init(uint id, UartConfig cfg)
     return true;
 }
 
-bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
     if (!_ports.acquire(id))
         return false;
@@ -133,7 +133,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
     }
     static if (!has_fifo)
         _rx_count[id] = 0;
-    _ports.start(id, rx_cb, rx_timing(id, cfg));
+    _ports.start(id, rx_cb, rx_timing(id, cfg), tx_cb);
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
     immutable base = uart_base[id];
@@ -681,7 +681,10 @@ void uart_isr(uint irq)
         _ports.notify(id);
     }
     if (reg_read(base + tx_ie_reg) & tx_ie)
+    {
         tx_fill(id);
+        _ports.tx_room(id);
+    }
 }
 
 

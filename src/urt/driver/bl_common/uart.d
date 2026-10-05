@@ -6,7 +6,7 @@ import core.volatile;
 
 import urt.driver.irq : irq_handler_set, irq_line_disable, irq_line_enable;
 import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
+    UartTxCallback, uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
 import urt.driver.uart_core : UartPorts;
 
 version (BL808_M0)
@@ -121,7 +121,7 @@ private enum uint FIFO_DEPTH = 32;
 private enum uint TX_FIFO_THRESHOLD = FIFO_DEPTH / 2;
 
 
-bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
     immutable id = port - first_uart;
     immutable uint period = bit_period(cfg.baud_rate);
@@ -164,7 +164,7 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb)
     reg_write(base, FIFO_CONFIG_0, (reg_read(base, FIFO_CONFIG_0) & DMA_EN) | TX_FIFO_CLR | RX_FIFO_CLR);
 
     reg_write(base, FIFO_CONFIG_1, (reg_read(base, FIFO_CONFIG_1) & ~TX_FIFO_TH_MASK) | (TX_FIFO_THRESHOLD - 1) << TX_FIFO_TH_SHIFT);
-    _ports.start(id, rx_cb, set_rx_timing(id, cfg));
+    _ports.start(id, rx_cb, set_rx_timing(id, cfg), tx_cb);
 
     reg_write(base, INT_CLEAR, INT_MASK_ALL);
     reg_write(base, INT_EN, INT_UTX_FIFO | INT_RX);
@@ -290,7 +290,10 @@ void uart_isr(uint irq)
         reg_write(base, FIFO_CONFIG_0, (reg_read(base, FIFO_CONFIG_0) & DMA_EN) | RX_FIFO_CLR);
     }
     if (active & INT_UTX_FIFO)
+    {
         fill_tx_fifo(id);
+        _ports.tx_room(id);
+    }
 
     if (read || (active & (INT_URX_RTO | INT_URX_PCE | INT_URX_FER)))
         _ports.notify(id);

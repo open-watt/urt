@@ -5,9 +5,10 @@ module urt.driver.bl_common.uart;
 import core.volatile;
 
 import urt.driver.irq : irq_handler_set, irq_line_disable, irq_line_enable;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+    UartRxTiming, UartTxCallback, uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
 import urt.driver.uart_core : UartPorts;
+import urt.mem.page : Page;
 
 version (BL808_M0)
     version = McuUarts;
@@ -121,11 +122,11 @@ private enum uint FIFO_DEPTH = 32;
 private enum uint TX_FIFO_THRESHOLD = FIFO_DEPTH / 2;
 
 
-bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
     immutable id = port - first_uart;
     immutable uint period = bit_period(cfg.baud_rate);
-    if (!period || !_ports.acquire(id))
+    if (!period || !_ports.acquire(id, cfg))
         return false;
 
     immutable base = uart_base[id];
@@ -164,7 +165,7 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb)
     reg_write(base, FIFO_CONFIG_0, (reg_read(base, FIFO_CONFIG_0) & DMA_EN) | TX_FIFO_CLR | RX_FIFO_CLR);
 
     reg_write(base, FIFO_CONFIG_1, (reg_read(base, FIFO_CONFIG_1) & ~TX_FIFO_TH_MASK) | (TX_FIFO_THRESHOLD - 1) << TX_FIFO_TH_SHIFT);
-    _ports.start(id, rx_cb, set_rx_timing(id, cfg));
+    _ports.start(id, rx_cb, tx_cb, set_rx_timing(id, cfg));
 
     reg_write(base, INT_CLEAR, INT_MASK_ALL);
     reg_write(base, INT_EN, INT_UTX_FIFO | INT_RX);
@@ -192,13 +193,14 @@ void uart_hw_close(uint port)
     _ports.release(id);
 }
 
-void uart_hw_poll(uint port) {}
+bool uart_hw_send(uint port, Page* chain)
+    => _ports.send(port - first_uart, chain);
 
-ptrdiff_t uart_hw_read(uint port, void[] buffer)
-    => _ports.read(port - first_uart, buffer);
-
-ptrdiff_t uart_hw_write(uint port, const(void)[] data)
+size_t uart_hw_write(uint port, const(void)[] data)
     => _ports.write(port - first_uart, data);
+
+Page* uart_hw_rx_take(uint port)
+    => _ports.rx_take(port - first_uart);
 
 UartRxTiming uart_hw_rx_timing(uint port)
     => _ports.timing(port - first_uart);
@@ -211,18 +213,14 @@ UartRxTiming uart_hw_set_rx_timing(uint port, ref const UartConfig cfg)
     return _ports.timing(id);
 }
 
-ptrdiff_t uart_hw_tx_pending(uint port)
+size_t uart_hw_tx_pending(uint port)
     => _ports.tx_pending(port - first_uart);
 
-ptrdiff_t uart_hw_rx_pending(uint port)
-    => _ports.rx_pending(port - first_uart);
-
-ptrdiff_t uart_hw_flush(uint port)
+void uart_hw_flush(uint port)
 {
     immutable id = port - first_uart;
     if (reg_read(uart_base[id], UTX_CONFIG) & CR_UTX_EN)
         _ports.drain(id);
-    return 0;
 }
 
 UartError uart_hw_check_errors(uint port)
@@ -237,9 +235,17 @@ __gshared UartPorts!(num_uarts, first_uart, tx_idle, fill_tx_fifo) _ports;
 void fill_tx_fifo(uint id)
 {
     immutable base = uart_base[id];
-    ubyte b;
-    for (uint space = reg_read(base, FIFO_CONFIG_1) & TX_FIFO_CNT_MASK; space > 0 && _ports.tx_pop(id, b); --space)
-        reg_write(base, FIFO_WDATA, b);
+    for (uint space = reg_read(base, FIFO_CONFIG_1) & TX_FIFO_CNT_MASK; space > 0; )
+    {
+        const(ubyte)[] bytes = _ports.tx_bytes(id);
+        if (!bytes.length)
+            break;
+        immutable size_t n = bytes.length < space ? bytes.length : space;
+        foreach (b; bytes[0 .. n])
+            reg_write(base, FIFO_WDATA, b);
+        space -= n;
+        _ports.tx_advance(id, n);
+    }
     uint mask = reg_read(base, INT_MASK);
     mask = _ports.tx_queued(id) ? mask & ~INT_UTX_FIFO : mask | INT_UTX_FIFO;
     reg_write(base, INT_MASK, mask);
@@ -289,6 +295,8 @@ void uart_isr(uint irq)
         _ports.error(id, UartError.overrun);
         reg_write(base, FIFO_CONFIG_0, (reg_read(base, FIFO_CONFIG_0) & DMA_EN) | RX_FIFO_CLR);
     }
+    if (active & INT_URX_RTO)
+        _ports.gap(id);
     if (active & INT_UTX_FIFO)
         fill_tx_fifo(id);
 

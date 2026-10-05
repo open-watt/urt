@@ -134,6 +134,21 @@ void page_pool_wake()
     }
 }
 
+// The bytes of a chain read as one series: the contiguous span at offset, up to length, ending where its page does.
+const(void)[] page_chain_span(const(Page)* chain, size_t offset, size_t length)
+{
+    for (const(Page)* page = chain; page; page = (cast(Page*)page).next)
+    {
+        if (offset < page.length)
+        {
+            immutable size_t n = page.length - offset < length ? page.length - offset : length;
+            return page.data[offset .. offset + n];
+        }
+        offset -= page.length;
+    }
+    return null;
+}
+
 package(urt):
 
 void page_freed()

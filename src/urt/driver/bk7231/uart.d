@@ -4,11 +4,13 @@ module urt.driver.bk7231.uart;
 
 import core.volatile;
 
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_rate_close, uart_rx_chars;
-import urt.driver.uart_core : UartPorts, puts_stall_spins, tx_stall_limit;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+    UartRxTiming, UartTxCallback, uart_chars_us, uart_frame_bits, uart_rate_close, uart_rx_chars;
+import urt.driver.uart_core : UartPorts, puts_stall_spins;
+import urt.driver.bk7231.timer : mtime_freq_hz, timer2_set_periodic;
 import urt.driver.gpio : Pull, gpio_set_function;
 import urt.driver.irq : irq_handler_set, irq_line_enable;
+import urt.mem.page : Page;
 import urt.time : MonoTime, getTime, usecs;
 
 nothrow @nogc:
@@ -225,17 +227,18 @@ bool uart_hw_init(uint id, UartConfig cfg)
     return true;
 }
 
-bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
-    if (!_ports.acquire(id))
+    if (!_ports.acquire(id, cfg))
         return false;
     if (!uart_hw_init(id, cfg))
     {
         _ports.release(id);
         return false;
     }
-    _ports.start(id, rx_cb, UartRxTiming(uart_chars_us(cfg, rx_threshold(cfg))));
+    _ports.start(id, rx_cb, tx_cb, UartRxTiming(uart_chars_us(cfg, rx_threshold(cfg))));
     _char_ticks[id] = cast(uint)usecs(uart_chars_us(cfg, 1) + 1).ticks;
+    _refill_ticks[id] = cast(uint)(ulong(mtime_freq_hz) * (FIFO_DEPTH / 2) * uart_frame_bits(cfg) / cfg.baud_rate);
     _fifo_empty[id] = false;
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
@@ -250,33 +253,17 @@ void uart_hw_close(uint id)
     reg_write(base + REG_INT_ENABLE, 0);
     reg_write(base + REG_CONFIG, reg_read(base + REG_CONFIG) & ~(CFG_TX_ENABLE | CFG_RX_ENABLE));
     _ports.release(id);
+    arm_refill();
 }
 
-ptrdiff_t uart_hw_read(uint id, void[] buffer)
-    => _ports.read(id, buffer);
+bool uart_hw_send(uint id, Page* chain)
+    => _ports.send(id, chain);
 
-// TODO: TX_FIFO_NEED_WRITE never fires on this part, as the vendor's busy-wait in uart_write_byte suggests, so a
-// write goes straight into the FIFO and returns what it took, ending short once the line has stalled.
-ptrdiff_t uart_hw_write(uint id, const(void)[] data)
-{
-    immutable uint base = uart_bases[id];
-    auto bytes = cast(const(ubyte)[])data;
-    size_t n = 0;
-    auto give_up = getTime() + tx_stall_limit;
-    while (n < bytes.length)
-    {
-        immutable size_t was = n;
-        while (n < bytes.length && (reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
-            reg_write(base + REG_FIFO_PORT, bytes[n++]);
-        immutable now = getTime();
-        if (n != was)
-            give_up = now + tx_stall_limit;
-        else if (now >= give_up)
-            break;
-    }
-    _fifo_empty[id] = false;
-    return n;
-}
+size_t uart_hw_write(uint id, const(void)[] data)
+    => _ports.write(id, data);
+
+Page* uart_hw_rx_take(uint id)
+    => _ports.rx_take(id);
 
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
@@ -290,22 +277,16 @@ UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
     return _ports.timing(id);
 }
 
-ptrdiff_t uart_hw_tx_pending(uint id)
+size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
-
-void uart_hw_poll(uint id) {}
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-ptrdiff_t uart_hw_rx_pending(uint id)
-    => _ports.rx_pending(id);
-
-ptrdiff_t uart_hw_flush(uint id)
+void uart_hw_flush(uint id)
 {
     if (reg_read(uart_bases[id] + REG_CONFIG) & CFG_TX_ENABLE)
         _ports.drain(id);
-    return 0;
 }
 
 // Blocking output for early boot and fault context on UART1, the console.
@@ -332,8 +313,9 @@ private:
 // driver/include/intc_pub.h: IRQ_UART1 = 0, IRQ_UART2 = 1
 immutable uint[2] uart_irq = [0, 1];
 
-__gshared UartPorts!(num_uarts, 0, tx_idle) _ports;
-__gshared uint[num_uarts] _char_ticks;
+__gshared UartPorts!(num_uarts, 0, tx_idle, tx_fill) _ports;
+__gshared uint[num_uarts] _char_ticks, _refill_ticks;
+__gshared uint _refill_armed;
 __gshared MonoTime[num_uarts] _empty_at;
 __gshared bool[num_uarts] _fifo_empty;
 
@@ -348,6 +330,50 @@ uint rx_threshold(ref const UartConfig cfg)
 {
     immutable uint chars = uart_rx_chars(cfg);
     return chars < FIFO_DEPTH / 2 ? chars : FIFO_DEPTH / 2;
+}
+
+// TX_FIFO_NEED_WRITE never fires on this part, as the vendor's busy-wait in uart_write_byte suggests, so Timer2
+// refills the FIFO every half FIFO's worth of line time while either port has pages queued.
+// Caller holds interrupts off, or runs in the ISR.
+void tx_fill(uint id)
+{
+    immutable uint base = uart_bases[id];
+    while (reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY)
+    {
+        const(ubyte)[] bytes = _ports.tx_bytes(id);
+        if (!bytes.length)
+            break;
+        size_t n;
+        while (n < bytes.length && (reg_read(base + REG_FIFO_STATUS) & STAT_FIFO_WR_READY))
+            reg_write(base + REG_FIFO_PORT, bytes[n++]);
+        _fifo_empty[id] = false;
+        _ports.tx_advance(id, n);
+    }
+    arm_refill();
+}
+
+// The fastest refill any port with pages queued needs, or stopped when none waits.
+void arm_refill()
+{
+    uint period = 0;
+    foreach (i; 0 .. num_uarts)
+    {
+        if (_ports.tx_queued(i) && (!period || _refill_ticks[i] < period))
+            period = _refill_ticks[i];
+    }
+    if (period == _refill_armed)
+        return;
+    _refill_armed = period;
+    timer2_set_periodic(period, period ? &refill : null);
+}
+
+void refill()
+{
+    foreach (i; 0 .. num_uarts)
+    {
+        if (_ports.tx_queued(i))
+            tx_fill(i);
+    }
 }
 
 // Nothing shows the character still shifting, so the FIFO must have stood empty for a character time.
@@ -390,6 +416,8 @@ void uart_isr(uint irq)
         _ports.receive(id, cast(ubyte)(reg_read(base + REG_FIFO_PORT) >> STAT_RX_FIFO_DOUT_POS));
         read = true;
     }
+    if (status & INT_RX_STOP_END)
+        _ports.gap(id);
     if (read || (status & (INT_RX_STOP_END | INT_ALL_ERRORS)))
         _ports.notify(id);
 }

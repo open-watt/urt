@@ -6,9 +6,10 @@ import urt.driver.gpio : Pull;
 import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_line_enable;
 import urt.driver.stm32 : clock_enable, pclk1_hz, pclk2_hz, rcc_apb1enr, rcc_apb2enr, reg_read, reg_write;
 import urt.driver.stm32.gpio : gpio_set_function;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+    UartRxTiming, UartTxCallback, uart_chars_us, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
+import urt.mem.page : Page;
 
 nothrow @nogc:
 
@@ -122,9 +123,9 @@ bool uart_hw_init(uint id, UartConfig cfg)
     return true;
 }
 
-bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
-    if (!_ports.acquire(id))
+    if (!_ports.acquire(id, cfg))
         return false;
     if (!uart_hw_init(id, cfg))
     {
@@ -133,7 +134,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
     }
     static if (!has_fifo)
         _rx_count[id] = 0;
-    _ports.start(id, rx_cb, rx_timing(id, cfg));
+    _ports.start(id, rx_cb, tx_cb, rx_timing(id, cfg));
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
     immutable base = uart_base[id];
@@ -156,11 +157,14 @@ void uart_hw_close(uint id)
     _ports.release(id);
 }
 
-ptrdiff_t uart_hw_read(uint id, void[] buffer)
-    => _ports.read(id, buffer);
+bool uart_hw_send(uint id, Page* chain)
+    => _ports.send(id, chain);
 
-ptrdiff_t uart_hw_write(uint id, const(void)[] data)
+size_t uart_hw_write(uint id, const(void)[] data)
     => _ports.write(id, data);
+
+Page* uart_hw_rx_take(uint id)
+    => _ports.rx_take(id);
 
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
@@ -183,22 +187,16 @@ UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
     return _ports.timing(id);
 }
 
-ptrdiff_t uart_hw_tx_pending(uint id)
+size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
-
-void uart_hw_poll(uint id) {}
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-ptrdiff_t uart_hw_rx_pending(uint id)
-    => _ports.rx_pending(id);
-
-ptrdiff_t uart_hw_flush(uint id)
+void uart_hw_flush(uint id)
 {
     if (reg_read(uart_base[id] + cr1) & cr1_ue)
         _ports.drain(id);
-    return 0;
 }
 
 // Blocking console output for early boot and fault context; queued output goes first. Each
@@ -601,9 +599,16 @@ else
 void tx_fill(uint id)
 {
     immutable base = uart_base[id];
-    ubyte b;
-    while ((reg_read(base + sr) & st_txe) && _ports.tx_pop(id, b))
-        reg_write(base + tdr, b);
+    while (reg_read(base + sr) & st_txe)
+    {
+        const(ubyte)[] bytes = _ports.tx_bytes(id);
+        if (!bytes.length)
+            break;
+        size_t n;
+        while (n < bytes.length && (reg_read(base + sr) & st_txe))
+            reg_write(base + tdr, bytes[n++]);
+        _ports.tx_advance(id, n);
+    }
     uint ie = reg_read(base + tx_ie_reg);
     ie = _ports.tx_queued(id) ? ie | tx_ie : ie & ~tx_ie;
     reg_write(base + tx_ie_reg, ie);
@@ -665,14 +670,15 @@ void uart_isr(uint irq)
     }
     if (fault)
         _ports.error(id, sr_errors[fault]);
+    immutable bool ended = (status & gap) && _ports.gap(id);
 
     bool deliver;
     static if (has_fifo)
-        deliver = read != 0 || (status & gap) != 0;
+        deliver = read != 0 || ended;
     else
     {
         _rx_count[id] += read;
-        deliver = _rx_count[id] >= _rx_chars[id] || ((status & gap) && _rx_count[id] != 0);
+        deliver = _rx_count[id] >= _rx_chars[id] || ended;
     }
     if (deliver || fault)
     {

@@ -155,6 +155,25 @@ void timer_set_periodic(ulong period_ticks, TimerCallback cb)
     reg_write(TIMER0_2_CTL, (ctl & ~INT_FLAG_MASK) | TIMER1_EN);
 }
 
+private __gshared TimerCallback timer2_callback;
+
+// Timer2 serves a driver's own deadlines: cb runs from interrupt context every period while set; null stops it.
+void timer2_set_periodic(ulong period_ticks, TimerCallback cb)
+{
+    timer2_callback = cb;
+    immutable uint ctl = reg_read(TIMER0_2_CTL) & ~INT_FLAG_MASK;
+    if (!cb || period_ticks == 0)
+    {
+        reg_write(TIMER0_2_CTL, ctl & ~TIMER2_EN);
+        return;
+    }
+    assert(period_ticks <= uint.max, "bk7231 timer: period out of range");
+    reg_write(TIMER2_PERIOD, cast(uint)period_ticks);
+    irq_handler_set(IRQ_TIMER, &timer_isr);
+    irq_line_enable(IRQ_TIMER);
+    reg_write(TIMER0_2_CTL, ctl | TIMER2_EN);
+}
+
 private void timer_isr(uint irq) nothrow @nogc
 {
     uint pending = reg_read(TIMER0_2_CTL) & INT_FLAG_MASK;
@@ -168,6 +187,8 @@ private void timer_isr(uint irq) nothrow @nogc
 
     if ((pending & TIMER1_INT) && tick_callback)
         tick_callback();
+    if ((pending & TIMER2_INT) && timer2_callback)
+        timer2_callback();
 }
 
 // driver/include/intc_pub.h

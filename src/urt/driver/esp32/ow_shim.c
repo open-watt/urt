@@ -1227,23 +1227,39 @@ int ow_spi_resume(void *context_ptr)
 }
 
 
-// -- UART driver wrappers --
+// -- UART driver --
+// The IDF configures the port (uart_param_config, uart_set_pin, uart_set_line_inverse need no installed driver), but
+// its driver is never installed: our ISR, in urt.driver.esp32.uart, owns the FIFOs through the HAL. RS485 half
+// duplex follows the IDF driver's handling: RTS asserted before each FIFO write, released on TX_DONE once idle.
+
+#include "hal/uart_hal.h"
+#include "hal/uart_periph.h"
 
 #define NUM_UARTS SOC_UART_NUM
-#define UART_RX_BUFFER_SIZE 1024
-#define UART_TX_BUFFER_SIZE 1024
-#define UART_EVENT_QUEUE_SIZE 16
-#define UART_EVENT_TASK_STACK 3072
 
-typedef void (*ow_uart_rx_ready_cb_t)(unsigned port, size_t available);
+// what the ISR found, in bits shared with the D side
+#define OW_UART_RX       (1u << 0)
+#define OW_UART_TIMEOUT  (1u << 1)
+#define OW_UART_TX       (1u << 2)
+#define OW_UART_TX_DONE  (1u << 3)
+#define OW_UART_PARITY   (1u << 4)
+#define OW_UART_FRAMING  (1u << 5)
+#define OW_UART_OVERFLOW (1u << 6)
+#define OW_UART_BREAK    (1u << 7)
 
-static atomic_bool uart_initialized[NUM_UARTS];
-static QueueHandle_t uart_event_queue[NUM_UARTS];
-static TaskHandle_t uart_event_task[NUM_UARTS];
-static SemaphoreHandle_t uart_event_task_done[NUM_UARTS];
-static StaticSemaphore_t uart_event_task_done_storage[NUM_UARTS];
-static atomic_uint uart_errors[NUM_UARTS];
-static _Atomic(ow_uart_rx_ready_cb_t) uart_rx_ready[NUM_UARTS];
+#define OW_UART_RX_INTR (UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_OVF | UART_INTR_FRAM_ERR | UART_INTR_PARITY_ERR | UART_INTR_BRK_DET)
+
+static uart_hal_context_t uart_hal[NUM_UARTS];
+static intr_handle_t uart_intr[NUM_UARTS];
+static bool uart_rs485[NUM_UARTS];
+static int8_t uart_pins[NUM_UARTS][3];  // TX, RX and DE as routed at open; -1 left as they were
+
+extern void ow_uart_isr(unsigned port);
+
+static void ow_uart_isr_entry(void *arg)
+{
+    ow_uart_isr((unsigned)(uintptr_t)arg);
+}
 
 // D enums: StopBits { half=0, one=1, one_point_five=2, two=3 }
 //          Parity   { none=0, even=1, odd=2, mark=3, space=4 }
@@ -1255,64 +1271,11 @@ static const uart_parity_t parity_map[] = {
     UART_PARITY_DISABLE, UART_PARITY_DISABLE
 };
 
-static void ow_uart_event_task(void *argument)
+int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits, uint8_t stop_bits, uint8_t parity,
+                 int8_t tx_gpio, int8_t rx_gpio, bool rs485_enabled, int8_t de_gpio, bool de_active_high,
+                 uint8_t rx_full, uint8_t rx_timeout)
 {
-    unsigned port = (unsigned)(uintptr_t)argument;
-    uart_event_t event;
-
-    while (xQueueReceive(uart_event_queue[port], &event, portMAX_DELAY) == pdTRUE)
-    {
-        if (event.type == UART_EVENT_MAX)
-            break;
-
-        unsigned error = 0;
-        switch (event.type)
-        {
-            case UART_DATA:
-            {
-                size_t available = event.size;
-                uart_get_buffered_data_len((uart_port_t)port, &available);
-                ow_uart_rx_ready_cb_t callback = atomic_load_explicit(
-                    &uart_rx_ready[port], memory_order_acquire);
-                if (callback)
-                    callback(port, available);
-                continue;
-            }
-            case UART_BREAK:
-                error = 1u << 4;
-                break;
-            case UART_BUFFER_FULL:
-            case UART_FIFO_OVF:
-                error = 1u << 2;
-                uart_flush_input((uart_port_t)port);
-                break;
-            case UART_FRAME_ERR:
-                error = 1u << 0;
-                break;
-            case UART_PARITY_ERR:
-                error = 1u << 1;
-                break;
-            default:
-                continue;
-        }
-
-        atomic_fetch_or_explicit(&uart_errors[port], error, memory_order_relaxed);
-        ow_uart_rx_ready_cb_t callback = atomic_load_explicit(&uart_rx_ready[port], memory_order_acquire);
-        if (callback)
-            callback(port, 0);
-    }
-
-    xSemaphoreGive(uart_event_task_done[port]);
-    vTaskDelete(NULL);
-}
-
-int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits,
-                 uint8_t stop_bits, uint8_t parity,
-                 int8_t tx_gpio, int8_t rx_gpio,
-                 bool rs485_enabled, int8_t de_gpio, bool de_active_high,
-                 ow_uart_rx_ready_cb_t rx_ready)
-{
-    if (port >= NUM_UARTS || atomic_load_explicit(&uart_initialized[port], memory_order_acquire) || data_bits < 5 || data_bits > 8)
+    if (port >= NUM_UARTS || uart_intr[port] || data_bits < 5 || data_bits > 8)
         return 0;
 
     uart_config_t config = {0};
@@ -1326,125 +1289,138 @@ int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits,
     uart_port_t uart = (uart_port_t)port;
     if (uart_param_config(uart, &config) != ESP_OK ||
         uart_set_pin(uart, tx_gpio, rx_gpio, de_gpio, UART_PIN_NO_CHANGE) != ESP_OK ||
-        uart_driver_install(uart, UART_RX_BUFFER_SIZE, UART_TX_BUFFER_SIZE, UART_EVENT_QUEUE_SIZE, &uart_event_queue[port], 0) != ESP_OK)
-    {
-        uart_event_queue[port] = NULL;
+        uart_set_line_inverse(uart, rs485_enabled && !de_active_high ? UART_SIGNAL_RTS_INV : 0) != ESP_OK)
         return 0;
-    }
+    uart_pins[port][0] = tx_gpio;
+    uart_pins[port][1] = rx_gpio;
+    uart_pins[port][2] = de_gpio;
 
-    uint32_t inverse = rs485_enabled && !de_active_high ? UART_SIGNAL_RTS_INV : 0;
-    if (uart_set_line_inverse(uart, inverse) != ESP_OK)
+    uart_hal_context_t *hal = &uart_hal[port];
+    uart_hal_init(hal, uart);
+    uart_hal_set_mode(hal, rs485_enabled ? UART_MODE_RS485_HALF_DUPLEX : UART_MODE_UART);
+    uart_rs485[port] = rs485_enabled;
+    uart_hal_set_rxfifo_full_thr(hal, rx_full);
+    uart_hal_set_txfifo_empty_thr(hal, UART_HW_FIFO_LEN(port) / 2);
+    uart_hal_set_rx_timeout(hal, rx_timeout);
+    uart_hal_disable_intr_mask(hal, UART_LL_INTR_MASK);
+    uart_hal_clr_intsts_mask(hal, UART_LL_INTR_MASK);
+    if (esp_intr_alloc(uart_periph_signal[port].irq, 0, ow_uart_isr_entry, (void *)(uintptr_t)port, &uart_intr[port]) != ESP_OK)
     {
-        uart_driver_delete(uart);
-        uart_event_queue[port] = NULL;
+        uart_intr[port] = NULL;
         return 0;
     }
-    if (rs485_enabled && uart_set_mode(uart, UART_MODE_RS485_HALF_DUPLEX) != ESP_OK)
-    {
-        uart_driver_delete(uart);
-        uart_event_queue[port] = NULL;
-        return 0;
-    }
-
-    if (!uart_event_task_done[port])
-        uart_event_task_done[port] = xSemaphoreCreateBinaryStatic(&uart_event_task_done_storage[port]);
-    if (!uart_event_task_done[port])
-    {
-        uart_driver_delete(uart);
-        uart_event_queue[port] = NULL;
-        return 0;
-    }
-    xSemaphoreTake(uart_event_task_done[port], 0);
-
-    atomic_store_explicit(&uart_errors[port], 0, memory_order_relaxed);
-    atomic_store_explicit(&uart_rx_ready[port], rx_ready, memory_order_release);
-    atomic_store_explicit(&uart_initialized[port], true, memory_order_release);
-    if (xTaskCreate(ow_uart_event_task, "ow-uart", UART_EVENT_TASK_STACK, (void *)(uintptr_t)port, tskIDLE_PRIORITY + 2, &uart_event_task[port]) != pdPASS)
-    {
-        atomic_store_explicit(&uart_initialized[port], false, memory_order_release);
-        atomic_store_explicit(&uart_rx_ready[port], NULL, memory_order_release);
-        uart_driver_delete(uart);
-        uart_event_queue[port] = NULL;
-        return 0;
-    }
+    uart_hal_ena_intr_mask(hal, OW_UART_RX_INTR);
     return 1;
 }
 
-// uart_driver_delete discards what is still queued, so what was written goes out first, as a flush does.
 void ow_uart_close(unsigned port)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
+    if (port >= NUM_UARTS || !uart_intr[port])
         return;
-    uart_wait_tx_done((uart_port_t)port, pdMS_TO_TICKS(250));
-    if (!atomic_exchange_explicit(&uart_initialized[port], false, memory_order_acq_rel))
-        return;
-    atomic_store_explicit(&uart_rx_ready[port], NULL, memory_order_release);
-    if (uart_event_task[port])
+    uart_hal_disable_intr_mask(&uart_hal[port], UART_LL_INTR_MASK);
+    esp_intr_free(uart_intr[port]);
+    uart_intr[port] = NULL;
+    // TODO: the module clock stays on: the IDF driver marks it enabled, and only uart_driver_delete on an installed
+    // TODO: driver turns it off; turning it off here would leave the next open with a dead UART.
+    for (int i = 0; i < 3; ++i)
+        if (uart_pins[port][i] >= 0)
+            gpio_reset_pin((gpio_num_t)uart_pins[port][i]);
+}
+
+void ow_uart_set_rx(unsigned port, uint8_t rx_full, uint8_t rx_timeout)
+{
+    uart_hal_set_rxfifo_full_thr(&uart_hal[port], rx_full);
+    uart_hal_set_rx_timeout(&uart_hal[port], rx_timeout);
+}
+
+// In the ISR: what raised it, cleared.
+uint32_t ow_uart_take_causes(unsigned port)
+{
+    uart_hal_context_t *hal = &uart_hal[port];
+    uint32_t status = uart_hal_get_intsts_mask(hal);
+    uint32_t done = status & UART_INTR_TX_DONE;
+    uart_hal_clr_intsts_mask(hal, status & ~done);
+    uint32_t causes = 0;
+    if (status & UART_INTR_RXFIFO_FULL)
+        causes |= OW_UART_RX;
+    if (status & UART_INTR_RXFIFO_TOUT)
+        causes |= OW_UART_RX | OW_UART_TIMEOUT;
+    if (status & UART_INTR_TXFIFO_EMPTY)
+        causes |= OW_UART_TX;
+    if (status & UART_INTR_PARITY_ERR)
+        causes |= OW_UART_PARITY;
+    if (status & UART_INTR_FRAM_ERR)
+        causes |= OW_UART_FRAMING;
+    if (status & UART_INTR_RXFIFO_OVF)
     {
-        configASSERT(xTaskGetCurrentTaskHandle() != uart_event_task[port]);
-        uart_event_t shutdown = { .type = UART_EVENT_MAX };
-        xQueueSendToFront(uart_event_queue[port], &shutdown, portMAX_DELAY);
-        xSemaphoreTake(uart_event_task_done[port], portMAX_DELAY);
-        uart_event_task[port] = NULL;
+        causes |= OW_UART_OVERFLOW;
+        uart_hal_rxfifo_rst(hal);
     }
-    uart_driver_delete((uart_port_t)port);
-    uart_event_queue[port] = NULL;
+    if (status & UART_INTR_BRK_DET)
+        causes |= OW_UART_BREAK;
+    // a TX_DONE before the line is idle is handled on the next one
+    if (done && uart_hal_is_tx_idle(hal))
+    {
+        uart_hal_clr_intsts_mask(hal, UART_INTR_TX_DONE);
+        uart_hal_disable_intr_mask(hal, UART_INTR_TX_DONE);
+        if (uart_rs485[port])
+        {
+            uart_hal_rxfifo_rst(hal);
+            uart_hal_set_rts(hal, 1);
+        }
+        causes |= OW_UART_TX_DONE;
+    }
+    return causes;
 }
 
-int32_t ow_uart_read(unsigned port, uint8_t *buf, int32_t len)
+uint32_t ow_uart_rx_len(unsigned port)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire) || !buf || len <= 0)
-        return 0;
-    return uart_read_bytes((uart_port_t)port, buf, (uint32_t)len, 0);
+    return uart_hal_get_rxfifo_len(&uart_hal[port]);
 }
 
-int32_t ow_uart_write(unsigned port, const uint8_t *buf, int32_t len)
+uint32_t ow_uart_rx_read(unsigned port, uint8_t *buf, uint32_t len)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire) || !buf || len <= 0)
-        return 0;
-    size_t available = 0;
-    if (uart_get_tx_buffer_free_size((uart_port_t)port, &available) != ESP_OK)
-        return -1;
-    if ((size_t)len > available)
-        len = (int32_t)available;
-    return len > 0 ? uart_write_bytes((uart_port_t)port, buf, (size_t)len) : 0;
+    int n = (int)len;
+    uart_hal_read_rxfifo(&uart_hal[port], buf, &n);
+    return (uint32_t)n;
 }
 
-void ow_uart_poll(unsigned port)
+uint32_t ow_uart_tx_room(unsigned port)
 {
-    (void)port;
+    return uart_hal_get_txfifo_len(&uart_hal[port]);
 }
 
-int32_t ow_uart_rx_pending(unsigned port)
+// Interrupts are off. A stale TX_DONE would release RTS under the new transmission, so it is cleared first.
+uint32_t ow_uart_tx_write(unsigned port, const uint8_t *buf, uint32_t len)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
-        return 0;
-    size_t available = 0;
-    return uart_get_buffered_data_len((uart_port_t)port, &available) == ESP_OK ? (int32_t)available : 0;
+    uart_hal_context_t *hal = &uart_hal[port];
+    if (uart_rs485[port])
+    {
+        uart_hal_set_rts(hal, 0);
+        uart_hal_clr_intsts_mask(hal, UART_INTR_TX_DONE);
+        uart_hal_ena_intr_mask(hal, UART_INTR_TX_DONE);
+    }
+    uint32_t written = 0;
+    uart_hal_write_txfifo(hal, buf, len, &written);
+    return written;
 }
 
-int32_t ow_uart_tx_pending(unsigned port)
+void ow_uart_tx_irq(unsigned port, bool enable)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
-        return 0;
-    size_t available = 0;
-    if (uart_get_tx_buffer_free_size((uart_port_t)port, &available) != ESP_OK)
-        return 0;
-    return (int32_t)(UART_TX_BUFFER_SIZE - available);
+    if (enable)
+        uart_hal_ena_intr_mask(&uart_hal[port], UART_INTR_TXFIFO_EMPTY);
+    else
+        uart_hal_disable_intr_mask(&uart_hal[port], UART_INTR_TXFIFO_EMPTY);
 }
 
-int32_t ow_uart_flush(unsigned port)
+bool ow_uart_tx_idle(unsigned port)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
-        return 0;
-    return uart_wait_tx_done((uart_port_t)port, pdMS_TO_TICKS(250)) == ESP_OK ? 0 : -1;
+    return uart_hal_is_tx_idle(&uart_hal[port]);
 }
 
-int ow_uart_check_errors(unsigned port)
+uint32_t ow_uart_fifo_len(unsigned port)
 {
-    if (port >= NUM_UARTS || !atomic_load_explicit(&uart_initialized[port], memory_order_acquire))
-        return 0;
-    return (int)atomic_exchange_explicit(&uart_errors[port], 0, memory_order_relaxed);
+    return UART_HW_FIFO_LEN(port);
 }
 
 // -- WiFi wrappers --

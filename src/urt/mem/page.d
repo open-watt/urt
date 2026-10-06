@@ -95,20 +95,24 @@ void page_unwait(PageWaiter* waiter)
     atomicFetchSub(_waiting, 1);
 }
 
-// Installed once, before any page can be freed concurrently. Called from the freeing context, which may be an ISR or
-// another thread, at most once until the next page_pool_wake(); it must guarantee that page_pool_wake() runs.
+// Installed once, before any page can be freed concurrently. Called from the freeing or allocating context, which may be
+// an ISR or another thread, at most once until the next page_pool_wake(); it must guarantee that page_pool_wake() runs.
 void page_pool_wake_hook(void function() nothrow @nogc hook)
 {
     _wake_hook = hook;
+    atomicStore(_wake_signalled, false);
 }
 
-// Wakes the waiters queued before this call, oldest first; a wake that queues again waits for the next pass.
+// Refills the pool where an allocation ran it low, then wakes the waiters queued before this call, oldest first; a wake
+// that queues again waits for the next pass.
 void page_pool_wake()
 {
+    atomicStore(_wake_signalled, false);
+    if (_maintain)
+        _maintain();
     uint pass;
     {
         auto guard = _wait_lock.acquire();
-        _wake_signalled = false;
         pass = ++_wake_pass;
     }
     for (;;)
@@ -135,18 +139,22 @@ package(urt):
 void page_freed()
 {
     atomicFetchAdd(_free_generation, 1);
-    if (atomicLoad(_waiting) == 0)
+    if (atomicLoad(_waiting) != 0)
+        page_pool_signal();
+}
+
+// Safe from any context; asks for page_pool_wake() once until it runs, and is dropped while no hook can ask.
+void page_pool_signal()
+{
+    if (!_wake_hook || atomicExchange(&_wake_signalled, true))
         return;
-    void function() nothrow @nogc hook;
-    {
-        auto guard = _wait_lock.acquire();
-        if (!_wait_head || _wake_signalled)
-            return;
-        _wake_signalled = true;
-        hook = _wake_hook;
-    }
-    if (hook)
-        hook();
+    _wake_hook();
+}
+
+// The pool's refill, run by page_pool_wake() on the main thread.
+void page_pool_maintenance(void function() nothrow @nogc maintain)
+{
+    _maintain = maintain;
 }
 
 enum size_t page_next_flags = 1;
@@ -183,8 +191,9 @@ __gshared Critical _wait_lock;
 __gshared PageWaiter* _wait_head;
 __gshared PageWaiter* _wait_tail;
 __gshared void function() nothrow @nogc _wake_hook;
+__gshared void function() nothrow @nogc _maintain;
 __gshared uint _wake_pass;
-__gshared bool _wake_signalled;
+shared bool _wake_signalled;
 shared uint _free_generation;
 shared uint _waiting;
 
@@ -211,8 +220,14 @@ unittest
         }
     }
 
+    page_pool_wake_hook(null);
+    page_pool_signal();
     page_pool_wake_hook(&hook);
     scope (exit) page_pool_wake_hook(null);
+    page_pool_signal();
+    assert(hooks == 1, "a request with no hook to ask does not stand in the way of the next");
+    page_pool_wake();
+    hooks = 0;
 
     Probe a, b, c;
     a.waiter.wake = &a.wake;

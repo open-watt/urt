@@ -136,8 +136,9 @@ struct UartPorts(uint count, uint first, alias tx_idle, alias tx_fill)
 {
 nothrow @nogc:
 
-    // Pages carry everything the port moves, so it opens only once the page pool is up.
-    bool acquire(uint id, ref const UartConfig cfg)
+    // Pages carry everything the port moves, so it opens only once the page pool is up. A host names the port its
+    // callbacks report.
+    bool acquire(uint id, ref const UartConfig cfg, ubyte port = ubyte.max)
     {
         if (!page_pool_num_categories())
             return false;
@@ -148,6 +149,7 @@ nothrow @nogc:
             Port* p = &_port[id];
             *p = Port.init;
             p.open = true;
+            p.port = port != ubyte.max ? port : cast(ubyte)(id + first);
             p.tx_starved = true;
             p.char_ticks = char_ticks(cfg);
             p.format = line_format(cfg);
@@ -353,7 +355,7 @@ nothrow @nogc:
         if (head.length)
             return false;
         dequeue_sent(p);
-        return p.tx_cb ? p.tx_cb(Uart(cast(ubyte)(id + first)), UartCallbackContext.interrupt) : false;
+        return p.tx_cb ? p.tx_cb(Uart(p.port), UartCallbackContext.interrupt) : false;
     }
 
     // Feeds the FIFO itself, so it drains with interrupts masked too, then waits out the last character.
@@ -461,7 +463,7 @@ nothrow @nogc:
     bool notify(uint id)
     {
         Port* p = &_port[id];
-        return p.rx_cb ? p.rx_cb(Uart(cast(ubyte)(id + first)), UartCallbackContext.interrupt) : false;
+        return p.rx_cb ? p.rx_cb(Uart(p.port), UartCallbackContext.interrupt) : false;
     }
 
 private:
@@ -480,6 +482,7 @@ private:
         uint gap_ticks;
         uint latency_us;
         ubyte gap;
+        ubyte port;
         UartError errors;
         ubyte rx_category;
         ubyte rx_up;

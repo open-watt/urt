@@ -16,6 +16,10 @@ else version (STM32)
     public import urt.driver.stm32.uart;
 else version (Espressif)
     public import urt.driver.esp32.uart;
+else version (linux)
+    public import urt.driver.posix.uart;
+else version (Windows)
+    public import urt.driver.windows.uart;
 else
     enum uint num_uarts = 0;
 
@@ -174,6 +178,7 @@ struct UartPortInfo
     ushort usb_vid;
     ushort usb_pid;
     ubyte port;
+    bool removable;
 }
 
 // Start, data, parity and stop bits; half a stop bit counts as one, one and a half as two.
@@ -285,7 +290,7 @@ void uart_deinit()
 // Ports
 
 // The port a name stands for, or ubyte.max. A part names its ports uart0 and on; a host takes any name its OS gives
-// the device, and every name for one device finds the same port, for as long as the process runs.
+// the device, every name for one device finds the same port, and a device that comes back is a new port.
 ubyte uart_find(const(char)[] name)
 {
     static if (__traits(compiles, uart_hw_find(name)))
@@ -303,6 +308,16 @@ ubyte uart_find(const(char)[] name)
         }
         return port >= first_uart && port < first_uart + num_uarts ? cast(ubyte)port : ubyte.max;
     }
+}
+
+// Where a port sits among the platform's num_uarts, or uint.max: a part's ports are fixed, while a host gives each device
+// that appears a new port, kept while it is open, so a port held across a replug never reaches the device that replaced it.
+uint uart_slot(ubyte port)
+{
+    static if (__traits(compiles, uart_hw_slot(port)))
+        return uart_hw_slot(port);
+    else
+        return port >= first_uart && port < first_uart + num_uarts ? port - first_uart : uint.max;
 }
 
 // The ports the platform knows, from cursor 0; info's strings hold until the next call.
@@ -328,17 +343,18 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, UartRxCall
         assert(false, "no UART on this platform");
     else
     {
-        if (port < first_uart || port >= first_uart + num_uarts || cfg.baud_rate == 0)
+        immutable uint slot = uart_slot(port);
+        if (slot >= num_uarts || cfg.baud_rate == 0)
             return InternalResult.invalid_parameter;
         if (!uart_config_supported(cfg))
             return InternalResult.unsupported;
-        immutable uint owned = 1 << (port - first_uart);
+        immutable uint owned = 1 << slot;
         if (uart.is_open || (_open_ports & owned))
             return InternalResult.already_exists;
         if (!uart_hw_open(port, cfg, rx_cb, tx_cb))
             return InternalResult.failed;
         _open_ports |= owned;
-        _pins[port - first_uart] = Pins(cfg);
+        _pins[slot] = Pins(cfg);
         uart.port = port;
         return Result.success;
     }
@@ -355,7 +371,7 @@ Result uart_reconfigure(ref Uart uart, ref const UartConfig cfg)
     {
         if (!is_open(uart))
             return InternalResult.invalid_parameter;
-        if (cfg.baud_rate == 0 || Pins(cfg) != _pins[uart.port - first_uart])
+        if (cfg.baud_rate == 0 || Pins(cfg) != _pins[uart_slot(uart.port)])
             return InternalResult.invalid_parameter;
         if (!uart_config_supported(cfg))
             return InternalResult.unsupported;
@@ -372,8 +388,9 @@ void uart_close(ref Uart uart)
         assert(false, "no UART on this platform");
     else
     {
+        immutable uint slot = uart_slot(uart.port);
         uart_hw_close(uart.port);
-        _open_ports &= ~(1 << (uart.port - first_uart));
+        _open_ports &= ~(1 << slot);
         uart.port = ubyte.max;
     }
 }
@@ -529,7 +546,8 @@ unittest
             assert(!uart_open(u, cast(ubyte)console_uart, bad), "a drive mode the backend lacks is refused");
         }
 
-        // Open/close each valid port; reconfiguring the console would kill it
+        // Open/close each port of a part; reconfiguring the console would kill it
+        static if (!__traits(compiles, uart_hw_find("")))
         foreach (p; first_uart .. first_uart + num_uarts)
         {
             if (p == console_uart)

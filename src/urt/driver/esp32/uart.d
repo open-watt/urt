@@ -1,4 +1,4 @@
-// ESP32 UART: the IDF configures the port, and this ISR owns the FIFOs through the C shim (ow_shim.c). UART0 is the
+// ESP32 UART: the IDF configures the port, and this ISR owns the FIFOs through the C shim (idf_shim.c). UART0 is the
 // console, its defaults set by the bootloader.
 module urt.driver.esp32.uart;
 
@@ -40,14 +40,14 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
         return false;
     if (!_ports.acquire(id, cfg))
         return false;
-    _fifo_len[id] = cast(ushort)ow_uart_fifo_len(id);
+    _fifo_len[id] = cast(ushort)urt_uart_fifo_len(id);
     ubyte full, timeout;
     immutable UartRxTiming timing = rx_timing(id, cfg, full, timeout);
     byte de = cfg.rs485.enabled && cfg.rs485.de_gpio != ubyte.max ? cast(byte)cfg.rs485.de_gpio : -1;
     _ports.start(id, rx_cb, tx_cb, timing);
-    if (!ow_uart_open(id, cfg.baud_rate, cfg.data_bits, cast(ubyte)cfg.stop_bits, cast(ubyte)cfg.parity,
-                      cfg.tx_gpio == ubyte.max ? -1 : cast(byte)cfg.tx_gpio, cfg.rx_gpio == ubyte.max ? -1 : cast(byte)cfg.rx_gpio,
-                      cfg.rs485.enabled, de, cfg.rs485.de_active_high, full, timeout))
+    if (!urt_uart_open(id, cfg.baud_rate, cfg.data_bits, cast(ubyte)cfg.stop_bits, cast(ubyte)cfg.parity,
+                       cfg.tx_gpio == ubyte.max ? -1 : cast(byte)cfg.tx_gpio, cfg.rx_gpio == ubyte.max ? -1 : cast(byte)cfg.rx_gpio,
+                       cfg.rs485.enabled, de, cfg.rs485.de_active_high, full, timeout))
     {
         _ports.release(id);
         return false;
@@ -58,7 +58,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
 void uart_hw_close(uint id)
 {
     uart_hw_flush(id);
-    ow_uart_close(id);
+    urt_uart_close(id);
     _ports.release(id);
 }
 
@@ -79,7 +79,7 @@ UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
     ubyte full, timeout;
     immutable UartRxTiming timing = rx_timing(id, cfg, full, timeout);
     auto guard = irq_critical();
-    ow_uart_set_rx(id, full, timeout);
+    urt_uart_set_rx(id, full, timeout);
     _ports.retime(id, timing);
     return timing;
 }
@@ -134,23 +134,23 @@ UartRxTiming rx_timing(uint id, ref const UartConfig cfg, out ubyte full, out ub
 // Caller holds interrupts off, or runs in the ISR.
 void tx_fill(uint id)
 {
-    for (uint room = ow_uart_tx_room(id); room; )
+    for (uint room = urt_uart_tx_room(id); room; )
     {
         const(ubyte)[] bytes = _ports.tx_bytes(id);
         if (!bytes.length)
             break;
         immutable uint n = cast(uint)(bytes.length < room ? bytes.length : room);
-        immutable uint written = ow_uart_tx_write(id, bytes.ptr, n);
+        immutable uint written = urt_uart_tx_write(id, bytes.ptr, n);
         _ports.tx_advance(id, written);
         if (written < n)
             break;
         room -= n;
     }
-    ow_uart_tx_irq(id, _ports.tx_queued(id));
+    urt_uart_tx_irq(id, _ports.tx_queued(id));
 }
 
 bool tx_idle(uint id)
-    => ow_uart_tx_idle(id);
+    => urt_uart_tx_idle(id);
 
 static immutable UartError[16] cause_errors = () {
     UartError[16] t;
@@ -159,21 +159,21 @@ static immutable UartError[16] cause_errors = () {
     return t;
 }();
 
-extern(C) void ow_uart_isr(uint id)
+extern(C) void urt_uart_isr(uint id)
 {
-    immutable uint causes = ow_uart_take_causes(id);
+    immutable uint causes = urt_uart_take_causes(id);
     if (causes & (cause_parity | cause_framing | cause_overflow | cause_break))
         _ports.error(id, cause_errors[(causes >> 4) & 0xF]);
     if (causes & cause_rx)
     {
         // the timeout runs only while the FIFO holds a byte, so the threshold interrupt leaves one for it
-        uint len = ow_uart_rx_len(id);
+        uint len = urt_uart_rx_len(id);
         if (!(causes & cause_timeout) && len)
             --len;
         ubyte[128] buf = void;
         while (len)
         {
-            immutable uint got = ow_uart_rx_read(id, buf.ptr, len < buf.length ? len : buf.length);
+            immutable uint got = urt_uart_rx_read(id, buf.ptr, len < buf.length ? len : buf.length);
             if (!got)
                 break;
             foreach (b; buf[0 .. got])
@@ -193,16 +193,16 @@ extern(C) nothrow @nogc
 {
     void esp_rom_uart_putc(char c);
 
-    int ow_uart_open(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits, ubyte parity, byte tx_gpio, byte rx_gpio,
-                     bool rs485_enabled, byte de_gpio, bool de_active_high, ubyte rx_full, ubyte rx_timeout);
-    void ow_uart_close(uint port);
-    void ow_uart_set_rx(uint port, ubyte rx_full, ubyte rx_timeout);
-    uint ow_uart_take_causes(uint port);
-    uint ow_uart_rx_len(uint port);
-    uint ow_uart_rx_read(uint port, ubyte* buf, uint len);
-    uint ow_uart_tx_room(uint port);
-    uint ow_uart_tx_write(uint port, const(ubyte)* buf, uint len);
-    void ow_uart_tx_irq(uint port, bool enable);
-    bool ow_uart_tx_idle(uint port);
-    uint ow_uart_fifo_len(uint port);
+    int urt_uart_open(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits, ubyte parity, byte tx_gpio, byte rx_gpio,
+                      bool rs485_enabled, byte de_gpio, bool de_active_high, ubyte rx_full, ubyte rx_timeout);
+    void urt_uart_close(uint port);
+    void urt_uart_set_rx(uint port, ubyte rx_full, ubyte rx_timeout);
+    uint urt_uart_take_causes(uint port);
+    uint urt_uart_rx_len(uint port);
+    uint urt_uart_rx_read(uint port, ubyte* buf, uint len);
+    uint urt_uart_tx_room(uint port);
+    uint urt_uart_tx_write(uint port, const(ubyte)* buf, uint len);
+    void urt_uart_tx_irq(uint port, bool enable);
+    bool urt_uart_tx_idle(uint port);
+    uint urt_uart_fifo_len(uint port);
 }

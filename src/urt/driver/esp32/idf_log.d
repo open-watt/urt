@@ -32,7 +32,7 @@ bool idf_log_open()
         return false;
 
     reset_capture();
-    if (ow_idf_log_open(&receive_chunk) == 0)
+    if (urt_idf_log_open(&receive_chunk) == 0)
         return false;
     _opened = true;
     return true;
@@ -42,7 +42,7 @@ void idf_log_close()
 {
     if (!_opened)
         return;
-    ow_idf_log_close();
+    urt_idf_log_close();
     _opened = false;
 }
 
@@ -111,8 +111,8 @@ extern(C) alias IdfLogSink = void function(void*, const char*, size_t, int) noth
 
 extern(C) nothrow @nogc
 {
-    int ow_idf_log_open(IdfLogSink sink);
-    void ow_idf_log_close();
+    int urt_idf_log_open(IdfLogSink sink);
+    void urt_idf_log_close();
 }
 
 

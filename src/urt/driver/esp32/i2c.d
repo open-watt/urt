@@ -10,25 +10,25 @@ nothrow @nogc:
 // Conservative compile-time upper bound. i2c_count() returns the HP controllers exposed by the ESP-IDF master driver.
 enum uint num_i2c = 2;
 
-uint i2c_count() => ow_i2c_count();
+uint i2c_count() => urt_i2c_count();
 
 bool i2c_hw_open(ref I2cBus bus, uint port, ref const I2cBusConfig config)
 {
     if (port >= i2c_count())
         return false;
-    bus.driver_data = ow_i2c_open(port, config.sda_gpio, config.scl_gpio, config.internal_pullups);
+    bus.driver_data = urt_i2c_open(port, config.sda_gpio, config.scl_gpio, config.internal_pullups);
     return bus.driver_data !is null;
 }
 
 void i2c_hw_close(ref I2cBus bus)
 {
     if (bus.driver_data !is null)
-        ow_i2c_close(bus.driver_data);
+        urt_i2c_close(bus.driver_data);
 }
 
 Result i2c_hw_submit(ref I2cBus bus, ref I2cOperation operation, ref const I2cTransfer transfer)
 {
-    int result = ow_i2c_submit(bus.driver_data, transfer.address, transfer.address_mode, bus.frequency,
+    int result = urt_i2c_submit(bus.driver_data, transfer.address, transfer.address_mode, bus.frequency,
         transfer.write_data.ptr, transfer.write_data.length, cast(void*)transfer.read_data.ptr, transfer.read_data.length,
         timeout_ms(transfer.timeout), &i2c_operation_complete, &operation);
     return result == 0 ? Result.success : InternalResult.failed;
@@ -69,9 +69,9 @@ extern(C) bool i2c_operation_complete(void* context, int result)
 
 extern(C)
 {
-    uint ow_i2c_count();
-    void* ow_i2c_open(uint port, int sda_gpio, int scl_gpio, bool internal_pullups);
-    void ow_i2c_close(void* bus);
-    int ow_i2c_submit(void* bus, ushort address, ubyte address_mode, uint frequency, const(void)* write_data, size_t write_length,
+    uint urt_i2c_count();
+    void* urt_i2c_open(uint port, int sda_gpio, int scl_gpio, bool internal_pullups);
+    void urt_i2c_close(void* bus);
+    int urt_i2c_submit(void* bus, ushort address, ubyte address_mode, uint frequency, const(void)* write_data, size_t write_length,
         void* read_data, size_t read_length, int timeout_ms, I2cCompletion callback, void* callback_context);
 }

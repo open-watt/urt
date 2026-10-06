@@ -57,7 +57,7 @@ extern uint32_t __real_rwm_upload_data(RW_RXIFO_PTR rx_info);
 extern void ke_msg_send(void const *param_ptr);
 extern struct co_list rw_msg_rx_head;
 extern void rwnx_handle_recv_msg(struct ke_msg *msg);
-extern void ow_wifi_message(struct ke_msg *msg);
+extern void urt_wifi_message(struct ke_msg *msg);
 extern void rwm_flush_rx_list(void);
 extern void __real_sta_mgmt_add_key(const struct mm_key_add_req *req, uint8_t hw_key_idx);
 extern void __real_vif_mgmt_add_key(const struct mm_key_add_req *req, uint8_t hw_key_idx);
@@ -109,7 +109,7 @@ static bool tx_tracking;
 static bool tx_admitted;
 static int8_t rx_rssi;
 
-int ow_rw_receive(void)
+int urt_rw_receive(void)
 {
     GLOBAL_INT_DECLARATION();
     GLOBAL_INT_DISABLE();
@@ -119,7 +119,7 @@ int ow_rw_receive(void)
         return 0;
 
     rwnx_handle_recv_msg(msg);
-    ow_wifi_message(msg);
+    urt_wifi_message(msg);
     ke_msg_free(msg);
     return 1;
 }
@@ -151,7 +151,7 @@ static void discard_messages(struct co_list *list)
         ke_msg_free(msg);
 }
 
-void ow_rw_mac_quiesce(void)
+void urt_rw_mac_quiesce(void)
 {
     GLOBAL_INT_DECLARATION();
     GLOBAL_INT_DISABLE();
@@ -180,7 +180,7 @@ void ow_rw_mac_quiesce(void)
     GLOBAL_INT_RESTORE();
 }
 
-int ow_rw_mac_step(unsigned step)
+int urt_rw_mac_step(unsigned step)
 {
     switch (step)
     {
@@ -192,12 +192,12 @@ int ow_rw_mac_step(unsigned step)
     }
 }
 
-int ow_rw_add_if(const uint8_t mac[6])
+int urt_rw_add_if(const uint8_t mac[6])
 {
     return rw_msg_send_add_if(mac, NL80211_IFTYPE_STATION, 0, NULL);
 }
 
-int ow_rw_scan(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len)
+int urt_rw_scan(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len)
 {
     SCAN_PARAM_T p;
     os_memset(&p, 0, sizeof(p));
@@ -212,7 +212,7 @@ int ow_rw_scan(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len)
     return rw_msg_send_scanu_req(&p);
 }
 
-int ow_rw_transfer(uint8_t vif_idx, uint8_t *buf, uint32_t len)
+int urt_rw_transfer(uint8_t vif_idx, uint8_t *buf, uint32_t len)
 {
     tx_admitted = false;
     tx_tracking = true;
@@ -221,12 +221,12 @@ int ow_rw_transfer(uint8_t vif_idx, uint8_t *buf, uint32_t len)
     return tx_admitted ? 0 : -1;
 }
 
-int8_t ow_rw_get_rssi(void)
+int8_t urt_rw_get_rssi(void)
 {
     return rx_rssi;
 }
 
-int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len, const uint8_t *bssid, const uint8_t *ie, uint16_t ie_len, int psk, int8_t *rssi, uint8_t *channel)
+int urt_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len, const uint8_t *bssid, const uint8_t *ie, uint16_t ie_len, int psk, int8_t *rssi, uint8_t *channel)
 {
     CONNECT_PARAM_T c;
     struct mac_scan_result *bss;
@@ -267,7 +267,7 @@ int ow_rw_connect(uint8_t vif_idx, const uint8_t *ssid, uint8_t ssid_len, const 
     return rw_msg_send_sm_connect_req(&c, NULL);
 }
 
-int ow_rw_disconnect(uint8_t vif_idx, uint16_t reason)
+int urt_rw_disconnect(uint8_t vif_idx, uint16_t reason)
 {
     struct sm_disconnect_req *req = ke_msg_alloc(SM_DISCONNECT_REQ, TASK_SM, TASK_API, sizeof(struct sm_disconnect_req));
     if (!req)
@@ -277,7 +277,7 @@ int ow_rw_disconnect(uint8_t vif_idx, uint16_t reason)
     return rw_msg_send(req, SM_DISCONNECT_CFM, NULL);
 }
 
-int ow_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx, const uint8_t *key, uint8_t len, const uint8_t rsc[6])
+int urt_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx, const uint8_t *key, uint8_t len, const uint8_t rsc[6])
 {
     if (!key || !rsc || len != 16 || vif_idx >= NX_VIRT_DEV_MAX || (sta_idx != 0xff && sta_idx >= STA_MAX) || key_idx >= MAC_DEFAULT_KEY_COUNT)
         return -1;
@@ -296,7 +296,7 @@ int ow_rw_key_add_ccmp(uint8_t vif_idx, uint8_t sta_idx, uint8_t key_idx, const 
     return 0;
 }
 
-void ow_rw_monitor_start(uint8_t channel)
+void urt_rw_monitor_start(uint8_t channel)
 {
     uint16_t frequency = channel == 14 ? 2484 : 2407 + 5 * channel;
     phy_set_channel(PHY_BAND_2G4, PHY_CHNL_BW_20, frequency, frequency, 0, PHY_PRIM);
@@ -304,12 +304,12 @@ void ow_rw_monitor_start(uint8_t channel)
     mm_active();
 }
 
-int ow_rw_control_port(uint8_t sta_idx, int open)
+int urt_rw_control_port(uint8_t sta_idx, int open)
 {
     return rw_msg_me_set_control_port_req(open ? 1 : 0, sta_idx);
 }
 
-int ow_rw_classify(const struct ke_msg *m)
+int urt_rw_classify(const struct ke_msg *m)
 {
     switch (m->id)
     {
@@ -348,27 +348,27 @@ int ow_rw_classify(const struct ke_msg *m)
     }
 }
 
-void ow_rw_add_if_cfm(const struct ke_msg *m, uint8_t *status, uint8_t *vif_idx)
+void urt_rw_add_if_cfm(const struct ke_msg *m, uint8_t *status, uint8_t *vif_idx)
 {
     const struct mm_add_if_cfm *c = (const struct mm_add_if_cfm *)m->param;
     *status = c->status;
     *vif_idx = c->inst_nbr;
 }
 
-void ow_rw_scanu_start_cfm(const struct ke_msg *m, uint8_t *status, uint8_t *vif_idx)
+void urt_rw_scanu_start_cfm(const struct ke_msg *m, uint8_t *status, uint8_t *vif_idx)
 {
     const struct scanu_start_cfm *c = (const struct scanu_start_cfm *)m->param;
     *status = c->status;
     *vif_idx = c->vif_idx;
 }
 
-void ow_rw_connect_cfm(const struct ke_msg *m, uint8_t *status)
+void urt_rw_connect_cfm(const struct ke_msg *m, uint8_t *status)
 {
     const struct sm_connect_cfm *c = (const struct sm_connect_cfm *)m->param;
     *status = c->status;
 }
 
-void ow_rw_connect_ind(const struct ke_msg *m, uint16_t *status, uint8_t *vif_idx, uint8_t *ap_idx, uint8_t bssid[6])
+void urt_rw_connect_ind(const struct ke_msg *m, uint16_t *status, uint8_t *vif_idx, uint8_t *ap_idx, uint8_t bssid[6])
 {
     const struct sm_connect_indication *c = (const struct sm_connect_indication *)m->param;
     *status = c->status_code;
@@ -377,20 +377,20 @@ void ow_rw_connect_ind(const struct ke_msg *m, uint16_t *status, uint8_t *vif_id
     os_memcpy(bssid, &c->bssid, 6);
 }
 
-void ow_rw_disconnect_ind(const struct ke_msg *m, uint8_t *vif_idx, uint16_t *reason)
+void urt_rw_disconnect_ind(const struct ke_msg *m, uint8_t *vif_idx, uint16_t *reason)
 {
     const struct sm_disconnect_ind *c = (const struct sm_disconnect_ind *)m->param;
     *vif_idx = c->vif_idx;
     *reason = c->reason_code;
 }
 
-void ow_rw_fail_ind(const struct ke_msg *m, uint16_t *status)
+void urt_rw_fail_ind(const struct ke_msg *m, uint16_t *status)
 {
     const struct sm_fail_stat *c = (const struct sm_fail_stat *)m->param;
     *status = c->status;
 }
 
-void ow_rw_key_add_cfm(const struct ke_msg *m, uint8_t *status)
+void urt_rw_key_add_cfm(const struct ke_msg *m, uint8_t *status)
 {
     const struct mm_key_add_cfm *c = (const struct mm_key_add_cfm *)m->param;
     *status = c->status;

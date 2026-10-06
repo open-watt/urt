@@ -28,7 +28,7 @@ void esp_rom_uart_putc(char c) { esp_rom_output_tx_one_char(c); }
 // IDF's xTaskCreate is a static inline, and the affinity constant it passes is
 // 0x7FFFFFFF on IDF's kernel but -1 on the SMP one, so D cannot spell it.
 
-BaseType_t ow_task_create(TaskFunction_t code, const char *name, uint32_t stack_depth, void *params, UBaseType_t priority, TaskHandle_t *task)
+BaseType_t urt_task_create(TaskFunction_t code, const char *name, uint32_t stack_depth, void *params, UBaseType_t priority, TaskHandle_t *task)
 {
     return xTaskCreate(code, name, stack_depth, params, priority, task);
 }
@@ -37,7 +37,7 @@ BaseType_t ow_task_create(TaskFunction_t code, const char *name, uint32_t stack_
 
 #include <errno.h>
 
-int *ow_errno_location(void)
+int *urt_errno_location(void)
 {
     return &errno;
 }
@@ -92,11 +92,11 @@ int __wrap__fcntl_r(struct _reent *r, int fd, int cmd, int arg)
 }
 
 // -- WFI shim --
-// Single-instruction inline asm; bound from D as ow_irq_wait. The
+// Single-instruction inline asm; bound from D as urt_irq_wait. The
 // surrounding portENTER_CRITICAL pair is handled D-side via direct
 // vPortEnterCritical/vPortExitCritical bindings -- no C wrapper needed.
 
-void ow_irq_wait(void)
+void urt_irq_wait(void)
 {
 #if CONFIG_IDF_TARGET_ARCH_XTENSA
     __asm__ volatile("waiti 0");
@@ -118,52 +118,52 @@ void ow_irq_wait(void)
 #include <stdint.h>
 
 // pull: 0=none, 1=up, 2=down (matches D Pull enum encoding)
-static gpio_pull_mode_t ow_pull_to_idf(int pull)
+static gpio_pull_mode_t urt_pull_to_idf(int pull)
 {
     return (pull == 1) ? GPIO_PULLUP_ONLY :
            (pull == 2) ? GPIO_PULLDOWN_ONLY : GPIO_FLOATING;
 }
 
-void ow_gpio_output_init(int pin, int initial)
+void urt_gpio_output_init(int pin, int initial)
 {
     gpio_reset_pin((gpio_num_t)pin);
     gpio_set_direction((gpio_num_t)pin, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)pin, initial);
 }
 
-void ow_gpio_input_init(int pin, int pull)
+void urt_gpio_input_init(int pin, int pull)
 {
     gpio_reset_pin((gpio_num_t)pin);
     gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
-    gpio_set_pull_mode((gpio_num_t)pin, ow_pull_to_idf(pull));
+    gpio_set_pull_mode((gpio_num_t)pin, urt_pull_to_idf(pull));
 }
 
-void IRAM_ATTR ow_gpio_output_set(int pin, int value)
+void IRAM_ATTR urt_gpio_output_set(int pin, int value)
 {
     gpio_set_level((gpio_num_t)pin, value);
 }
 
-int ow_gpio_input_read(int pin)
+int urt_gpio_input_read(int pin)
 {
     return gpio_get_level((gpio_num_t)pin);
 }
 
-void ow_gpio_set_pull(int pin, int pull)
+void urt_gpio_set_pull(int pin, int pull)
 {
-    gpio_set_pull_mode((gpio_num_t)pin, ow_pull_to_idf(pull));
+    gpio_set_pull_mode((gpio_num_t)pin, urt_pull_to_idf(pull));
 }
 
-void ow_gpio_release(int pin)
+void urt_gpio_release(int pin)
 {
     gpio_reset_pin((gpio_num_t)pin);
 }
 
-uint32_t ow_gpio_count(void)
+uint32_t urt_gpio_count(void)
 {
     return SOC_GPIO_PIN_COUNT;
 }
 
-int ow_pwm_open(unsigned port, unsigned pin, unsigned frequency, unsigned resolution, unsigned initial_duty, bool inverted)
+int urt_pwm_open(unsigned port, unsigned pin, unsigned frequency, unsigned resolution, unsigned initial_duty, bool inverted)
 {
     if (port >= LEDC_TIMER_MAX || port >= LEDC_CHANNEL_MAX)
         return -1;
@@ -190,14 +190,14 @@ int ow_pwm_open(unsigned port, unsigned pin, unsigned frequency, unsigned resolu
     return ledc_channel_config(&channel) == ESP_OK ? 0 : -1;
 }
 
-int ow_pwm_set_duty(unsigned port, unsigned duty)
+int urt_pwm_set_duty(unsigned port, unsigned duty)
 {
     if (port >= LEDC_CHANNEL_MAX || ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)port, duty) != ESP_OK)
         return -1;
     return ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)port) == ESP_OK ? 0 : -1;
 }
 
-void ow_pwm_close(unsigned port)
+void urt_pwm_close(unsigned port)
 {
     if (port < LEDC_CHANNEL_MAX)
         ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)port, 0);
@@ -224,9 +224,9 @@ typedef struct {
     bool started;
     bool enabled;
     bool open;
-} ow_counter_t;
+} urt_counter_t;
 
-static ow_counter_t counters[OW_COUNTERS] = {
+static urt_counter_t counters[OW_COUNTERS] = {
     { .lock = portMUX_INITIALIZER_UNLOCKED },
     { .lock = portMUX_INITIALIZER_UNLOCKED },
     { .lock = portMUX_INITIALIZER_UNLOCKED },
@@ -237,7 +237,7 @@ static bool IRAM_ATTR counter_alarm(gptimer_handle_t timer, const gptimer_alarm_
 {
     (void)timer;
     (void)event;
-    ow_counter_t *counter = context;
+    urt_counter_t *counter = context;
     bool (*callback)(unsigned);
     portENTER_CRITICAL_ISR(&counter->lock);
     callback = counter->callback;
@@ -245,7 +245,7 @@ static bool IRAM_ATTR counter_alarm(gptimer_handle_t timer, const gptimer_alarm_
     return callback ? callback(counter->port) : false;
 }
 
-void ow_counter_close(unsigned port);
+void urt_counter_close(unsigned port);
 
 static uint32_t counter_result(esp_err_t result)
 {
@@ -259,11 +259,11 @@ static uint32_t counter_result(esp_err_t result)
     }
 }
 
-uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
+uint32_t urt_counter_open(unsigned port, unsigned resolution_hz)
 {
     if (port >= OW_COUNTERS || !resolution_hz)
         return EINVAL;
-    ow_counter_t *counter = &counters[port];
+    urt_counter_t *counter = &counters[port];
     if (counter->open)
         return EEXIST;
 
@@ -290,15 +290,15 @@ uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
     return 0;
 
 failed:
-    ow_counter_close(port);
+    urt_counter_close(port);
     return counter_result(result);
 }
 
-uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+uint32_t urt_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 {
     if (port >= OW_COUNTERS || !ticks)
         return EINVAL;
-    ow_counter_t *counter = &counters[port];
+    urt_counter_t *counter = &counters[port];
     if (!counter->open)
         return EINVAL;
 
@@ -322,11 +322,11 @@ uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
     return 0;
 }
 
-void IRAM_ATTR ow_counter_reload(unsigned port)
+void IRAM_ATTR urt_counter_reload(unsigned port)
 {
     if (port >= OW_COUNTERS)
         return;
-    ow_counter_t *counter = &counters[port];
+    urt_counter_t *counter = &counters[port];
     portENTER_CRITICAL_SAFE(&counter->lock);
     if (counter->started) {
         gptimer_set_raw_count(counter->timer, 0);
@@ -335,11 +335,11 @@ void IRAM_ATTR ow_counter_reload(unsigned port)
     portEXIT_CRITICAL_SAFE(&counter->lock);
 }
 
-void IRAM_ATTR ow_counter_rearm(unsigned port, uint64_t ticks)
+void IRAM_ATTR urt_counter_rearm(unsigned port, uint64_t ticks)
 {
     if (port >= OW_COUNTERS || !ticks)
         return;
-    ow_counter_t *counter = &counters[port];
+    urt_counter_t *counter = &counters[port];
     portENTER_CRITICAL_SAFE(&counter->lock);
     if (counter->started) {
         counter->alarm.alarm_count = ticks;
@@ -349,7 +349,7 @@ void IRAM_ATTR ow_counter_rearm(unsigned port, uint64_t ticks)
     portEXIT_CRITICAL_SAFE(&counter->lock);
 }
 
-uint64_t IRAM_ATTR ow_counter_read(unsigned port)
+uint64_t IRAM_ATTR urt_counter_read(unsigned port)
 {
     uint64_t value = 0;
     if (port < OW_COUNTERS && counters[port].open)
@@ -357,21 +357,21 @@ uint64_t IRAM_ATTR ow_counter_read(unsigned port)
     return value;
 }
 
-void ow_counter_set_callback(unsigned port, bool (*callback)(unsigned port))
+void urt_counter_set_callback(unsigned port, bool (*callback)(unsigned port))
 {
     if (port >= OW_COUNTERS)
         return;
-    ow_counter_t *counter = &counters[port];
+    urt_counter_t *counter = &counters[port];
     portENTER_CRITICAL(&counter->lock);
     counter->callback = callback;
     portEXIT_CRITICAL(&counter->lock);
 }
 
-void ow_counter_close(unsigned port)
+void urt_counter_close(unsigned port)
 {
     if (port >= OW_COUNTERS)
         return;
-    ow_counter_t *counter = &counters[port];
+    urt_counter_t *counter = &counters[port];
     if (counter->timer) {
         if (counter->started)
             gptimer_stop(counter->timer);
@@ -391,13 +391,13 @@ void ow_counter_close(unsigned port)
 
 #else
 
-uint32_t ow_counter_open(unsigned port, unsigned resolution_hz)
+uint32_t urt_counter_open(unsigned port, unsigned resolution_hz)
 {
     (void)resolution_hz;
     return ENOTSUP;
 }
 
-uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
+uint32_t urt_counter_arm(unsigned port, uint64_t ticks, bool periodic)
 {
     (void)port;
     (void)ticks;
@@ -405,30 +405,30 @@ uint32_t ow_counter_arm(unsigned port, uint64_t ticks, bool periodic)
     return ENOTSUP;
 }
 
-void ow_counter_reload(unsigned port)
+void urt_counter_reload(unsigned port)
 {
     (void)port;
 }
 
-void ow_counter_rearm(unsigned port, uint64_t ticks)
+void urt_counter_rearm(unsigned port, uint64_t ticks)
 {
     (void)port;
     (void)ticks;
 }
 
-uint64_t ow_counter_read(unsigned port)
+uint64_t urt_counter_read(unsigned port)
 {
     (void)port;
     return 0;
 }
 
-void ow_counter_set_callback(unsigned port, bool (*callback)(unsigned port))
+void urt_counter_set_callback(unsigned port, bool (*callback)(unsigned port))
 {
     (void)port;
     (void)callback;
 }
 
-void ow_counter_close(unsigned port)
+void urt_counter_close(unsigned port)
 {
     (void)port;
 }
@@ -446,9 +446,9 @@ void ow_counter_close(unsigned port)
 typedef struct {
     unsigned input_gpio;
     bool open;
-} ow_gpio_interrupt_t;
+} urt_gpio_interrupt_t;
 
-static ow_gpio_interrupt_t gpio_interrupts[OW_GPIO_INTERRUPTS];
+static urt_gpio_interrupt_t gpio_interrupts[OW_GPIO_INTERRUPTS];
 static volatile uintptr_t gpio_interrupt_callbacks[OW_GPIO_INTERRUPTS];
 static unsigned gpio_isr_users;
 
@@ -505,14 +505,14 @@ static void IRAM_ATTR gpio_interrupt_handler(void *context)
         portYIELD_FROM_ISR();
 }
 
-void ow_gpio_interrupt_close(unsigned port);
+void urt_gpio_interrupt_close(unsigned port);
 
-int ow_gpio_interrupt_open(unsigned port, unsigned input_gpio, unsigned trigger)
+int urt_gpio_interrupt_open(unsigned port, unsigned input_gpio, unsigned trigger)
 {
     if (port >= OW_GPIO_INTERRUPTS || input_gpio >= SOC_GPIO_PIN_COUNT || trigger > 4)
         return -1;
 
-    ow_gpio_interrupt_t *interrupt = &gpio_interrupts[port];
+    urt_gpio_interrupt_t *interrupt = &gpio_interrupts[port];
     if (interrupt->open || !gpio_pin_claim(input_gpio))
         return -1;
     if (gpio_isr_acquire() != 0) {
@@ -540,38 +540,38 @@ int ow_gpio_interrupt_open(unsigned port, unsigned input_gpio, unsigned trigger)
     return 0;
 }
 
-void ow_gpio_interrupt_set_callback(unsigned port, bool (*callback)(unsigned port))
+void urt_gpio_interrupt_set_callback(unsigned port, bool (*callback)(unsigned port))
 {
     if (port >= OW_GPIO_INTERRUPTS)
         return;
     gpio_interrupt_callbacks[port] = (uintptr_t)callback;
 }
 
-void ow_gpio_interrupt_close(unsigned port)
+void urt_gpio_interrupt_close(unsigned port)
 {
     if (port >= OW_GPIO_INTERRUPTS)
         return;
-    ow_gpio_interrupt_t *interrupt = &gpio_interrupts[port];
+    urt_gpio_interrupt_t *interrupt = &gpio_interrupts[port];
     if (!interrupt->open)
         return;
     gpio_isr_handler_remove((gpio_num_t)interrupt->input_gpio);
-    ow_gpio_interrupt_set_callback(port, NULL);
+    urt_gpio_interrupt_set_callback(port, NULL);
     interrupt->open = false;
     gpio_isr_release();
     gpio_pin_release(interrupt->input_gpio);
 }
 
-// -- Link fabric gpio events (dispatcher lives in D: ow_link_fire) --
+// -- Link fabric gpio events (dispatcher lives in D: urt_link_fire) --
 
-extern bool ow_link_fire(unsigned slot);
+extern bool urt_link_fire(unsigned slot);
 
 static void IRAM_ATTR link_gpio_handler(void *context)
 {
-    if (ow_link_fire((unsigned)(uintptr_t)context))
+    if (urt_link_fire((unsigned)(uintptr_t)context))
         portYIELD_FROM_ISR();
 }
 
-int ow_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
+int urt_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
 {
     static const gpio_int_type_t types[] = {
         GPIO_INTR_POSEDGE,
@@ -596,7 +596,7 @@ int ow_link_gpio_open(unsigned slot, unsigned gpio, unsigned trigger)
     return 0;
 }
 
-void ow_link_gpio_close(unsigned slot, unsigned gpio)
+void urt_link_gpio_close(unsigned slot, unsigned gpio)
 {
     (void)slot;
     if (gpio >= SOC_GPIO_PIN_COUNT)
@@ -613,7 +613,7 @@ void ow_link_gpio_close(unsigned slot, unsigned gpio)
 static intr_handle_t reflex_nmi_handle;
 static unsigned reflex_users;
 
-int ow_reflex_open(unsigned gpio, unsigned trigger)
+int urt_reflex_open(unsigned gpio, unsigned trigger)
 {
     static const gpio_int_type_t types[] = {
         GPIO_INTR_POSEDGE,
@@ -645,7 +645,7 @@ int ow_reflex_open(unsigned gpio, unsigned trigger)
     return 0;
 }
 
-void ow_reflex_close(unsigned gpio)
+void urt_reflex_close(unsigned gpio)
 {
     if (gpio >= 32 || !reflex_users)
         return;
@@ -660,14 +660,14 @@ void ow_reflex_close(unsigned gpio)
 
 #else
 
-int ow_reflex_open(unsigned gpio, unsigned trigger)
+int urt_reflex_open(unsigned gpio, unsigned trigger)
 {
     (void)gpio;
     (void)trigger;
     return -1;
 }
 
-void ow_reflex_close(unsigned gpio)
+void urt_reflex_close(unsigned gpio)
 {
     (void)gpio;
 }
@@ -697,7 +697,7 @@ static adc_atten_t adc_attenuation(unsigned attenuation)
     }
 }
 
-int ow_adc_open(unsigned unit, void **handle)
+int urt_adc_open(unsigned unit, void **handle)
 {
     if (!handle || unit >= SOC_ADC_PERIPH_NUM)
         return -1;
@@ -710,7 +710,7 @@ int ow_adc_open(unsigned unit, void **handle)
     return 0;
 }
 
-int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned attenuation, unsigned bit_width, unsigned default_reference_mv, void **calibration, int *calibration_source)
+int urt_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned attenuation, unsigned bit_width, unsigned default_reference_mv, void **calibration, int *calibration_source)
 {
     if (!handle || !calibration || !calibration_source || unit >= SOC_ADC_PERIPH_NUM || bit_width == 0)
         return -1;
@@ -763,7 +763,7 @@ int ow_adc_input_open(void *handle, unsigned unit, unsigned channel, unsigned at
 static uint16_t adc1_read_isr(unsigned channel);
 #endif
 
-int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
+int urt_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
 {
     int value;
     if (!handle || !raw || unit >= SOC_ADC_PERIPH_NUM)
@@ -781,7 +781,7 @@ int ow_adc_read(void *handle, unsigned unit, unsigned channel, unsigned *raw)
     return 0;
 }
 
-int IRAM_ATTR ow_adc_read_critical(unsigned channel, unsigned *raw)
+int IRAM_ATTR urt_adc_read_critical(unsigned channel, unsigned *raw)
 {
 #if defined(CONFIG_IDF_TARGET_ESP32)
     portENTER_CRITICAL_SAFE(&adc_locks[0]);
@@ -796,7 +796,7 @@ int IRAM_ATTR ow_adc_read_critical(unsigned channel, unsigned *raw)
 #endif
 }
 
-int ow_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
+int urt_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
 {
     int value;
     if (!calibration || !millivolts || adc_cali_raw_to_voltage((adc_cali_handle_t)calibration, raw, &value) != ESP_OK)
@@ -805,7 +805,7 @@ int ow_adc_raw_to_mv(void *calibration, unsigned raw, unsigned *millivolts)
     return 0;
 }
 
-void ow_adc_input_close(void *calibration)
+void urt_adc_input_close(void *calibration)
 {
     if (!calibration)
         return;
@@ -816,7 +816,7 @@ void ow_adc_input_close(void *calibration)
 #endif
 }
 
-void ow_adc_close(void *handle)
+void urt_adc_close(void *handle)
 {
     if (handle)
         adc_oneshot_del_unit((adc_oneshot_unit_handle_t)handle);
@@ -861,7 +861,7 @@ static uint16_t IRAM_ATTR adc1_read_isr(unsigned channel)
 #define I2C_REQUEST_QUEUE_SIZE 1
 #define I2C_WORKER_STACK 3072
 
-typedef bool (*ow_i2c_callback_t)(void *context, int result);
+typedef bool (*urt_i2c_callback_t)(void *context, int result);
 
 typedef struct {
     uint16_t address;
@@ -872,9 +872,9 @@ typedef struct {
     void *read_data;
     size_t read_length;
     int timeout_ms;
-    ow_i2c_callback_t callback;
+    urt_i2c_callback_t callback;
     void *callback_context;
-} ow_i2c_request_t;
+} urt_i2c_request_t;
 
 typedef struct {
     i2c_master_bus_handle_t bus;
@@ -887,11 +887,11 @@ typedef struct {
     SemaphoreHandle_t worker_done;
     StaticSemaphore_t worker_done_storage;
     atomic_bool initialized;
-} ow_i2c_context_t;
+} urt_i2c_context_t;
 
-static ow_i2c_context_t i2c_contexts[OW_I2C_COUNT];
+static urt_i2c_context_t i2c_contexts[OW_I2C_COUNT];
 
-static bool ow_i2c_configure_device(ow_i2c_context_t *context, uint16_t address, uint8_t address_mode, uint32_t frequency)
+static bool urt_i2c_configure_device(urt_i2c_context_t *context, uint16_t address, uint8_t address_mode, uint32_t frequency)
 {
     if (context->device && context->address == address && context->address_mode == address_mode && context->frequency == frequency)
         return true;
@@ -916,7 +916,7 @@ static bool ow_i2c_configure_device(ow_i2c_context_t *context, uint16_t address,
     return true;
 }
 
-static int ow_i2c_result(esp_err_t result)
+static int urt_i2c_result(esp_err_t result)
 {
     if (result == ESP_OK)
         return 0;
@@ -928,17 +928,17 @@ static int ow_i2c_result(esp_err_t result)
     return 4;
 }
 
-static void ow_i2c_worker(void *argument)
+static void urt_i2c_worker(void *argument)
 {
-    ow_i2c_context_t *context = argument;
-    ow_i2c_request_t request;
+    urt_i2c_context_t *context = argument;
+    urt_i2c_request_t request;
 
     while (xQueueReceive(context->queue, &request, portMAX_DELAY) == pdTRUE) {
         if (!request.callback)
             break;
 
         esp_err_t result = ESP_FAIL;
-        if (ow_i2c_configure_device(context, request.address, request.address_mode, request.frequency)) {
+        if (urt_i2c_configure_device(context, request.address, request.address_mode, request.frequency)) {
             if (request.write_length && request.read_length)
                 result = i2c_master_transmit_receive(context->device, request.write_data, request.write_length, request.read_data, request.read_length, request.timeout_ms);
             else if (request.write_length)
@@ -946,24 +946,24 @@ static void ow_i2c_worker(void *argument)
             else
                 result = i2c_master_receive(context->device, request.read_data, request.read_length, request.timeout_ms);
         }
-        request.callback(request.callback_context, ow_i2c_result(result));
+        request.callback(request.callback_context, urt_i2c_result(result));
     }
 
     xSemaphoreGive(context->worker_done);
     vTaskDelete(NULL);
 }
 
-uint32_t ow_i2c_count(void)
+uint32_t urt_i2c_count(void)
 {
     return OW_I2C_COUNT;
 }
 
-void *ow_i2c_open(unsigned port, int sda_gpio, int scl_gpio, bool internal_pullups)
+void *urt_i2c_open(unsigned port, int sda_gpio, int scl_gpio, bool internal_pullups)
 {
     if (port >= OW_I2C_COUNT)
         return NULL;
 
-    ow_i2c_context_t *context = &i2c_contexts[port];
+    urt_i2c_context_t *context = &i2c_contexts[port];
     if (atomic_exchange_explicit(&context->initialized, true, memory_order_acq_rel))
         return NULL;
 
@@ -978,7 +978,7 @@ void *ow_i2c_open(unsigned port, int sda_gpio, int scl_gpio, bool internal_pullu
     if (i2c_new_master_bus(&bus_config, &context->bus) != ESP_OK)
         goto fail;
 
-    context->queue = xQueueCreate(I2C_REQUEST_QUEUE_SIZE, sizeof(ow_i2c_request_t));
+    context->queue = xQueueCreate(I2C_REQUEST_QUEUE_SIZE, sizeof(urt_i2c_request_t));
     if (!context->queue)
         goto fail;
 
@@ -988,7 +988,7 @@ void *ow_i2c_open(unsigned port, int sda_gpio, int scl_gpio, bool internal_pullu
         goto fail;
     xSemaphoreTake(context->worker_done, 0);
 
-    if (xTaskCreate(ow_i2c_worker, "ow-i2c", I2C_WORKER_STACK, context, tskIDLE_PRIORITY + 2, &context->worker) != pdPASS)
+    if (xTaskCreate(urt_i2c_worker, "urt-i2c", I2C_WORKER_STACK, context, tskIDLE_PRIORITY + 2, &context->worker) != pdPASS)
         goto fail;
     return context;
 
@@ -1005,14 +1005,14 @@ fail:
     return NULL;
 }
 
-void ow_i2c_close(void *context_ptr)
+void urt_i2c_close(void *context_ptr)
 {
-    ow_i2c_context_t *context = context_ptr;
+    urt_i2c_context_t *context = context_ptr;
     if (!context || !atomic_exchange_explicit(&context->initialized, false, memory_order_acq_rel))
         return;
 
     configASSERT(xTaskGetCurrentTaskHandle() != context->worker);
-    ow_i2c_request_t request = {0};
+    urt_i2c_request_t request = {0};
     xQueueSend(context->queue, &request, portMAX_DELAY);
     xSemaphoreTake(context->worker_done, portMAX_DELAY);
     context->worker = NULL;
@@ -1029,13 +1029,13 @@ void ow_i2c_close(void *context_ptr)
     context->queue = NULL;
 }
 
-int ow_i2c_submit(void *context_ptr, uint16_t address, uint8_t address_mode, uint32_t frequency, const void *write_data, size_t write_length, void *read_data, size_t read_length, int timeout_ms, ow_i2c_callback_t callback, void *callback_context)
+int urt_i2c_submit(void *context_ptr, uint16_t address, uint8_t address_mode, uint32_t frequency, const void *write_data, size_t write_length, void *read_data, size_t read_length, int timeout_ms, urt_i2c_callback_t callback, void *callback_context)
 {
-    ow_i2c_context_t *context = context_ptr;
+    urt_i2c_context_t *context = context_ptr;
     if (!context || !atomic_load_explicit(&context->initialized, memory_order_acquire) || !callback || (write_length == 0 && read_length == 0))
         return -1;
 
-    ow_i2c_request_t request = {
+    urt_i2c_request_t request = {
         .address = address,
         .frequency = frequency,
         .address_mode = address_mode,
@@ -1061,26 +1061,26 @@ int ow_i2c_submit(void *context_ptr, uint16_t address, uint8_t address_mode, uin
 // SPI1 is the flash controller; only the general-purpose hosts are exposed.
 #define OW_SPI_COUNT (SOC_SPI_PERIPH_NUM - 1)
 
-typedef bool (*ow_spi_callback_t)(void *context, int result);
+typedef bool (*urt_spi_callback_t)(void *context, int result);
 
 typedef struct {
     spi_device_handle_t device;
     spi_host_device_t host;
     int mosi_gpio;
     spi_transaction_t transaction;
-    ow_spi_callback_t callback;
+    urt_spi_callback_t callback;
     void *callback_context;
     void *read_data;
     size_t read_length;
     atomic_bool initialized;
-} ow_spi_context_t;
+} urt_spi_context_t;
 
-static ow_spi_context_t spi_contexts[OW_SPI_COUNT];
+static urt_spi_context_t spi_contexts[OW_SPI_COUNT];
 
 // Runs in the SPI completion interrupt: SPI_DEVICE_NO_RETURN_RESULT means the descriptor is never posted back to a task.
-static void IRAM_ATTR ow_spi_post(spi_transaction_t *transaction)
+static void IRAM_ATTR urt_spi_post(spi_transaction_t *transaction)
 {
-    ow_spi_context_t *context = transaction->user;
+    urt_spi_context_t *context = transaction->user;
     if (!context)
         return;                 // priming transfer at open: no caller to notify
 
@@ -1093,17 +1093,17 @@ static void IRAM_ATTR ow_spi_post(spi_transaction_t *transaction)
         portYIELD_FROM_ISR();
 }
 
-uint32_t ow_spi_count(void)
+uint32_t urt_spi_count(void)
 {
     return OW_SPI_COUNT;
 }
 
-void *ow_spi_open(unsigned port, int sck_gpio, int mosi_gpio, int miso_gpio, int cs_gpio, uint32_t frequency, uint8_t mode)
+void *urt_spi_open(unsigned port, int sck_gpio, int mosi_gpio, int miso_gpio, int cs_gpio, uint32_t frequency, uint8_t mode)
 {
     if (port >= OW_SPI_COUNT)
         return NULL;
 
-    ow_spi_context_t *context = &spi_contexts[port];
+    urt_spi_context_t *context = &spi_contexts[port];
     if (atomic_exchange_explicit(&context->initialized, true, memory_order_acq_rel))
         return NULL;
 
@@ -1128,7 +1128,7 @@ void *ow_spi_open(unsigned port, int sck_gpio, int mosi_gpio, int miso_gpio, int
         .spics_io_num = cs_gpio,
         .queue_size = 1,
         .flags = SPI_DEVICE_NO_RETURN_RESULT,
-        .post_cb = ow_spi_post,
+        .post_cb = urt_spi_post,
     };
     if (spi_bus_add_device(context->host, &device_config, &context->device) != ESP_OK)
         goto fail;
@@ -1150,9 +1150,9 @@ fail:
     return NULL;
 }
 
-void ow_spi_close(void *context_ptr)
+void urt_spi_close(void *context_ptr)
 {
-    ow_spi_context_t *context = context_ptr;
+    urt_spi_context_t *context = context_ptr;
     if (!context || !atomic_exchange_explicit(&context->initialized, false, memory_order_acq_rel))
         return;
 
@@ -1161,9 +1161,9 @@ void ow_spi_close(void *context_ptr)
     spi_bus_free(context->host);
 }
 
-int ow_spi_submit(void *context_ptr, const void *write_data, size_t write_length, void *read_data, size_t read_length, ow_spi_callback_t callback, void *callback_context)
+int urt_spi_submit(void *context_ptr, const void *write_data, size_t write_length, void *read_data, size_t read_length, urt_spi_callback_t callback, void *callback_context)
 {
-    ow_spi_context_t *context = context_ptr;
+    urt_spi_context_t *context = context_ptr;
     if (!context || !atomic_load_explicit(&context->initialized, memory_order_acquire) || !callback || (write_length == 0 && read_length == 0))
         return -1;
     // spi_device_queue_trans takes a FreeRTOS queue with task-context semantics, so a completion callback cannot resubmit directly.
@@ -1206,9 +1206,9 @@ int ow_spi_submit(void *context_ptr, const void *write_data, size_t write_length
     return spi_device_queue_trans(context->device, transaction, 0) == ESP_OK ? 0 : -1;
 }
 
-int ow_spi_suspend(void *context_ptr)
+int urt_spi_suspend(void *context_ptr)
 {
-    ow_spi_context_t *context = context_ptr;
+    urt_spi_context_t *context = context_ptr;
     if (!context || !atomic_load_explicit(&context->initialized, memory_order_acquire) || context->mosi_gpio < 0)
         return -1;
     // Hand MOSI's output stage back to the GPIO output register; the caller may now re-init and sample the pin.
@@ -1216,9 +1216,9 @@ int ow_spi_suspend(void *context_ptr)
     return 0;
 }
 
-int ow_spi_resume(void *context_ptr)
+int urt_spi_resume(void *context_ptr)
 {
-    ow_spi_context_t *context = context_ptr;
+    urt_spi_context_t *context = context_ptr;
     if (!context || !atomic_load_explicit(&context->initialized, memory_order_acquire) || context->mosi_gpio < 0)
         return -1;
     gpio_set_direction((gpio_num_t)context->mosi_gpio, GPIO_MODE_OUTPUT);
@@ -1238,27 +1238,27 @@ int ow_spi_resume(void *context_ptr)
 #define NUM_UARTS SOC_UART_NUM
 
 // what the ISR found, in bits shared with the D side
-#define OW_UART_RX       (1u << 0)
-#define OW_UART_TIMEOUT  (1u << 1)
-#define OW_UART_TX       (1u << 2)
-#define OW_UART_TX_DONE  (1u << 3)
-#define OW_UART_PARITY   (1u << 4)
-#define OW_UART_FRAMING  (1u << 5)
-#define OW_UART_OVERFLOW (1u << 6)
-#define OW_UART_BREAK    (1u << 7)
+#define URT_UART_RX       (1u << 0)
+#define URT_UART_TIMEOUT  (1u << 1)
+#define URT_UART_TX       (1u << 2)
+#define URT_UART_TX_DONE  (1u << 3)
+#define URT_UART_PARITY   (1u << 4)
+#define URT_UART_FRAMING  (1u << 5)
+#define URT_UART_OVERFLOW (1u << 6)
+#define URT_UART_BREAK    (1u << 7)
 
-#define OW_UART_RX_INTR (UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_OVF | UART_INTR_FRAM_ERR | UART_INTR_PARITY_ERR | UART_INTR_BRK_DET)
+#define URT_UART_RX_INTR (UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_OVF | UART_INTR_FRAM_ERR | UART_INTR_PARITY_ERR | UART_INTR_BRK_DET)
 
 static uart_hal_context_t uart_hal[NUM_UARTS];
 static intr_handle_t uart_intr[NUM_UARTS];
 static bool uart_rs485[NUM_UARTS];
 static int8_t uart_pins[NUM_UARTS][3];  // TX, RX and DE as routed at open; -1 left as they were
 
-extern void ow_uart_isr(unsigned port);
+extern void urt_uart_isr(unsigned port);
 
-static void ow_uart_isr_entry(void *arg)
+static void urt_uart_isr_entry(void *arg)
 {
-    ow_uart_isr((unsigned)(uintptr_t)arg);
+    urt_uart_isr((unsigned)(uintptr_t)arg);
 }
 
 // D enums: StopBits { half=0, one=1, one_point_five=2, two=3 }
@@ -1271,9 +1271,9 @@ static const uart_parity_t parity_map[] = {
     UART_PARITY_DISABLE, UART_PARITY_DISABLE
 };
 
-int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits, uint8_t stop_bits, uint8_t parity,
-                 int8_t tx_gpio, int8_t rx_gpio, bool rs485_enabled, int8_t de_gpio, bool de_active_high,
-                 uint8_t rx_full, uint8_t rx_timeout)
+int urt_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits, uint8_t stop_bits, uint8_t parity,
+                  int8_t tx_gpio, int8_t rx_gpio, bool rs485_enabled, int8_t de_gpio, bool de_active_high,
+                  uint8_t rx_full, uint8_t rx_timeout)
 {
     if (port >= NUM_UARTS || uart_intr[port] || data_bits < 5 || data_bits > 8)
         return 0;
@@ -1304,16 +1304,16 @@ int ow_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits, uint8_t s
     uart_hal_set_rx_timeout(hal, rx_timeout);
     uart_hal_disable_intr_mask(hal, UART_LL_INTR_MASK);
     uart_hal_clr_intsts_mask(hal, UART_LL_INTR_MASK);
-    if (esp_intr_alloc(uart_periph_signal[port].irq, 0, ow_uart_isr_entry, (void *)(uintptr_t)port, &uart_intr[port]) != ESP_OK)
+    if (esp_intr_alloc(uart_periph_signal[port].irq, 0, urt_uart_isr_entry, (void *)(uintptr_t)port, &uart_intr[port]) != ESP_OK)
     {
         uart_intr[port] = NULL;
         return 0;
     }
-    uart_hal_ena_intr_mask(hal, OW_UART_RX_INTR);
+    uart_hal_ena_intr_mask(hal, URT_UART_RX_INTR);
     return 1;
 }
 
-void ow_uart_close(unsigned port)
+void urt_uart_close(unsigned port)
 {
     if (port >= NUM_UARTS || !uart_intr[port])
         return;
@@ -1327,14 +1327,14 @@ void ow_uart_close(unsigned port)
             gpio_reset_pin((gpio_num_t)uart_pins[port][i]);
 }
 
-void ow_uart_set_rx(unsigned port, uint8_t rx_full, uint8_t rx_timeout)
+void urt_uart_set_rx(unsigned port, uint8_t rx_full, uint8_t rx_timeout)
 {
     uart_hal_set_rxfifo_full_thr(&uart_hal[port], rx_full);
     uart_hal_set_rx_timeout(&uart_hal[port], rx_timeout);
 }
 
 // In the ISR: what raised it, cleared.
-uint32_t ow_uart_take_causes(unsigned port)
+uint32_t urt_uart_take_causes(unsigned port)
 {
     uart_hal_context_t *hal = &uart_hal[port];
     uint32_t status = uart_hal_get_intsts_mask(hal);
@@ -1342,22 +1342,22 @@ uint32_t ow_uart_take_causes(unsigned port)
     uart_hal_clr_intsts_mask(hal, status & ~done);
     uint32_t causes = 0;
     if (status & UART_INTR_RXFIFO_FULL)
-        causes |= OW_UART_RX;
+        causes |= URT_UART_RX;
     if (status & UART_INTR_RXFIFO_TOUT)
-        causes |= OW_UART_RX | OW_UART_TIMEOUT;
+        causes |= URT_UART_RX | URT_UART_TIMEOUT;
     if (status & UART_INTR_TXFIFO_EMPTY)
-        causes |= OW_UART_TX;
+        causes |= URT_UART_TX;
     if (status & UART_INTR_PARITY_ERR)
-        causes |= OW_UART_PARITY;
+        causes |= URT_UART_PARITY;
     if (status & UART_INTR_FRAM_ERR)
-        causes |= OW_UART_FRAMING;
+        causes |= URT_UART_FRAMING;
     if (status & UART_INTR_RXFIFO_OVF)
     {
-        causes |= OW_UART_OVERFLOW;
+        causes |= URT_UART_OVERFLOW;
         uart_hal_rxfifo_rst(hal);
     }
     if (status & UART_INTR_BRK_DET)
-        causes |= OW_UART_BREAK;
+        causes |= URT_UART_BREAK;
     // a TX_DONE before the line is idle is handled on the next one
     if (done && uart_hal_is_tx_idle(hal))
     {
@@ -1368,30 +1368,30 @@ uint32_t ow_uart_take_causes(unsigned port)
             uart_hal_rxfifo_rst(hal);
             uart_hal_set_rts(hal, 1);
         }
-        causes |= OW_UART_TX_DONE;
+        causes |= URT_UART_TX_DONE;
     }
     return causes;
 }
 
-uint32_t ow_uart_rx_len(unsigned port)
+uint32_t urt_uart_rx_len(unsigned port)
 {
     return uart_hal_get_rxfifo_len(&uart_hal[port]);
 }
 
-uint32_t ow_uart_rx_read(unsigned port, uint8_t *buf, uint32_t len)
+uint32_t urt_uart_rx_read(unsigned port, uint8_t *buf, uint32_t len)
 {
     int n = (int)len;
     uart_hal_read_rxfifo(&uart_hal[port], buf, &n);
     return (uint32_t)n;
 }
 
-uint32_t ow_uart_tx_room(unsigned port)
+uint32_t urt_uart_tx_room(unsigned port)
 {
     return uart_hal_get_txfifo_len(&uart_hal[port]);
 }
 
 // Interrupts are off. A stale TX_DONE would release RTS under the new transmission, so it is cleared first.
-uint32_t ow_uart_tx_write(unsigned port, const uint8_t *buf, uint32_t len)
+uint32_t urt_uart_tx_write(unsigned port, const uint8_t *buf, uint32_t len)
 {
     uart_hal_context_t *hal = &uart_hal[port];
     if (uart_rs485[port])
@@ -1405,7 +1405,7 @@ uint32_t ow_uart_tx_write(unsigned port, const uint8_t *buf, uint32_t len)
     return written;
 }
 
-void ow_uart_tx_irq(unsigned port, bool enable)
+void urt_uart_tx_irq(unsigned port, bool enable)
 {
     if (enable)
         uart_hal_ena_intr_mask(&uart_hal[port], UART_INTR_TXFIFO_EMPTY);
@@ -1413,12 +1413,12 @@ void ow_uart_tx_irq(unsigned port, bool enable)
         uart_hal_disable_intr_mask(&uart_hal[port], UART_INTR_TXFIFO_EMPTY);
 }
 
-bool ow_uart_tx_idle(unsigned port)
+bool urt_uart_tx_idle(unsigned port)
 {
     return uart_hal_is_tx_idle(&uart_hal[port]);
 }
 
-uint32_t ow_uart_fifo_len(unsigned port)
+uint32_t urt_uart_fifo_len(unsigned port)
 {
     return UART_HW_FIFO_LEN(port);
 }
@@ -1431,21 +1431,21 @@ uint32_t ow_uart_fifo_len(unsigned port)
 #include "esp_event.h"
 #include "esp_mac.h"
 
-static int ow_wifi_refcount;
+static int urt_wifi_refcount;
 
 #ifdef OW_USE_LWIP
 #include "esp_netif.h"
 
-static esp_netif_t *ow_wifi_netif_sta;
-static esp_netif_t *ow_wifi_netif_ap;
+static esp_netif_t *urt_wifi_netif_sta;
+static esp_netif_t *urt_wifi_netif_ap;
 #endif
 
-typedef void (*ow_wifi_event_cb_t)(int event_id, void *data, int data_len);
+typedef void (*urt_wifi_event_cb_t)(int event_id, void *data, int data_len);
 
-static ow_wifi_event_cb_t ow_wifi_sta_cb;
-static ow_wifi_event_cb_t ow_wifi_ap_cb;
+static urt_wifi_event_cb_t urt_wifi_sta_cb;
+static urt_wifi_event_cb_t urt_wifi_ap_cb;
 
-static void ow_wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
+static void urt_wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     if (base == WIFI_EVENT)
     {
@@ -1459,78 +1459,78 @@ static void ow_wifi_event_handler(void *arg, esp_event_base_t base, int32_t even
         case WIFI_EVENT_STA_DISCONNECTED:
         case WIFI_EVENT_STA_START:
         case WIFI_EVENT_STA_STOP:
-            if (ow_wifi_sta_cb)
-                ow_wifi_sta_cb(event_id, event_data, data_len);
+            if (urt_wifi_sta_cb)
+                urt_wifi_sta_cb(event_id, event_data, data_len);
             break;
 
         case WIFI_EVENT_AP_START:
         case WIFI_EVENT_AP_STOP:
         case WIFI_EVENT_AP_STACONNECTED:
         case WIFI_EVENT_AP_STADISCONNECTED:
-            if (ow_wifi_ap_cb)
-                ow_wifi_ap_cb(event_id, event_data, 0);
+            if (urt_wifi_ap_cb)
+                urt_wifi_ap_cb(event_id, event_data, 0);
             break;
         }
     }
 #ifdef OW_USE_LWIP
     else if (base == IP_EVENT)
     {
-        if (event_id == IP_EVENT_STA_GOT_IP && ow_wifi_sta_cb)
-            ow_wifi_sta_cb(event_id, event_data, 0);
+        if (event_id == IP_EVENT_STA_GOT_IP && urt_wifi_sta_cb)
+            urt_wifi_sta_cb(event_id, event_data, 0);
     }
 #endif
 }
 
-int ow_wifi_init(void)
+int urt_wifi_init(void)
 {
-    if (ow_wifi_refcount++ > 0)
+    if (urt_wifi_refcount++ > 0)
         return 0;
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t err = esp_wifi_init(&cfg);
     if (err != ESP_OK)
     {
-        ow_wifi_refcount--;
+        urt_wifi_refcount--;
         return (int)err;
     }
 
-    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &ow_wifi_event_handler, NULL);
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &urt_wifi_event_handler, NULL);
 
 #ifdef OW_USE_LWIP
     // Create netifs before RX callbacks fire, so esp_netif_receive() has valid targets.
-    if (!ow_wifi_netif_sta)
-        ow_wifi_netif_sta = esp_netif_create_default_wifi_sta();
-    if (!ow_wifi_netif_ap)
-        ow_wifi_netif_ap = esp_netif_create_default_wifi_ap();
-    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ow_wifi_event_handler, NULL);
+    if (!urt_wifi_netif_sta)
+        urt_wifi_netif_sta = esp_netif_create_default_wifi_sta();
+    if (!urt_wifi_netif_ap)
+        urt_wifi_netif_ap = esp_netif_create_default_wifi_ap();
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &urt_wifi_event_handler, NULL);
 #endif
 
     return 0;
 }
 
-void ow_wifi_deinit(void)
+void urt_wifi_deinit(void)
 {
-    if (--ow_wifi_refcount > 0)
+    if (--urt_wifi_refcount > 0)
         return;
 
     esp_wifi_stop();
     esp_wifi_deinit();
 
 #ifdef OW_USE_LWIP
-    if (ow_wifi_netif_sta)
+    if (urt_wifi_netif_sta)
     {
-        esp_netif_destroy(ow_wifi_netif_sta);
-        ow_wifi_netif_sta = NULL;
+        esp_netif_destroy(urt_wifi_netif_sta);
+        urt_wifi_netif_sta = NULL;
     }
-    if (ow_wifi_netif_ap)
+    if (urt_wifi_netif_ap)
     {
-        esp_netif_destroy(ow_wifi_netif_ap);
-        ow_wifi_netif_ap = NULL;
+        esp_netif_destroy(urt_wifi_netif_ap);
+        urt_wifi_netif_ap = NULL;
     }
 #endif
 }
 
-int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bssid)
+int urt_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bssid)
 {
     wifi_config_t cfg = {0};
     if (ssid)
@@ -1554,7 +1554,7 @@ int ow_wifi_sta_config(const char *ssid, const char *password, const uint8_t *bs
     return esp_wifi_set_config(WIFI_IF_STA, &cfg) == ESP_OK ? 1 : 0;
 }
 
-int ow_wifi_ap_config(const char *ssid, const char *password, uint8_t channel, uint8_t max_conn, uint8_t hidden)
+int urt_wifi_ap_config(const char *ssid, const char *password, uint8_t channel, uint8_t max_conn, uint8_t hidden)
 {
     wifi_config_t cfg = {0};
     if (ssid)
@@ -1581,7 +1581,7 @@ int ow_wifi_ap_config(const char *ssid, const char *password, uint8_t channel, u
     return esp_wifi_set_config(WIFI_IF_AP, &cfg) == ESP_OK ? 1 : 0;
 }
 
-int ow_wifi_ap_set_max_clients(uint8_t max_conn)
+int urt_wifi_ap_set_max_clients(uint8_t max_conn)
 {
     wifi_config_t cfg = {0};
 
@@ -1592,7 +1592,7 @@ int ow_wifi_ap_set_max_clients(uint8_t max_conn)
     return esp_wifi_set_config(WIFI_IF_AP, &cfg) == ESP_OK ? 1 : 0;
 }
 
-int ow_wifi_sta_get_ap_info(uint8_t *bssid, int *rssi)
+int urt_wifi_sta_get_ap_info(uint8_t *bssid, int *rssi)
 {
     wifi_ap_record_t record;
     if (esp_wifi_sta_get_ap_info(&record) != ESP_OK)
@@ -1610,19 +1610,19 @@ int ow_wifi_sta_get_ap_info(uint8_t *bssid, int *rssi)
 // so the bridge/routing layer sees all traffic.
 
 // Return non-zero when the callback retains eb and assumes responsibility for
-// releasing it with ow_wifi_free_rx_buffer().
-typedef int (*ow_wifi_rx_cb_t)(const uint8_t *data, int len, int iface, void *eb);
+// releasing it with urt_wifi_free_rx_buffer().
+typedef int (*urt_wifi_rx_cb_t)(const uint8_t *data, int len, int iface, void *eb);
 
-static ow_wifi_rx_cb_t ow_wifi_rx_callback;
+static urt_wifi_rx_cb_t urt_wifi_rx_callback;
 
-static esp_err_t ow_wifi_sta_rx(void *buffer, uint16_t len, void *eb)
+static esp_err_t urt_wifi_sta_rx(void *buffer, uint16_t len, void *eb)
 {
     int retained = 0;
-    if (ow_wifi_rx_callback)
-        retained = ow_wifi_rx_callback((const uint8_t *)buffer, len, 0, eb);
+    if (urt_wifi_rx_callback)
+        retained = urt_wifi_rx_callback((const uint8_t *)buffer, len, 0, eb);
 #ifdef OW_USE_LWIP
     (void)retained;
-    return esp_netif_receive(ow_wifi_netif_sta, buffer, len, eb);
+    return esp_netif_receive(urt_wifi_netif_sta, buffer, len, eb);
 #else
     if (eb && !retained)
         esp_wifi_internal_free_rx_buffer(eb);
@@ -1630,14 +1630,14 @@ static esp_err_t ow_wifi_sta_rx(void *buffer, uint16_t len, void *eb)
 #endif
 }
 
-static esp_err_t ow_wifi_ap_rx(void *buffer, uint16_t len, void *eb)
+static esp_err_t urt_wifi_ap_rx(void *buffer, uint16_t len, void *eb)
 {
     int retained = 0;
-    if (ow_wifi_rx_callback)
-        retained = ow_wifi_rx_callback((const uint8_t *)buffer, len, 1, eb);
+    if (urt_wifi_rx_callback)
+        retained = urt_wifi_rx_callback((const uint8_t *)buffer, len, 1, eb);
 #ifdef OW_USE_LWIP
     (void)retained;
-    return esp_netif_receive(ow_wifi_netif_ap, buffer, len, eb);
+    return esp_netif_receive(urt_wifi_netif_ap, buffer, len, eb);
 #else
     if (eb && !retained)
         esp_wifi_internal_free_rx_buffer(eb);
@@ -1645,31 +1645,31 @@ static esp_err_t ow_wifi_ap_rx(void *buffer, uint16_t len, void *eb)
 #endif
 }
 
-void ow_wifi_free_rx_buffer(void *eb)
+void urt_wifi_free_rx_buffer(void *eb)
 {
     if (eb)
         esp_wifi_internal_free_rx_buffer(eb);
 }
 
-int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb)
+int urt_wifi_set_rx_callback(urt_wifi_rx_cb_t cb)
 {
-    ow_wifi_rx_callback = cb;
+    urt_wifi_rx_callback = cb;
     esp_err_t err;
-    err = esp_wifi_internal_reg_rxcb(WIFI_IF_STA, cb ? &ow_wifi_sta_rx : NULL);
+    err = esp_wifi_internal_reg_rxcb(WIFI_IF_STA, cb ? &urt_wifi_sta_rx : NULL);
     if (err != ESP_OK)
         return 0;
-    err = esp_wifi_internal_reg_rxcb(WIFI_IF_AP, cb ? &ow_wifi_ap_rx : NULL);
+    err = esp_wifi_internal_reg_rxcb(WIFI_IF_AP, cb ? &urt_wifi_ap_rx : NULL);
     return err == ESP_OK ? 1 : 0;
 }
 
-void ow_wifi_set_sta_callback(ow_wifi_event_cb_t cb)
+void urt_wifi_set_sta_callback(urt_wifi_event_cb_t cb)
 {
-    ow_wifi_sta_cb = cb;
+    urt_wifi_sta_cb = cb;
 }
 
-void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb)
+void urt_wifi_set_ap_callback(urt_wifi_event_cb_t cb)
 {
-    ow_wifi_ap_cb = cb;
+    urt_wifi_ap_cb = cb;
 }
 
 // Promiscuous (monitor) mode wrappers. ESP-IDF's promiscuous mode coexists
@@ -1677,27 +1677,27 @@ void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb)
 // fires for every 802.11 frame the radio decodes, including frames with
 // FCS errors when the FCSFAIL filter bit is set.
 
-typedef void (*ow_wifi_promisc_cb_t)(int type, int rssi, int channel, int rate, int fcs_fail, int len, const uint8_t *payload);
+typedef void (*urt_wifi_promisc_cb_t)(int type, int rssi, int channel, int rate, int fcs_fail, int len, const uint8_t *payload);
 
-static ow_wifi_promisc_cb_t ow_wifi_promisc_callback;
+static urt_wifi_promisc_cb_t urt_wifi_promisc_callback;
 
-static void ow_wifi_promisc_trampoline(void *buf, wifi_promiscuous_pkt_type_t type)
+static void urt_wifi_promisc_trampoline(void *buf, wifi_promiscuous_pkt_type_t type)
 {
     // ESP-IDF reports WIFI_PKT_MISC with metadata but no payload.
-    if (!ow_wifi_promisc_callback || !buf || type == WIFI_PKT_MISC)
+    if (!urt_wifi_promisc_callback || !buf || type == WIFI_PKT_MISC)
         return;
     const wifi_promiscuous_pkt_t *pkt = (const wifi_promiscuous_pkt_t *)buf;
     const wifi_pkt_rx_ctrl_t *rx = &pkt->rx_ctrl;
-    ow_wifi_promisc_callback((int)type, (int)rx->rssi, (int)rx->channel, (int)rx->rate, (int)rx->rx_state, (int)rx->sig_len, pkt->payload);
+    urt_wifi_promisc_callback((int)type, (int)rx->rssi, (int)rx->channel, (int)rx->rate, (int)rx->rx_state, (int)rx->sig_len, pkt->payload);
 }
 
-void ow_wifi_set_promiscuous_callback(ow_wifi_promisc_cb_t cb)
+void urt_wifi_set_promiscuous_callback(urt_wifi_promisc_cb_t cb)
 {
-    ow_wifi_promisc_callback = cb;
-    esp_wifi_set_promiscuous_rx_cb(cb ? &ow_wifi_promisc_trampoline : NULL);
+    urt_wifi_promisc_callback = cb;
+    esp_wifi_set_promiscuous_rx_cb(cb ? &urt_wifi_promisc_trampoline : NULL);
 }
 
-int ow_wifi_set_promiscuous(int enable, uint32_t filter_mask)
+int urt_wifi_set_promiscuous(int enable, uint32_t filter_mask)
 {
     if (enable)
     {
@@ -1707,7 +1707,7 @@ int ow_wifi_set_promiscuous(int enable, uint32_t filter_mask)
     return esp_wifi_set_promiscuous(enable ? true : false) == ESP_OK ? 1 : 0;
 }
 
-int ow_wifi_set_channel(int primary, int secondary)
+int urt_wifi_set_channel(int primary, int secondary)
 {
     return esp_wifi_set_channel((uint8_t)primary, (wifi_second_chan_t)secondary) == ESP_OK ? 1 : 0;
 }
@@ -1716,75 +1716,75 @@ int ow_wifi_set_channel(int primary, int secondary)
 // en_sys_seq=true lets the MAC fill the sequence number; the caller can
 // still set destination/source MACs and frame control. Used by monitor-mode
 // injection paths.
-int ow_wifi_raw_tx(int ifx, const uint8_t *frame, int len, int en_sys_seq)
+int urt_wifi_raw_tx(int ifx, const uint8_t *frame, int len, int en_sys_seq)
 {
     return esp_wifi_80211_tx((wifi_interface_t)ifx, frame, len, en_sys_seq ? true : false) == ESP_OK ? 1 : 0;
 }
 #else // !CONFIG_ESP_WIFI_ENABLED
 
-typedef void (*ow_wifi_event_cb_t)(int, void *, int);
-typedef void (*ow_wifi_rx_cb_t)(const uint8_t *, int, int);
-typedef void (*ow_wifi_promisc_cb_t)(int, int, int, int, int, int, const uint8_t *);
+typedef void (*urt_wifi_event_cb_t)(int, void *, int);
+typedef void (*urt_wifi_rx_cb_t)(const uint8_t *, int, int);
+typedef void (*urt_wifi_promisc_cb_t)(int, int, int, int, int, int, const uint8_t *);
 
-int ow_wifi_init(void) { return -1; }
-void ow_wifi_deinit(void) {}
-int ow_wifi_sta_config(const char *s, const char *p, const uint8_t *b) { (void)s;(void)p;(void)b; return 0; }
-int ow_wifi_ap_config(const char *s, const char *p, uint8_t c, uint8_t m, uint8_t h) { (void)s;(void)p;(void)c;(void)m;(void)h; return 0; }
-int ow_wifi_ap_set_max_clients(uint8_t m) { (void)m; return 0; }
-int ow_wifi_sta_get_ap_info(uint8_t *b, int *r) { (void)b; (void)r; return 0; }
-int ow_wifi_set_rx_callback(ow_wifi_rx_cb_t cb) { (void)cb; return 0; }
-void ow_wifi_set_sta_callback(ow_wifi_event_cb_t cb) { (void)cb; }
-void ow_wifi_set_ap_callback(ow_wifi_event_cb_t cb) { (void)cb; }
-int ow_wifi_set_promiscuous(int enable, uint32_t filter_mask) { (void)enable;(void)filter_mask; return 0; }
-void ow_wifi_set_promiscuous_callback(ow_wifi_promisc_cb_t cb) { (void)cb; }
-int ow_wifi_set_channel(int p, int s) { (void)p;(void)s; return 0; }
-int ow_wifi_raw_tx(int ifx, const uint8_t *frame, int len, int en) { (void)ifx;(void)frame;(void)len;(void)en; return 0; }
+int urt_wifi_init(void) { return -1; }
+void urt_wifi_deinit(void) {}
+int urt_wifi_sta_config(const char *s, const char *p, const uint8_t *b) { (void)s;(void)p;(void)b; return 0; }
+int urt_wifi_ap_config(const char *s, const char *p, uint8_t c, uint8_t m, uint8_t h) { (void)s;(void)p;(void)c;(void)m;(void)h; return 0; }
+int urt_wifi_ap_set_max_clients(uint8_t m) { (void)m; return 0; }
+int urt_wifi_sta_get_ap_info(uint8_t *b, int *r) { (void)b; (void)r; return 0; }
+int urt_wifi_set_rx_callback(urt_wifi_rx_cb_t cb) { (void)cb; return 0; }
+void urt_wifi_set_sta_callback(urt_wifi_event_cb_t cb) { (void)cb; }
+void urt_wifi_set_ap_callback(urt_wifi_event_cb_t cb) { (void)cb; }
+int urt_wifi_set_promiscuous(int enable, uint32_t filter_mask) { (void)enable;(void)filter_mask; return 0; }
+void urt_wifi_set_promiscuous_callback(urt_wifi_promisc_cb_t cb) { (void)cb; }
+int urt_wifi_set_channel(int p, int s) { (void)p;(void)s; return 0; }
+int urt_wifi_raw_tx(int ifx, const uint8_t *frame, int len, int en) { (void)ifx;(void)frame;(void)len;(void)en; return 0; }
 
 #endif // CONFIG_ESP_WIFI_ENABLED
 
 // -- IEEE 802.15.4 radio wrappers --
 
-typedef void (*ow_wpan_rx_cb_t)(const uint8_t *frame, int8_t rssi, uint8_t lqi, uint8_t channel, int pending);
-typedef void (*ow_wpan_tx_cb_t)(int error, const uint8_t *ack, int8_t rssi, uint8_t lqi, uint8_t channel);
+typedef void (*urt_wpan_rx_cb_t)(const uint8_t *frame, int8_t rssi, uint8_t lqi, uint8_t channel, int pending);
+typedef void (*urt_wpan_tx_cb_t)(int error, const uint8_t *ack, int8_t rssi, uint8_t lqi, uint8_t channel);
 
 #if CONFIG_IEEE802154_ENABLED
 #include "esp_ieee802154.h"
 
-static ow_wpan_rx_cb_t ow_wpan_rx_cb;
-static ow_wpan_tx_cb_t ow_wpan_tx_cb;
+static urt_wpan_rx_cb_t urt_wpan_rx_cb;
+static urt_wpan_tx_cb_t urt_wpan_tx_cb;
 
 // Release the driver buffer after D has copied it.
-static void IRAM_ATTR ow_wpan_rx_done(uint8_t *frame, esp_ieee802154_frame_info_t *info)
+static void IRAM_ATTR urt_wpan_rx_done(uint8_t *frame, esp_ieee802154_frame_info_t *info)
 {
-    if (ow_wpan_rx_cb)
-        ow_wpan_rx_cb(frame, info->rssi, info->lqi, info->channel, info->pending ? 1 : 0);
+    if (urt_wpan_rx_cb)
+        urt_wpan_rx_cb(frame, info->rssi, info->lqi, info->channel, info->pending ? 1 : 0);
     esp_ieee802154_receive_handle_done(frame);
 }
 
-static void IRAM_ATTR ow_wpan_tx_done(const uint8_t *frame, const uint8_t *ack, esp_ieee802154_frame_info_t *info)
+static void IRAM_ATTR urt_wpan_tx_done(const uint8_t *frame, const uint8_t *ack, esp_ieee802154_frame_info_t *info)
 {
     (void)frame;
-    if (ow_wpan_tx_cb)
-        ow_wpan_tx_cb(ESP_IEEE802154_TX_ERR_NONE, ack, ack ? info->rssi : 0, ack ? info->lqi : 0, ack ? info->channel : 0);
+    if (urt_wpan_tx_cb)
+        urt_wpan_tx_cb(ESP_IEEE802154_TX_ERR_NONE, ack, ack ? info->rssi : 0, ack ? info->lqi : 0, ack ? info->channel : 0);
     if (ack)
         esp_ieee802154_receive_handle_done(ack);
 }
 
-static void IRAM_ATTR ow_wpan_tx_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
+static void IRAM_ATTR urt_wpan_tx_failed(const uint8_t *frame, esp_ieee802154_tx_error_t error)
 {
     (void)frame;
-    if (ow_wpan_tx_cb)
-        ow_wpan_tx_cb((int)error, NULL, 0, 0, 0);
+    if (urt_wpan_tx_cb)
+        urt_wpan_tx_cb((int)error, NULL, 0, 0, 0);
 }
 
-int ow_wpan_enable(ow_wpan_rx_cb_t rx, ow_wpan_tx_cb_t tx)
+int urt_wpan_enable(urt_wpan_rx_cb_t rx, urt_wpan_tx_cb_t tx)
 {
-    ow_wpan_rx_cb = rx;
-    ow_wpan_tx_cb = tx;
+    urt_wpan_rx_cb = rx;
+    urt_wpan_tx_cb = tx;
     esp_ieee802154_event_cb_list_t cbs = {
-        .rx_done_cb = ow_wpan_rx_done,
-        .tx_done_cb = ow_wpan_tx_done,
-        .tx_failed_cb = ow_wpan_tx_failed,
+        .rx_done_cb = urt_wpan_rx_done,
+        .tx_done_cb = urt_wpan_tx_done,
+        .tx_failed_cb = urt_wpan_tx_failed,
     };
     if (esp_ieee802154_event_callback_list_register(cbs) != ESP_OK)
         return -1;
@@ -1795,22 +1795,22 @@ int ow_wpan_enable(ow_wpan_rx_cb_t rx, ow_wpan_tx_cb_t tx)
     return 0;
 }
 
-void ow_wpan_disable(void)
+void urt_wpan_disable(void)
 {
     esp_ieee802154_disable();
     esp_ieee802154_event_callback_list_unregister();
-    ow_wpan_rx_cb = NULL;
-    ow_wpan_tx_cb = NULL;
+    urt_wpan_rx_cb = NULL;
+    urt_wpan_tx_cb = NULL;
 }
 #else // !CONFIG_IEEE802154_ENABLED
-int ow_wpan_enable(ow_wpan_rx_cb_t rx, ow_wpan_tx_cb_t tx) { (void)rx; (void)tx; return -1; }
-void ow_wpan_disable(void) {}
+int urt_wpan_enable(urt_wpan_rx_cb_t rx, urt_wpan_tx_cb_t tx) { (void)rx; (void)tx; return -1; }
+void urt_wpan_disable(void) {}
 #endif // CONFIG_IEEE802154_ENABLED
 
 // -- Ethernet (EMAC) wrappers --
 //
 // eth_esp32_emac_config_t has target-conditional members and a per-target default
-// initialiser, so the struct is assembled here and D passes ow_eth_config_t.
+// initialiser, so the struct is assembled here and D passes urt_eth_config_t.
 
 #ifdef OW_USE_ETHERNET
 #include "esp_eth.h"
@@ -1838,41 +1838,41 @@ typedef struct
     bool flow_control;
     bool timestamp;
     bool tx_checksum;
-} ow_eth_config_t;
+} urt_eth_config_t;
 
-typedef void (*ow_eth_rx_cb_t)(uint8_t *buffer, uint32_t length, uint32_t seconds, uint32_t nanoseconds, int has_timestamp);
-typedef void (*ow_eth_link_cb_t)(int up);
+typedef void (*urt_eth_rx_cb_t)(uint8_t *buffer, uint32_t length, uint32_t seconds, uint32_t nanoseconds, int has_timestamp);
+typedef void (*urt_eth_link_cb_t)(int up);
 
-static esp_eth_handle_t ow_eth_handle;
-static esp_eth_mac_t *ow_eth_mac;
-static esp_eth_phy_t *ow_eth_phy;
-static ow_eth_rx_cb_t ow_eth_rx_cb;
-static ow_eth_link_cb_t ow_eth_link_cb;
-static bool ow_eth_timestamps;
-static bool ow_eth_inserting_checksum;
+static esp_eth_handle_t urt_eth_handle;
+static esp_eth_mac_t *urt_eth_mac;
+static esp_eth_phy_t *urt_eth_phy;
+static urt_eth_rx_cb_t urt_eth_rx_cb;
+static urt_eth_link_cb_t urt_eth_link_cb;
+static bool urt_eth_timestamps;
+static bool urt_eth_inserting_checksum;
 
-// The callee owns buffer and releases it through ow_eth_free.
-static esp_err_t ow_eth_input(esp_eth_handle_t handle, uint8_t *buffer, uint32_t length, void *priv, void *info)
+// The callee owns buffer and releases it through urt_eth_free.
+static esp_err_t urt_eth_input(esp_eth_handle_t handle, uint8_t *buffer, uint32_t length, void *priv, void *info)
 {
-    eth_mac_time_t *ts = ow_eth_timestamps ? (eth_mac_time_t *)info : NULL;
-    if (ow_eth_rx_cb)
-        ow_eth_rx_cb(buffer, length, ts ? ts->seconds : 0, ts ? ts->nanoseconds : 0, ts != NULL);
+    eth_mac_time_t *ts = urt_eth_timestamps ? (eth_mac_time_t *)info : NULL;
+    if (urt_eth_rx_cb)
+        urt_eth_rx_cb(buffer, length, ts ? ts->seconds : 0, ts ? ts->nanoseconds : 0, ts != NULL);
     else
         free(buffer);
     return ESP_OK;
 }
 
-static void ow_eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+static void urt_eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (!ow_eth_link_cb)
+    if (!urt_eth_link_cb)
         return;
     if (id == ETHERNET_EVENT_CONNECTED)
-        ow_eth_link_cb(1);
+        urt_eth_link_cb(1);
     else if (id == ETHERNET_EVENT_DISCONNECTED || id == ETHERNET_EVENT_STOP)
-        ow_eth_link_cb(0);
+        urt_eth_link_cb(0);
 }
 
-static bool ow_eth_pins_given(const int8_t *pins, int count)
+static bool urt_eth_pins_given(const int8_t *pins, int count)
 {
     for (int i = 0; i < count; ++i)
         if (pins[i] < 0)
@@ -1880,54 +1880,54 @@ static bool ow_eth_pins_given(const int8_t *pins, int count)
     return true;
 }
 
-static bool ow_eth_phy_ext_update(uint32_t ext_reg, uint32_t clear, uint32_t set)
+static bool urt_eth_phy_ext_update(uint32_t ext_reg, uint32_t clear, uint32_t set)
 {
     uint32_t value = ext_reg;
     esp_eth_phy_reg_rw_data_t reg = { .reg_addr = 0x1E, .reg_value_p = &value };
-    if (esp_eth_ioctl(ow_eth_handle, ETH_CMD_WRITE_PHY_REG, &reg) != ESP_OK)
+    if (esp_eth_ioctl(urt_eth_handle, ETH_CMD_WRITE_PHY_REG, &reg) != ESP_OK)
         return false;
     reg.reg_addr = 0x1F;
-    if (esp_eth_ioctl(ow_eth_handle, ETH_CMD_READ_PHY_REG, &reg) != ESP_OK)
+    if (esp_eth_ioctl(urt_eth_handle, ETH_CMD_READ_PHY_REG, &reg) != ESP_OK)
         return false;
     value = (value & ~clear) | set;
-    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_WRITE_PHY_REG, &reg) == ESP_OK;
+    return esp_eth_ioctl(urt_eth_handle, ETH_CMD_WRITE_PHY_REG, &reg) == ESP_OK;
 }
 
 // The YT8531 comes out of hardware reset with autonegotiation off, which its datasheet does
 // not say, and RGMII needs ~2ns on both clocks: rxc_dly_en, and 13 x 150ps on each tx_delay_sel.
-static bool ow_eth_phy_yt8531_init(void)
+static bool urt_eth_phy_yt8531_init(void)
 {
     bool autonegotiate = true;
-    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_AUTONEGO, &autonegotiate) == ESP_OK &&
-           ow_eth_phy_ext_update(0xA001, 0, 1u << 8) &&
-           ow_eth_phy_ext_update(0xA003, 0xFF, (13u << 4) | 13u);
+    return esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_AUTONEGO, &autonegotiate) == ESP_OK &&
+           urt_eth_phy_ext_update(0xA001, 0, 1u << 8) &&
+           urt_eth_phy_ext_update(0xA003, 0xFF, (13u << 4) | 13u);
 }
 
-int ow_eth_close(void)
+int urt_eth_close(void)
 {
-    if (ow_eth_handle)
+    if (urt_eth_handle)
     {
-        esp_eth_stop(ow_eth_handle);
-        esp_event_handler_unregister(ETH_EVENT, ESP_EVENT_ANY_ID, &ow_eth_event);
-        if (esp_eth_driver_uninstall(ow_eth_handle) != ESP_OK)
+        esp_eth_stop(urt_eth_handle);
+        esp_event_handler_unregister(ETH_EVENT, ESP_EVENT_ANY_ID, &urt_eth_event);
+        if (esp_eth_driver_uninstall(urt_eth_handle) != ESP_OK)
             return -1;
-        ow_eth_handle = NULL;
+        urt_eth_handle = NULL;
     }
-    if (ow_eth_phy)
-        ow_eth_phy->del(ow_eth_phy);
-    if (ow_eth_mac)
-        ow_eth_mac->del(ow_eth_mac);
-    ow_eth_phy = NULL;
-    ow_eth_mac = NULL;
-    ow_eth_rx_cb = NULL;
-    ow_eth_link_cb = NULL;
+    if (urt_eth_phy)
+        urt_eth_phy->del(urt_eth_phy);
+    if (urt_eth_mac)
+        urt_eth_mac->del(urt_eth_mac);
+    urt_eth_phy = NULL;
+    urt_eth_mac = NULL;
+    urt_eth_rx_cb = NULL;
+    urt_eth_link_cb = NULL;
     return 0;
 }
 
-int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t link)
+int urt_eth_open(const urt_eth_config_t *c, urt_eth_rx_cb_t rx, urt_eth_link_cb_t link)
 {
     // A failed initialization may still own a driver.
-    if (ow_eth_handle && ow_eth_close() != 0)
+    if (urt_eth_handle && urt_eth_close() != 0)
         return -1;
 
     eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
@@ -1973,7 +1973,7 @@ int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t li
         }
 #endif
 #if SOC_EMAC_USE_MULTI_IO_MUX
-        if (moved && !ow_eth_pins_given(c->data_gpio, 6))
+        if (moved && !urt_eth_pins_given(c->data_gpio, 6))
             return -1;
         eth_mac_rmii_gpio_config_t *p = &emac.emac_dataif_gpio.rmii;
         int *pins[6] = { &p->tx_en_num, &p->txd0_num, &p->txd1_num, &p->crs_dv_num, &p->rxd0_num, &p->rxd1_num };
@@ -1985,7 +1985,7 @@ int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t li
 #if SOC_EMAC_SUPPORT_1000M
     else if (emac.interface == EMAC_DATA_INTERFACE_RGMII)
     {
-        if (moved && !ow_eth_pins_given(c->data_gpio, 12))
+        if (moved && !urt_eth_pins_given(c->data_gpio, 12))
             return -1;
         eth_mac_rgmii_gpio_config_t *p = &emac.emac_dataif_gpio.rgmii;
         int *pins[12] = { &p->tx_ctl_num, &p->txd0_num, &p->txd1_num, &p->txd2_num, &p->txd3_num,
@@ -2004,87 +2004,87 @@ int ow_eth_open(const ow_eth_config_t *c, ow_eth_rx_cb_t rx, ow_eth_link_cb_t li
     // the link check finds the result whenever the link arrives.
     phy_config.autonego_timeout_ms = 0;
 
-    ow_eth_mac = esp_eth_mac_new_esp32(&emac, &mac_config);
-    ow_eth_phy = esp_eth_phy_new_generic(&phy_config);
-    if (!ow_eth_mac || !ow_eth_phy)
+    urt_eth_mac = esp_eth_mac_new_esp32(&emac, &mac_config);
+    urt_eth_phy = esp_eth_phy_new_generic(&phy_config);
+    if (!urt_eth_mac || !urt_eth_phy)
     {
-        ow_eth_close();
+        urt_eth_close();
         return -1;
     }
 
-    esp_eth_config_t config = ETH_DEFAULT_CONFIG(ow_eth_mac, ow_eth_phy);
-    if (esp_eth_driver_install(&config, &ow_eth_handle) != ESP_OK)
+    esp_eth_config_t config = ETH_DEFAULT_CONFIG(urt_eth_mac, urt_eth_phy);
+    if (esp_eth_driver_install(&config, &urt_eth_handle) != ESP_OK)
     {
-        ow_eth_handle = NULL;
-        ow_eth_close();
+        urt_eth_handle = NULL;
+        urt_eth_close();
         return -1;
     }
 
-    ow_eth_rx_cb = rx;
-    ow_eth_link_cb = link;
-    ow_eth_timestamps = false;
-    ow_eth_inserting_checksum = false;
+    urt_eth_rx_cb = rx;
+    urt_eth_link_cb = link;
+    urt_eth_timestamps = false;
+    urt_eth_inserting_checksum = false;
     // The checksum engine only completes a frame it holds whole, and esp_eth runs the FIFO cut-through.
     if (c->tx_checksum)
         emac_ll_trans_store_forward_enable(&EMAC_DMA, true);
 
     bool promiscuous = c->promiscuous;
     bool flow_control = c->flow_control;
-    bool ok = esp_eth_update_input_path_info(ow_eth_handle, &ow_eth_input, NULL) == ESP_OK &&
-              esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &ow_eth_event, NULL) == ESP_OK &&
-              esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_PROMISCUOUS, &promiscuous) == ESP_OK &&
-              esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_FLOW_CTRL, &flow_control) == ESP_OK;
+    bool ok = esp_eth_update_input_path_info(urt_eth_handle, &urt_eth_input, NULL) == ESP_OK &&
+              esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &urt_eth_event, NULL) == ESP_OK &&
+              esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_PROMISCUOUS, &promiscuous) == ESP_OK &&
+              esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_FLOW_CTRL, &flow_control) == ESP_OK;
     if (ok && c->phy == OW_ETH_PHY_YT8531)
-        ok = ow_eth_phy_yt8531_init();
+        ok = urt_eth_phy_yt8531_init();
 #ifdef SOC_EMAC_IEEE1588V2_SUPPORTED
     if (ok && c->timestamp)
     {
         eth_mac_ptp_config_t ptp = ETH_MAC_ESP_PTP_DEFAULT_CONFIG();
-        ok = esp_eth_mac_ptp_enable(ow_eth_mac, &ptp) == ESP_OK;
-        ow_eth_timestamps = ok;
+        ok = esp_eth_mac_ptp_enable(urt_eth_mac, &ptp) == ESP_OK;
+        urt_eth_timestamps = ok;
     }
 #endif
-    if (!ok || esp_eth_start(ow_eth_handle) != ESP_OK)
+    if (!ok || esp_eth_start(urt_eth_handle) != ESP_OK)
     {
-        ow_eth_close();
+        urt_eth_close();
         return -1;
     }
     return 0;
 }
 
-int ow_eth_tx(const uint8_t *frame, uint32_t length, bool insert_checksum)
+int urt_eth_tx(const uint8_t *frame, uint32_t length, bool insert_checksum)
 {
     // esp_eth applies these descriptor bits to every frame until told otherwise, so flip them per frame:
     // left on, the MAC would also rewrite the checksums of frames this port only bridges.
-    if (insert_checksum != ow_eth_inserting_checksum)
+    if (insert_checksum != urt_eth_inserting_checksum)
     {
         uint32_t bits = EMAC_HAL_TDES0_IP_CRC_INSERT_HDR_PAYLOAD_PSEUDO;
-        esp_eth_ioctl(ow_eth_handle, insert_checksum ? ETH_MAC_ESP_CMD_SET_TDES0_CFG_BITS : ETH_MAC_ESP_CMD_CLEAR_TDES0_CFG_BITS, &bits);
-        ow_eth_inserting_checksum = insert_checksum;
+        esp_eth_ioctl(urt_eth_handle, insert_checksum ? ETH_MAC_ESP_CMD_SET_TDES0_CFG_BITS : ETH_MAC_ESP_CMD_CLEAR_TDES0_CFG_BITS, &bits);
+        urt_eth_inserting_checksum = insert_checksum;
     }
-    return esp_eth_transmit(ow_eth_handle, (void *)frame, length) == ESP_OK ? 0 : -1;
+    return esp_eth_transmit(urt_eth_handle, (void *)frame, length) == ESP_OK ? 0 : -1;
 }
 
-void ow_eth_free(void *buffer)
+void urt_eth_free(void *buffer)
 {
     free(buffer);
 }
 
-int ow_eth_set_mac(const uint8_t *mac)
+int urt_eth_set_mac(const uint8_t *mac)
 {
-    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_MAC_ADDR, (void *)mac) == ESP_OK ? 0 : -1;
+    return esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_MAC_ADDR, (void *)mac) == ESP_OK ? 0 : -1;
 }
 
-int ow_eth_set_promiscuous(bool enable)
+int urt_eth_set_promiscuous(bool enable)
 {
-    return esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_PROMISCUOUS, &enable) == ESP_OK ? 0 : -1;
+    return esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_PROMISCUOUS, &enable) == ESP_OK ? 0 : -1;
 }
 
-int ow_eth_get_link(int *speed, int *full_duplex)
+int urt_eth_get_link(int *speed, int *full_duplex)
 {
     eth_speed_t s;
     eth_duplex_t d;
-    if (esp_eth_ioctl(ow_eth_handle, ETH_CMD_G_SPEED, &s) != ESP_OK || esp_eth_ioctl(ow_eth_handle, ETH_CMD_G_DUPLEX_MODE, &d) != ESP_OK)
+    if (esp_eth_ioctl(urt_eth_handle, ETH_CMD_G_SPEED, &s) != ESP_OK || esp_eth_ioctl(urt_eth_handle, ETH_CMD_G_DUPLEX_MODE, &d) != ESP_OK)
         return -1;
     *speed = s == ETH_SPEED_10M ? 0 : s == ETH_SPEED_100M ? 1 : 2;
     *full_duplex = d == ETH_DUPLEX_FULL;
@@ -2092,7 +2092,7 @@ int ow_eth_get_link(int *speed, int *full_duplex)
 }
 
 // The driver refuses link-mode changes while started.
-int ow_eth_set_link_mode(bool autonegotiate, int speed, bool full_duplex)
+int urt_eth_set_link_mode(bool autonegotiate, int speed, bool full_duplex)
 {
     eth_speed_t s = speed == 0 ? ETH_SPEED_10M : speed == 1 ? ETH_SPEED_100M :
 #if SOC_EMAC_SUPPORT_1000M
@@ -2102,34 +2102,34 @@ int ow_eth_set_link_mode(bool autonegotiate, int speed, bool full_duplex)
 #endif
     eth_duplex_t d = full_duplex ? ETH_DUPLEX_FULL : ETH_DUPLEX_HALF;
 
-    if (esp_eth_stop(ow_eth_handle) != ESP_OK)
+    if (esp_eth_stop(urt_eth_handle) != ESP_OK)
         return -1;
-    bool ok = esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_AUTONEGO, &autonegotiate) == ESP_OK;
+    bool ok = esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_AUTONEGO, &autonegotiate) == ESP_OK;
     if (ok && !autonegotiate)
-        ok = esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_SPEED, &s) == ESP_OK && esp_eth_ioctl(ow_eth_handle, ETH_CMD_S_DUPLEX_MODE, &d) == ESP_OK;
-    return esp_eth_start(ow_eth_handle) == ESP_OK && ok ? 0 : -1;
+        ok = esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_SPEED, &s) == ESP_OK && esp_eth_ioctl(urt_eth_handle, ETH_CMD_S_DUPLEX_MODE, &d) == ESP_OK;
+    return esp_eth_start(urt_eth_handle) == ESP_OK && ok ? 0 : -1;
 }
 
 #ifdef SOC_EMAC_IEEE1588V2_SUPPORTED
-int ow_eth_get_time(uint32_t *seconds, uint32_t *nanoseconds)
+int urt_eth_get_time(uint32_t *seconds, uint32_t *nanoseconds)
 {
     eth_mac_time_t t;
-    if (esp_eth_mac_get_ptp_time(ow_eth_mac, &t) != ESP_OK)
+    if (esp_eth_mac_get_ptp_time(urt_eth_mac, &t) != ESP_OK)
         return -1;
     *seconds = t.seconds;
     *nanoseconds = t.nanoseconds;
     return 0;
 }
 
-int ow_eth_set_time(uint32_t seconds, uint32_t nanoseconds)
+int urt_eth_set_time(uint32_t seconds, uint32_t nanoseconds)
 {
     eth_mac_time_t t = { .seconds = seconds, .nanoseconds = nanoseconds };
-    return esp_eth_mac_set_ptp_time(ow_eth_mac, &t) == ESP_OK ? 0 : -1;
+    return esp_eth_mac_set_ptp_time(urt_eth_mac, &t) == ESP_OK ? 0 : -1;
 }
 
-int ow_eth_adjust_frequency(int32_t ppb)
+int urt_eth_adjust_frequency(int32_t ppb)
 {
-    return esp_eth_mac_adj_ptp_freq_ppb(ow_eth_mac, ppb) == ESP_OK ? 0 : -1;
+    return esp_eth_mac_adj_ptp_freq_ppb(urt_eth_mac, ppb) == ESP_OK ? 0 : -1;
 }
 #endif
 
@@ -2143,23 +2143,23 @@ int ow_eth_adjust_frequency(int32_t ppb)
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 
-static void ow_nimble_host_task(void *param)
+static void urt_nimble_host_task(void *param)
 {
     (void)param;
     nimble_port_run();
     nimble_port_freertos_deinit();
 }
 
-int ow_ble_init(void)
+int urt_ble_init(void)
 {
     int rc = nimble_port_init();
     if (rc != 0)
         return rc;
-    nimble_port_freertos_init(ow_nimble_host_task);
+    nimble_port_freertos_init(urt_nimble_host_task);
     return 0;
 }
 
-int ow_ble_deinit(void)
+int urt_ble_deinit(void)
 {
     int rc = nimble_port_stop();
     if (rc != 0)
@@ -2170,8 +2170,8 @@ int ow_ble_deinit(void)
 
 #else // !BT_NIMBLE
 
-int ow_ble_init(void) { return -1; }
-int ow_ble_deinit(void) { return 0; }
+int urt_ble_init(void) { return -1; }
+int urt_ble_deinit(void) { return 0; }
 
 #endif // CONFIG_BT_NIMBLE_ENABLED
 
@@ -2187,49 +2187,49 @@ int ow_ble_deinit(void) { return 0; }
 _Static_assert((OW_CAN_RX_CAP & (OW_CAN_RX_CAP - 1)) == 0, "CAN RX capacity must be a power of two");
 _Static_assert(OW_CAN_TX_CAP <= 32, "CAN TX capacity exceeds the ownership bitmap");
 
-typedef bool (*ow_can_rx_cb_t)(unsigned port);
+typedef bool (*urt_can_rx_cb_t)(unsigned port);
 
 typedef struct {
     uint32_t id;
     uint8_t flags;
     uint8_t dlc;
     uint8_t data[8];
-} ow_can_frame_t;
+} urt_can_frame_t;
 
 typedef struct {
     twai_frame_t frame;
     uint8_t data[8];
-} ow_can_tx_slot_t;
+} urt_can_tx_slot_t;
 
 typedef struct {
     twai_node_handle_t handle;
     unsigned port;
-    ow_can_rx_cb_t rx_cb;
+    urt_can_rx_cb_t rx_cb;
     _Atomic uint32_t rx_head;
     _Atomic uint32_t rx_tail;
     _Atomic uint32_t rx_drops;
     _Atomic uint32_t errors;
     _Atomic uint32_t tx_used;
-    ow_can_frame_t rx[OW_CAN_RX_CAP];
-    ow_can_tx_slot_t tx[OW_CAN_TX_CAP];
-} ow_can_context_t;
+    urt_can_frame_t rx[OW_CAN_RX_CAP];
+    urt_can_tx_slot_t tx[OW_CAN_TX_CAP];
+} urt_can_context_t;
 
-static ow_can_context_t ow_can_contexts[SOC_TWAI_CONTROLLER_NUM];
+static urt_can_context_t urt_can_contexts[SOC_TWAI_CONTROLLER_NUM];
 
-static ow_can_context_t *ow_can_find(twai_node_handle_t handle)
+static urt_can_context_t *urt_can_find(twai_node_handle_t handle)
 {
     if (!handle)
         return NULL;
     for (unsigned i = 0; i < SOC_TWAI_CONTROLLER_NUM; ++i)
-        if (ow_can_contexts[i].handle == handle)
-            return &ow_can_contexts[i];
+        if (urt_can_contexts[i].handle == handle)
+            return &urt_can_contexts[i];
     return NULL;
 }
 
-static bool ow_can_rx_done(twai_node_handle_t handle, const twai_rx_done_event_data_t *edata, void *user_ctx)
+static bool urt_can_rx_done(twai_node_handle_t handle, const twai_rx_done_event_data_t *edata, void *user_ctx)
 {
     (void)edata;
-    ow_can_context_t *ctx = (ow_can_context_t *)user_ctx;
+    urt_can_context_t *ctx = (urt_can_context_t *)user_ctx;
     uint8_t data[64];
     twai_frame_t frame = {
         .buffer = data,
@@ -2254,7 +2254,7 @@ static bool ow_can_rx_done(twai_node_handle_t handle, const twai_rx_done_event_d
         return false;
     }
 
-    ow_can_frame_t *slot = &ctx->rx[head & (OW_CAN_RX_CAP - 1)];
+    urt_can_frame_t *slot = &ctx->rx[head & (OW_CAN_RX_CAP - 1)];
     slot->id = frame.header.id;
     slot->flags = (frame.header.ide ? 1 : 0) | (frame.header.rtr ? 2 : 0) | (frame.header.fdf ? 4 : 0) | (frame.header.brs ? 8 : 0);
     slot->dlc = (uint8_t)length;
@@ -2266,15 +2266,15 @@ static bool ow_can_rx_done(twai_node_handle_t handle, const twai_rx_done_event_d
     return ctx->rx_cb ? ctx->rx_cb(ctx->port) : false;
 }
 
-static bool ow_can_tx_done(twai_node_handle_t handle, const twai_tx_done_event_data_t *edata, void *user_ctx)
+static bool urt_can_tx_done(twai_node_handle_t handle, const twai_tx_done_event_data_t *edata, void *user_ctx)
 {
     (void)handle;
-    ow_can_context_t *ctx = (ow_can_context_t *)user_ctx;
+    urt_can_context_t *ctx = (urt_can_context_t *)user_ctx;
     if (!edata->is_tx_success)
         atomic_fetch_or_explicit(&ctx->errors, 1u << 4, memory_order_relaxed);
     if (edata->done_tx_frame)
     {
-        ow_can_tx_slot_t *slot = (ow_can_tx_slot_t *)edata->done_tx_frame;
+        urt_can_tx_slot_t *slot = (urt_can_tx_slot_t *)edata->done_tx_frame;
         unsigned index = (unsigned)(slot - ctx->tx);
         if (index < OW_CAN_TX_CAP)
             atomic_fetch_and_explicit(&ctx->tx_used, ~(1u << index), memory_order_release);
@@ -2282,10 +2282,10 @@ static bool ow_can_tx_done(twai_node_handle_t handle, const twai_tx_done_event_d
     return false;
 }
 
-static bool ow_can_error(twai_node_handle_t handle, const twai_error_event_data_t *edata, void *user_ctx)
+static bool urt_can_error(twai_node_handle_t handle, const twai_error_event_data_t *edata, void *user_ctx)
 {
     (void)handle;
-    ow_can_context_t *ctx = (ow_can_context_t *)user_ctx;
+    urt_can_context_t *ctx = (urt_can_context_t *)user_ctx;
     uint32_t errors = 0;
     // ESP-IDF 6.0 exposes arbitration, bit, form, stuff, and ACK flags here, but no CRC flag.
     if (edata->err_flags.bit_err)
@@ -2300,12 +2300,12 @@ static bool ow_can_error(twai_node_handle_t handle, const twai_error_event_data_
     return false;
 }
 
-twai_node_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2, uint16_t brp, ow_can_rx_cb_t rx_cb)
+twai_node_handle_t urt_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2, uint16_t brp, urt_can_rx_cb_t rx_cb)
 {
     if (port >= SOC_TWAI_CONTROLLER_NUM || bitrate == 0 || tx_gpio < 0 || rx_gpio < 0)
         return NULL;
 
-    ow_can_context_t *ctx = &ow_can_contexts[port];
+    urt_can_context_t *ctx = &urt_can_contexts[port];
     if (ctx->handle)
         return ctx->handle;
 
@@ -2348,9 +2348,9 @@ twai_node_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int
     ctx->rx_cb = rx_cb;
 
     const twai_event_callbacks_t callbacks = {
-        .on_tx_done = &ow_can_tx_done,
-        .on_rx_done = &ow_can_rx_done,
-        .on_error = &ow_can_error,
+        .on_tx_done = &urt_can_tx_done,
+        .on_rx_done = &urt_can_rx_done,
+        .on_error = &urt_can_error,
     };
     if (twai_node_register_event_callbacks(handle, &callbacks, ctx) != ESP_OK || twai_node_enable(handle) != ESP_OK)
     {
@@ -2361,9 +2361,9 @@ twai_node_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int
     return handle;
 }
 
-void ow_can_close(twai_node_handle_t handle)
+void urt_can_close(twai_node_handle_t handle)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     if (!ctx)
         return;
     twai_node_disable(handle);
@@ -2371,9 +2371,9 @@ void ow_can_close(twai_node_handle_t handle)
     memset(ctx, 0, sizeof(*ctx));
 }
 
-bool ow_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint8_t dlc, const uint8_t *data)
+bool urt_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint8_t dlc, const uint8_t *data)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     if (!ctx || dlc > 8 || (!data && dlc > 0))
         return false;
 
@@ -2391,7 +2391,7 @@ bool ow_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint
             break;
     }
 
-    ow_can_tx_slot_t *slot = &ctx->tx[index];
+    urt_can_tx_slot_t *slot = &ctx->tx[index];
     memset(slot, 0, sizeof(*slot));
     slot->frame.header.id = id;
     slot->frame.header.dlc = dlc;
@@ -2412,9 +2412,9 @@ bool ow_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint
     return true;
 }
 
-bool ow_can_receive(twai_node_handle_t handle, ow_can_frame_t *frame)
+bool urt_can_receive(twai_node_handle_t handle, urt_can_frame_t *frame)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     if (!ctx || !frame)
         return false;
     uint32_t tail = atomic_load_explicit(&ctx->rx_tail, memory_order_relaxed);
@@ -2426,39 +2426,39 @@ bool ow_can_receive(twai_node_handle_t handle, ow_can_frame_t *frame)
     return true;
 }
 
-uint32_t ow_can_check_errors(twai_node_handle_t handle)
+uint32_t urt_can_check_errors(twai_node_handle_t handle)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     return ctx ? atomic_exchange_explicit(&ctx->errors, 0, memory_order_relaxed) : 0;
 }
 
-uint32_t ow_can_take_rx_drops(twai_node_handle_t handle)
+uint32_t urt_can_take_rx_drops(twai_node_handle_t handle)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     return ctx ? atomic_exchange_explicit(&ctx->rx_drops, 0, memory_order_relaxed) : 0;
 }
 
-uint32_t ow_can_bus_state(twai_node_handle_t handle)
+uint32_t urt_can_bus_state(twai_node_handle_t handle)
 {
     twai_node_status_t status;
     return twai_node_get_info(handle, &status, NULL) == ESP_OK ? (uint32_t)status.state : (uint32_t)TWAI_ERROR_BUS_OFF;
 }
 
-uint32_t ow_can_tx_error_count(twai_node_handle_t handle)
+uint32_t urt_can_tx_error_count(twai_node_handle_t handle)
 {
     twai_node_status_t status;
     return twai_node_get_info(handle, &status, NULL) == ESP_OK ? status.tx_error_count : 0;
 }
 
-uint32_t ow_can_rx_error_count(twai_node_handle_t handle)
+uint32_t urt_can_rx_error_count(twai_node_handle_t handle)
 {
     twai_node_status_t status;
     return twai_node_get_info(handle, &status, NULL) == ESP_OK ? status.rx_error_count : 0;
 }
 
-size_t ow_can_rx_available(twai_node_handle_t handle)
+size_t urt_can_rx_available(twai_node_handle_t handle)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     if (!ctx)
         return 0;
     uint32_t head = atomic_load_explicit(&ctx->rx_head, memory_order_acquire);
@@ -2466,16 +2466,16 @@ size_t ow_can_rx_available(twai_node_handle_t handle)
     return head - tail;
 }
 
-void ow_can_rx_flush(twai_node_handle_t handle)
+void urt_can_rx_flush(twai_node_handle_t handle)
 {
-    ow_can_context_t *ctx = ow_can_find(handle);
+    urt_can_context_t *ctx = urt_can_find(handle);
     if (!ctx)
         return;
     uint32_t head = atomic_load_explicit(&ctx->rx_head, memory_order_acquire);
     atomic_store_explicit(&ctx->rx_tail, head, memory_order_release);
 }
 
-bool ow_can_bus_recover(twai_node_handle_t handle)
+bool urt_can_bus_recover(twai_node_handle_t handle)
 {
     return twai_node_recover(handle) == ESP_OK;
 }
@@ -2483,29 +2483,29 @@ bool ow_can_bus_recover(twai_node_handle_t handle)
 #else // !SOC_TWAI_SUPPORTED
 
 typedef struct twai_node_base *twai_node_handle_t;
-typedef bool (*ow_can_rx_cb_t)(unsigned);
+typedef bool (*urt_can_rx_cb_t)(unsigned);
 typedef struct {
     uint32_t id;
     uint8_t flags;
     uint8_t dlc;
     uint8_t data[8];
-} ow_can_frame_t;
+} urt_can_frame_t;
 
-twai_node_handle_t ow_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2, uint16_t brp, ow_can_rx_cb_t rx_cb)
+twai_node_handle_t urt_can_open(unsigned port, uint32_t bitrate, int tx_gpio, int rx_gpio, uint8_t sjw, uint8_t tseg1, uint8_t tseg2, uint16_t brp, urt_can_rx_cb_t rx_cb)
 {
     return NULL;
 }
-void ow_can_close(twai_node_handle_t handle) {}
-bool ow_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint8_t dlc, const uint8_t *data) { return false; }
-bool ow_can_receive(twai_node_handle_t handle, ow_can_frame_t *frame) { return false; }
-uint32_t ow_can_check_errors(twai_node_handle_t handle) { return 0; }
-uint32_t ow_can_take_rx_drops(twai_node_handle_t handle) { return 0; }
-uint32_t ow_can_bus_state(twai_node_handle_t handle) { return 3; } // CanBusState.bus_off
-uint32_t ow_can_tx_error_count(twai_node_handle_t handle) { return 0; }
-uint32_t ow_can_rx_error_count(twai_node_handle_t handle) { return 0; }
-size_t ow_can_rx_available(twai_node_handle_t handle) { return 0; }
-void ow_can_rx_flush(twai_node_handle_t handle) {}
-bool ow_can_bus_recover(twai_node_handle_t handle) { return false; }
+void urt_can_close(twai_node_handle_t handle) {}
+bool urt_can_transmit(twai_node_handle_t handle, uint32_t id, uint8_t flags, uint8_t dlc, const uint8_t *data) { return false; }
+bool urt_can_receive(twai_node_handle_t handle, urt_can_frame_t *frame) { return false; }
+uint32_t urt_can_check_errors(twai_node_handle_t handle) { return 0; }
+uint32_t urt_can_take_rx_drops(twai_node_handle_t handle) { return 0; }
+uint32_t urt_can_bus_state(twai_node_handle_t handle) { return 3; } // CanBusState.bus_off
+uint32_t urt_can_tx_error_count(twai_node_handle_t handle) { return 0; }
+uint32_t urt_can_rx_error_count(twai_node_handle_t handle) { return 0; }
+size_t urt_can_rx_available(twai_node_handle_t handle) { return 0; }
+void urt_can_rx_flush(twai_node_handle_t handle) {}
+bool urt_can_bus_recover(twai_node_handle_t handle) { return false; }
 
 #endif // SOC_TWAI_SUPPORTED
 
@@ -2515,12 +2515,12 @@ bool ow_can_bus_recover(twai_node_handle_t handle) { return false; }
 // appears after liblwip.a in the link. These wrappers are in libmain.a
 // which is linked with --whole-archive, ensuring they're always present.
 
-int ow_lwip_getaddrinfo(const char *nodename, const char *servname, const struct addrinfo *hints, struct addrinfo **res)
+int urt_lwip_getaddrinfo(const char *nodename, const char *servname, const struct addrinfo *hints, struct addrinfo **res)
 {
     return lwip_getaddrinfo(nodename, servname, hints, res);
 }
 
-void ow_lwip_freeaddrinfo(struct addrinfo *ai)
+void urt_lwip_freeaddrinfo(struct addrinfo *ai)
 {
     lwip_freeaddrinfo(ai);
 }
@@ -2565,15 +2565,15 @@ void ow_lwip_freeaddrinfo(struct addrinfo *ai)
 // the partition is mounted internally, which a format also does, and mounting
 // the partition does not put a VFS on OW_SPIFFS_ROOT. -1 latches a failed mount
 // so an unformatted partition is not retried on every access.
-static int ow_spiffs_last_errno = 0;
-static bool ow_spiffs_registered = false;
-static int ow_spiffs_mount_state = 0;
+static int urt_spiffs_last_errno = 0;
+static bool urt_spiffs_registered = false;
+static int urt_spiffs_mount_state = 0;
 
-static bool ow_spiffs_ready(void)
+static bool urt_spiffs_ready(void)
 {
-    if (ow_spiffs_registered)
+    if (urt_spiffs_registered)
         return true;
-    if (ow_spiffs_mount_state < 0)
+    if (urt_spiffs_mount_state < 0)
         return false;
 
     esp_vfs_spiffs_conf_t conf = {
@@ -2584,15 +2584,15 @@ static bool ow_spiffs_ready(void)
     };
     if (esp_vfs_spiffs_register(&conf) != ESP_OK)
     {
-        ow_spiffs_mount_state = -1;
+        urt_spiffs_mount_state = -1;
         return false;
     }
-    ow_spiffs_registered = true;
+    urt_spiffs_registered = true;
     return true;
 }
 
 // Anchor caller paths under the mount point.
-static bool ow_spiffs_path(const char *path, size_t path_len, char *buffer, size_t buffer_size)
+static bool urt_spiffs_path(const char *path, size_t path_len, char *buffer, size_t buffer_size)
 {
     const size_t root = sizeof(OW_SPIFFS_ROOT) - 1;
     size_t skip = (path_len && path[0] == '/') ? 1 : 0;
@@ -2608,7 +2608,7 @@ static bool ow_spiffs_path(const char *path, size_t path_len, char *buffer, size
 int urt_spiffs_exists(const char *path, size_t path_len)
 {
     char buffer[128];
-    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+    if (!urt_spiffs_ready() || !urt_spiffs_path(path, path_len, buffer, sizeof(buffer)))
         return 0;
     struct stat st;
     return stat(buffer, &st) == 0 && S_ISREG(st.st_mode);
@@ -2617,14 +2617,14 @@ int urt_spiffs_exists(const char *path, size_t path_len)
 int urt_spiffs_open(const char *path, size_t path_len, bool write, bool truncate)
 {
     char buffer[128];
-    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+    if (!urt_spiffs_ready() || !urt_spiffs_path(path, path_len, buffer, sizeof(buffer)))
         return -1;
     int flags = write ? (O_RDWR | O_CREAT) : O_RDONLY;
     if (write && truncate)
         flags |= O_TRUNC;
     int fd = open(buffer, flags, 0644);
     if (fd < 0)
-        ow_spiffs_last_errno = errno;
+        urt_spiffs_last_errno = errno;
     return fd;
 }
 
@@ -2632,14 +2632,14 @@ ptrdiff_t urt_spiffs_read(int fd, void *buffer, size_t length)
 {
     ptrdiff_t n = read(fd, buffer, length);
     if (n < 0)
-        ow_spiffs_last_errno = errno;
+        urt_spiffs_last_errno = errno;
     return n;
 }
 
 
 int urt_spiffs_info(uint64_t *total, uint64_t *used)
 {
-    if (!ow_spiffs_ready())
+    if (!urt_spiffs_ready())
         return -1;
     size_t t = 0, u = 0;
     esp_err_t err = esp_spiffs_info(NULL, &t, &u);
@@ -2650,7 +2650,7 @@ int urt_spiffs_info(uint64_t *total, uint64_t *used)
 
 int urt_spiffs_last_error(void)
 {
-    return ow_spiffs_last_errno;
+    return urt_spiffs_last_errno;
 }
 
 // SPIFFS has no directories; its VFS reports the flat namespace as a single
@@ -2658,17 +2658,17 @@ int urt_spiffs_last_error(void)
 // hierarchy from '/' in the names.
 #define OW_SPIFFS_MAX_SCANS 2
 
-static DIR *ow_spiffs_scans[OW_SPIFFS_MAX_SCANS];
+static DIR *urt_spiffs_scans[OW_SPIFFS_MAX_SCANS];
 
 int urt_spiffs_scan_open(void)
 {
-    if (!ow_spiffs_ready())
+    if (!urt_spiffs_ready())
         return -1;
 
     int h = -1;
     for (int i = 0; i < OW_SPIFFS_MAX_SCANS; ++i)
     {
-        if (!ow_spiffs_scans[i])
+        if (!urt_spiffs_scans[i])
         {
             h = i;
             break;
@@ -2680,25 +2680,25 @@ int urt_spiffs_scan_open(void)
     DIR *d = opendir(OW_SPIFFS_ROOT);
     if (!d)
     {
-        ow_spiffs_last_errno = errno;
+        urt_spiffs_last_errno = errno;
         return -1;
     }
-    ow_spiffs_scans[h] = d;
+    urt_spiffs_scans[h] = d;
     return h;
 }
 
 ptrdiff_t urt_spiffs_scan_read(int h, char *name, size_t name_len, uint64_t *size)
 {
-    if (h < 0 || h >= OW_SPIFFS_MAX_SCANS || !ow_spiffs_scans[h])
+    if (h < 0 || h >= OW_SPIFFS_MAX_SCANS || !urt_spiffs_scans[h])
         return -1;
 
     errno = 0;
-    struct dirent *e = readdir(ow_spiffs_scans[h]);
+    struct dirent *e = readdir(urt_spiffs_scans[h]);
     if (!e)
     {
         if (errno)
         {
-            ow_spiffs_last_errno = errno;
+            urt_spiffs_last_errno = errno;
             return -1;
         }
         return 0;
@@ -2727,17 +2727,17 @@ ptrdiff_t urt_spiffs_scan_read(int h, char *name, size_t name_len, uint64_t *siz
 
 void urt_spiffs_scan_close(int h)
 {
-    if (h < 0 || h >= OW_SPIFFS_MAX_SCANS || !ow_spiffs_scans[h])
+    if (h < 0 || h >= OW_SPIFFS_MAX_SCANS || !urt_spiffs_scans[h])
         return;
-    closedir(ow_spiffs_scans[h]);
-    ow_spiffs_scans[h] = NULL;
+    closedir(urt_spiffs_scans[h]);
+    urt_spiffs_scans[h] = NULL;
 }
 
 ptrdiff_t urt_spiffs_write(int fd, const void *data, size_t length)
 {
     ptrdiff_t n = write(fd, data, length);
     if (n < 0)
-        ow_spiffs_last_errno = errno;
+        urt_spiffs_last_errno = errno;
     return n;
 }
 
@@ -2751,7 +2751,7 @@ uint64_t urt_spiffs_size(int fd)
     struct stat st;
     if (fstat(fd, &st) == 0)
         return (uint64_t)st.st_size;
-    ow_spiffs_last_errno = errno;
+    urt_spiffs_last_errno = errno;
     return 0;
 }
 
@@ -2773,7 +2773,7 @@ int urt_spiffs_sync(int fd)
 int urt_spiffs_unlink(const char *path, size_t path_len)
 {
     char buffer[128];
-    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+    if (!urt_spiffs_ready() || !urt_spiffs_path(path, path_len, buffer, sizeof(buffer)))
         return -1;
     return unlink(buffer);
 }
@@ -2781,9 +2781,9 @@ int urt_spiffs_unlink(const char *path, size_t path_len)
 int urt_spiffs_rename(const char *from, size_t from_len, const char *to, size_t to_len)
 {
     char from_buffer[128], to_buffer[128];
-    if (!ow_spiffs_ready() ||
-        !ow_spiffs_path(from, from_len, from_buffer, sizeof(from_buffer)) ||
-        !ow_spiffs_path(to, to_len, to_buffer, sizeof(to_buffer)))
+    if (!urt_spiffs_ready() ||
+        !urt_spiffs_path(from, from_len, from_buffer, sizeof(from_buffer)) ||
+        !urt_spiffs_path(to, to_len, to_buffer, sizeof(to_buffer)))
         return -1;
     return rename(from_buffer, to_buffer);
 }
@@ -2791,7 +2791,7 @@ int urt_spiffs_rename(const char *from, size_t from_len, const char *to, size_t 
 int urt_spiffs_stat(const char *path, size_t path_len, uint64_t *size)
 {
     char buffer[128];
-    if (!ow_spiffs_ready() || !ow_spiffs_path(path, path_len, buffer, sizeof(buffer)))
+    if (!urt_spiffs_ready() || !urt_spiffs_path(path, path_len, buffer, sizeof(buffer)))
         return -1;
     struct stat st;
     if (stat(buffer, &st) != 0)
@@ -2804,9 +2804,9 @@ int urt_spiffs_stat(const char *path, size_t path_len, uint64_t *size)
 // watchdog, so it runs on its own task and the caller polls for completion.
 enum { OW_SPIFFS_FORMAT_IDLE = 0, OW_SPIFFS_FORMAT_RUNNING, OW_SPIFFS_FORMAT_COMPLETE, OW_SPIFFS_FORMAT_FAILED };
 
-static volatile int ow_spiffs_format_state = OW_SPIFFS_FORMAT_IDLE;
+static volatile int urt_spiffs_format_state = OW_SPIFFS_FORMAT_IDLE;
 
-static void ow_spiffs_format_task(void *argument)
+static void urt_spiffs_format_task(void *argument)
 {
     (void)argument;
     esp_err_t err = esp_spiffs_format(NULL);
@@ -2814,22 +2814,22 @@ static void ow_spiffs_format_task(void *argument)
     {
         // Formatting leaves the partition mounted but unregistered; drop that so
         // the next access can register a VFS on it.
-        if (!ow_spiffs_registered && esp_spiffs_mounted(NULL))
+        if (!urt_spiffs_registered && esp_spiffs_mounted(NULL))
             esp_vfs_spiffs_unregister(NULL);
-        ow_spiffs_mount_state = 0;
+        urt_spiffs_mount_state = 0;
     }
-    ow_spiffs_format_state = (err == ESP_OK) ? OW_SPIFFS_FORMAT_COMPLETE : OW_SPIFFS_FORMAT_FAILED;
+    urt_spiffs_format_state = (err == ESP_OK) ? OW_SPIFFS_FORMAT_COMPLETE : OW_SPIFFS_FORMAT_FAILED;
     vTaskDelete(NULL);
 }
 
 int urt_spiffs_format_begin(void)
 {
-    if (ow_spiffs_format_state == OW_SPIFFS_FORMAT_RUNNING)
+    if (urt_spiffs_format_state == OW_SPIFFS_FORMAT_RUNNING)
         return 0;
-    ow_spiffs_format_state = OW_SPIFFS_FORMAT_RUNNING;
-    if (xTaskCreate(ow_spiffs_format_task, "ow-spiffs-fmt", 4096, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS)
+    urt_spiffs_format_state = OW_SPIFFS_FORMAT_RUNNING;
+    if (xTaskCreate(urt_spiffs_format_task, "urt-spiffs-fmt", 4096, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS)
     {
-        ow_spiffs_format_state = OW_SPIFFS_FORMAT_FAILED;
+        urt_spiffs_format_state = OW_SPIFFS_FORMAT_FAILED;
         return -1;
     }
     return 0;
@@ -2837,12 +2837,12 @@ int urt_spiffs_format_begin(void)
 
 int urt_spiffs_available(void)
 {
-    return ow_spiffs_ready() ? 1 : 0;
+    return urt_spiffs_ready() ? 1 : 0;
 }
 
 int urt_spiffs_format_status(void)
 {
-    return ow_spiffs_format_state;
+    return urt_spiffs_format_state;
 }
 
 #endif // OW_USE_SPIFFS

@@ -1,10 +1,10 @@
 // ESP32 WiFi driver -- D wrapper over C shim + direct ESP-IDF calls
 //
-// The C shim (ow_shim.c) handles:
-//   - ow_wifi_init/deinit: WIFI_INIT_CONFIG_DEFAULT macro, netif creation,
+// The C shim (idf_shim.c) handles:
+//   - urt_wifi_init/deinit: WIFI_INIT_CONFIG_DEFAULT macro, netif creation,
 //     event handler registration
-//   - ow_wifi_sta_config/ap_config: wifi_config_t struct construction
-//   - ow_wifi_set_rx_callback: RX trampolines that queue frames for D AND
+//   - urt_wifi_sta_config/ap_config: wifi_config_t struct construction
+//   - urt_wifi_set_rx_callback: RX trampolines that queue frames for D AND
 //     forward to esp_netif_receive (so lwIP still works)
 //
 // Everything else (mode, connect, disconnect, tx, mac, channel, power)
@@ -43,18 +43,18 @@ bool wifi_hw_open(uint port, ref const WifiConfig cfg)
         return false;
 
     reset_queues();
-    if (ow_wifi_init() != 0)
+    if (urt_wifi_init() != 0)
         return false;
 
-    ow_wifi_set_sta_callback(&sta_event_trampoline);
-    ow_wifi_set_ap_callback(&ap_event_trampoline);
+    urt_wifi_set_sta_callback(&sta_event_trampoline);
+    urt_wifi_set_ap_callback(&ap_event_trampoline);
 
     if (cfg.tx_power != 0)
         esp_wifi_set_max_tx_power(cfg.tx_power);
 
     if (esp_wifi_start() != ESP_OK)
     {
-        ow_wifi_deinit();
+        urt_wifi_deinit();
         return false;
     }
 
@@ -66,7 +66,7 @@ bool wifi_hw_open(uint port, ref const WifiConfig cfg)
         if (esp_wifi_set_band_mode(band_mode) != ESP_OK)
         {
             esp_wifi_stop();
-            ow_wifi_deinit();
+            urt_wifi_deinit();
             return false;
         }
     }
@@ -82,14 +82,14 @@ void wifi_hw_close(uint port)
     _event_cb = null;
     _rx_cb = null;
     _raw_rx_cb = null;
-    ow_wifi_set_rx_callback(null);
-    ow_wifi_set_sta_callback(null);
-    ow_wifi_set_ap_callback(null);
-    ow_wifi_set_promiscuous_callback(null);
-    ow_wifi_set_promiscuous(0, 0);
+    urt_wifi_set_rx_callback(null);
+    urt_wifi_set_sta_callback(null);
+    urt_wifi_set_ap_callback(null);
+    urt_wifi_set_promiscuous_callback(null);
+    urt_wifi_set_promiscuous(0, 0);
     reset_queues();
     esp_wifi_stop();
-    ow_wifi_deinit();
+    urt_wifi_deinit();
     _opened = false;
 }
 
@@ -140,7 +140,7 @@ bool wifi_hw_sta_configure(uint port, ref const WifiStaConfig cfg)
 
     bool has_bssid = cfg.bssid != typeof(cfg.bssid).init;
 
-    if (ow_wifi_sta_config(
+    if (urt_wifi_sta_config(
         cfg.ssid.length > 0 ? ssid_z.ptr : null,
         cfg.password.length > 0 ? pw_z.ptr : null,
         has_bssid ? cfg.bssid.ptr : null) == 0)
@@ -186,7 +186,7 @@ bool wifi_hw_ap_configure(uint port, ref const WifiApConfig cfg)
     if (cfg.password.length > 0 && cfg.password.length <= 64)
         pw_z[0 .. cfg.password.length] = cfg.password[];
 
-    return ow_wifi_ap_config(
+    return urt_wifi_ap_config(
         cfg.ssid.length > 0 ? ssid_z.ptr : null,
         cfg.password.length > 0 ? pw_z.ptr : null,
         cfg.channel, cfg.max_clients, cfg.hidden ? 1 : 0) != 0;
@@ -196,7 +196,7 @@ bool wifi_hw_ap_set_max_clients(uint port, ubyte max_clients)
 {
     if (port != 0 || max_clients > wifi_max_ap_clients)
         return false;
-    return ow_wifi_ap_set_max_clients(max_clients) != 0;
+    return urt_wifi_ap_set_max_clients(max_clients) != 0;
 }
 
 size_t wifi_hw_ap_get_clients(uint port, WifiStaInfo[] buf)
@@ -234,7 +234,7 @@ bool wifi_hw_tx(uint port, WifiVif vif, const(ubyte)[] data)
 void wifi_hw_set_rx_callback(uint port, WifiRxCallback cb)
 {
     _rx_cb = cb;
-    ow_wifi_set_rx_callback(cb !is null ? &rx_trampoline : null);
+    urt_wifi_set_rx_callback(cb !is null ? &rx_trampoline : null);
 }
 
 uint wifi_hw_take_rx_drops(uint port)
@@ -260,7 +260,7 @@ bool wifi_hw_raw_tx(uint port, const(ubyte)[] frame)
     // ifx = 0 (WIFI_IF_STA): always present in our monitor + sta + ap modes.
     // en_sys_seq = 1: let the MAC fill the sequence number so injected frames
     // don't collide with the radio's own outgoing sequence space.
-    return ow_wifi_raw_tx(0, frame.ptr, cast(int)frame.length, 1) != 0;
+    return urt_wifi_raw_tx(0, frame.ptr, cast(int)frame.length, 1) != 0;
 }
 
 void wifi_hw_set_raw_rx_callback(uint port, WifiRawRxCallback cb)
@@ -269,18 +269,18 @@ void wifi_hw_set_raw_rx_callback(uint port, WifiRawRxCallback cb)
 
     if (cb is null)
     {
-        ow_wifi_set_promiscuous(0, 0);
-        ow_wifi_set_promiscuous_callback(null);
+        urt_wifi_set_promiscuous(0, 0);
+        urt_wifi_set_promiscuous_callback(null);
         return;
     }
 
-    ow_wifi_set_promiscuous_callback(&promisc_trampoline);
+    urt_wifi_set_promiscuous_callback(&promisc_trampoline);
     // Filter: management + data + control + misc + FCS-fail. The FCSFAIL
     // bit is what lets us see corrupted frames -- the discriminator we need
     // for "is the antenna seeing anything at all" vs "frames are framing
     // correctly but content is wrong".
     enum uint WIFI_PROMIS_FILTER_MASK_ALL_WITH_FCSFAIL = 0xE00000FF;
-    ow_wifi_set_promiscuous(1, WIFI_PROMIS_FILTER_MASK_ALL_WITH_FCSFAIL);
+    urt_wifi_set_promiscuous(1, WIFI_PROMIS_FILTER_MASK_ALL_WITH_FCSFAIL);
 }
 
 uint wifi_hw_take_raw_rx_drops(uint port)
@@ -305,7 +305,7 @@ bool wifi_hw_set_channel(uint port, ubyte primary)
 {
     // secondary=0 -> HT20 (no 40 MHz extension). The vast majority of 2.4GHz
     // deployments are HT20; if we ever want HT40 we extend this signature.
-    return ow_wifi_set_channel(primary, 0) != 0;
+    return urt_wifi_set_channel(primary, 0) != 0;
 }
 
 // Queries
@@ -427,7 +427,7 @@ bool wifi_hw_get_sta_link_info(uint port, ref WifiStaLinkInfo info)
         return false;
     info = WifiStaLinkInfo.init;
     int rssi;
-    if (ow_wifi_sta_get_ap_info(info.bssid.ptr, &rssi) == 0)
+    if (urt_wifi_sta_get_ap_info(info.bssid.ptr, &rssi) == 0)
         return false;
     info.rssi = cast(byte)rssi;
     info.nss = 1; // every ESP32 radio is 1x1
@@ -574,7 +574,7 @@ bool dispatch_one_rx(Wifi wifi)
             frame[0 .. length] = slot.data[0 .. length];
         slot.eb = null;
         atomicStore!(MemoryOrder.release)(_wifi_rx_tail, tail + 1);
-        ow_wifi_free_rx_buffer(eb);
+        urt_wifi_free_rx_buffer(eb);
         if (_rx_cb !is null)
             _rx_cb(wifi, vif, frame[0 .. length]);
     }
@@ -759,7 +759,7 @@ void reset_queues() nothrow @nogc
             auto slot = &_wifi_rx_queue[tail & (wifi_rx_cap - 1)];
             void* eb = slot.eb;
             slot.eb = null;
-            ow_wifi_free_rx_buffer(eb);
+            urt_wifi_free_rx_buffer(eb);
             ++tail;
         }
     }
@@ -1015,27 +1015,27 @@ extern(C) void promisc_trampoline(int type, int rssi, int channel,
     notify_ready();
 }
 
-// C shim functions (ow_shim.c) -- needed for macros, complex structs, netif
+// C shim functions (idf_shim.c) -- needed for macros, complex structs, netif
 extern(C) nothrow @nogc
 {
-    int ow_wifi_init();
-    void ow_wifi_deinit();
-    int ow_wifi_sta_config(const(char)* ssid, const(char)* password, const(ubyte)* bssid);
-    int ow_wifi_ap_config(const(char)* ssid, const(char)* password, ubyte channel, ubyte max_conn, ubyte hidden);
-    int ow_wifi_ap_set_max_clients(ubyte max_conn);
-    int ow_wifi_set_rx_callback(
+    int urt_wifi_init();
+    void urt_wifi_deinit();
+    int urt_wifi_sta_config(const(char)* ssid, const(char)* password, const(ubyte)* bssid);
+    int urt_wifi_ap_config(const(char)* ssid, const(char)* password, ubyte channel, ubyte max_conn, ubyte hidden);
+    int urt_wifi_ap_set_max_clients(ubyte max_conn);
+    int urt_wifi_set_rx_callback(
         int function(const(ubyte)*, int, int, void*) nothrow @nogc cb);
-    void ow_wifi_free_rx_buffer(void* eb);
-    void ow_wifi_set_sta_callback(void function(int, void*, int) nothrow @nogc);
-    void ow_wifi_set_ap_callback(void function(int, void*, int) nothrow @nogc);
-    int ow_wifi_set_promiscuous(int enable, uint filter_mask);
-    void ow_wifi_set_promiscuous_callback(
+    void urt_wifi_free_rx_buffer(void* eb);
+    void urt_wifi_set_sta_callback(void function(int, void*, int) nothrow @nogc);
+    void urt_wifi_set_ap_callback(void function(int, void*, int) nothrow @nogc);
+    int urt_wifi_set_promiscuous(int enable, uint filter_mask);
+    void urt_wifi_set_promiscuous_callback(
         void function(int type, int rssi, int channel,
                       int rate, int fcs_fail, int len,
                       const(ubyte)* payload) nothrow @nogc cb);
-    int ow_wifi_set_channel(int primary, int secondary);
-    int ow_wifi_raw_tx(int ifx, const(ubyte)* frame, int len, int en_sys_seq);
-    int ow_wifi_sta_get_ap_info(ubyte* bssid, int* rssi);
+    int urt_wifi_set_channel(int primary, int secondary);
+    int urt_wifi_raw_tx(int ifx, const(ubyte)* frame, int len, int en_sys_seq);
+    int urt_wifi_sta_get_ap_info(ubyte* bssid, int* rssi);
 }
 
 // Direct ESP-IDF calls

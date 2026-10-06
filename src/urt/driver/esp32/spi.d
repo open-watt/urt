@@ -10,25 +10,25 @@ nothrow @nogc:
 // SPI1 drives the flash; only the general-purpose controllers are exposed. spi_count() returns the actual number for the active chip variant.
 enum uint num_spi = 2;
 
-uint spi_count() => ow_spi_count();
+uint spi_count() => urt_spi_count();
 
 bool spi_hw_open(ref SpiBus bus, uint port, ref const SpiBusConfig config)
 {
     if (port >= spi_count())
         return false;
-    bus.driver_data = ow_spi_open(port, config.sck_gpio, gpio_arg(config.mosi_gpio), gpio_arg(config.miso_gpio), gpio_arg(config.cs_gpio), config.frequency, config.mode);
+    bus.driver_data = urt_spi_open(port, config.sck_gpio, gpio_arg(config.mosi_gpio), gpio_arg(config.miso_gpio), gpio_arg(config.cs_gpio), config.frequency, config.mode);
     return bus.driver_data !is null;
 }
 
 void spi_hw_close(ref SpiBus bus)
 {
     if (bus.driver_data !is null)
-        ow_spi_close(bus.driver_data);
+        urt_spi_close(bus.driver_data);
 }
 
 Result spi_hw_submit(ref SpiBus bus, ref SpiOperation operation, ref const SpiTransfer transfer)
 {
-    int result = ow_spi_submit(bus.driver_data, transfer.write_data.ptr, transfer.write_data.length, cast(void*)transfer.read_data.ptr, transfer.read_data.length, &spi_operation_complete, &operation);
+    int result = urt_spi_submit(bus.driver_data, transfer.write_data.ptr, transfer.write_data.length, cast(void*)transfer.read_data.ptr, transfer.read_data.length, &spi_operation_complete, &operation);
     return result == 0 ? Result.success : InternalResult.failed;
 }
 
@@ -39,12 +39,12 @@ Result spi_hw_cancel(ref SpiBus, ref SpiOperation)
 
 Result spi_hw_suspend(ref SpiBus bus)
 {
-    return ow_spi_suspend(bus.driver_data) == 0 ? Result.success : InternalResult.failed;
+    return urt_spi_suspend(bus.driver_data) == 0 ? Result.success : InternalResult.failed;
 }
 
 Result spi_hw_resume(ref SpiBus bus)
 {
-    return ow_spi_resume(bus.driver_data) == 0 ? Result.success : InternalResult.failed;
+    return urt_spi_resume(bus.driver_data) == 0 ? Result.success : InternalResult.failed;
 }
 
 private:
@@ -61,10 +61,10 @@ int gpio_arg(ubyte gpio)
 
 extern(C)
 {
-    uint ow_spi_count();
-    void* ow_spi_open(uint port, int sck_gpio, int mosi_gpio, int miso_gpio, int cs_gpio, uint frequency, ubyte mode);
-    void ow_spi_close(void* bus);
-    int ow_spi_submit(void* bus, const(void)* write_data, size_t write_length, void* read_data, size_t read_length, SpiCompletion callback, void* callback_context);
-    int ow_spi_suspend(void* bus);
-    int ow_spi_resume(void* bus);
+    uint urt_spi_count();
+    void* urt_spi_open(uint port, int sck_gpio, int mosi_gpio, int miso_gpio, int cs_gpio, uint frequency, ubyte mode);
+    void urt_spi_close(void* bus);
+    int urt_spi_submit(void* bus, const(void)* write_data, size_t write_length, void* read_data, size_t read_length, SpiCompletion callback, void* callback_context);
+    int urt_spi_suspend(void* bus);
+    int urt_spi_resume(void* bus);
 }

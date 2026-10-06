@@ -31,7 +31,7 @@ version (Espressif)
         size_t heap_caps_get_free_size(uint caps);
         size_t heap_caps_get_minimum_free_size(uint caps);
         size_t heap_caps_get_largest_free_block(uint caps);
-        void ow_main_stack_stats(size_t* size, size_t* peak);
+        void urt_main_stack_stats(size_t* size, size_t* peak);
     }
 }
 
@@ -259,7 +259,7 @@ void get_stack_usage(out ulong size, out ulong peak)
     else version (Espressif)
     {
         size_t main_size, main_peak;
-        ow_main_stack_stats(&main_size, &main_peak);
+        urt_main_stack_stats(&main_size, &main_peak);
         size = main_size;
         peak = main_peak;
     }

@@ -3,7 +3,7 @@
 
 extern void bk_send_string(unsigned char uport, const char *string);
 extern unsigned char get_printf_port(void);
-extern void ow_log_vendor(const char *msg, unsigned len);
+extern void urt_log_vendor(const char *msg, unsigned len);
 
 void sta_ip_start(void)
 {
@@ -42,5 +42,5 @@ void __wrap_bk_printf(const char *fmt, ...)
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     if (n > 0)
-        ow_log_vendor(buf, n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1);
+        urt_log_vendor(buf, n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1);
 }

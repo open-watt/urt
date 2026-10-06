@@ -47,7 +47,7 @@ Result can_hw_open(uint port, ref const CanConfig cfg, CanRxCallback rx_cb)
         return Result.success;
     }
     can_hw_set_rx_callback(port, rx_cb);
-    _handles[port] = ow_can_open(port, cfg.bitrate, cfg.tx_gpio, cfg.rx_gpio, cfg.sjw, cfg.tseg1, cfg.tseg2, cfg.brp, &rx_ready_trampoline);
+    _handles[port] = urt_can_open(port, cfg.bitrate, cfg.tx_gpio, cfg.rx_gpio, cfg.sjw, cfg.tseg1, cfg.tseg2, cfg.brp, &rx_ready_trampoline);
     if (_handles[port] is null)
     {
         can_hw_set_rx_callback(port, null);
@@ -62,7 +62,7 @@ void can_hw_close(uint port)
     if (port >= num_can || _handles[port] is null)
         return;
     can_hw_set_rx_callback(port, null);
-    ow_can_close(_handles[port]);
+    urt_can_close(_handles[port]);
     _handles[port] = null;
     _configs[port] = CanConfig.init;
 }
@@ -72,7 +72,7 @@ bool can_hw_transmit(uint port, ref const CanFrame frame)
     if (port >= num_can || _handles[port] is null || frame.dlc > 8)
         return false;
     ubyte flags = (frame.extended ? 1 : 0) | (frame.rtr ? 2 : 0) | (frame.fd ? 4 : 0) | (frame.brs ? 8 : 0);
-    return ow_can_transmit(_handles[port], frame.id, flags, frame.dlc, frame.data.ptr);
+    return urt_can_transmit(_handles[port], frame.id, flags, frame.dlc, frame.data.ptr);
 }
 
 bool can_hw_receive(uint port, out CanFrame frame)
@@ -80,7 +80,7 @@ bool can_hw_receive(uint port, out CanFrame frame)
     if (port >= num_can || _handles[port] is null)
         return false;
     OwCanFrame raw;
-    if (!ow_can_receive(_handles[port], &raw))
+    if (!urt_can_receive(_handles[port], &raw))
         return false;
     frame.id = raw.id;
     frame.extended = (raw.flags & 1) != 0;
@@ -97,28 +97,28 @@ CanError can_hw_check_errors(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return CanError.none;
-    return cast(CanError)ow_can_check_errors(_handles[port]);
+    return cast(CanError)urt_can_check_errors(_handles[port]);
 }
 
 uint can_hw_take_rx_drops(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    return ow_can_take_rx_drops(_handles[port]);
+    return urt_can_take_rx_drops(_handles[port]);
 }
 
 CanBusState can_hw_bus_state(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return CanBusState.bus_off;
-    return cast(CanBusState)ow_can_bus_state(_handles[port]);
+    return cast(CanBusState)urt_can_bus_state(_handles[port]);
 }
 
 ubyte can_hw_tx_error_count(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    uint count = ow_can_tx_error_count(_handles[port]);
+    uint count = urt_can_tx_error_count(_handles[port]);
     return count > 255 ? 255 : cast(ubyte)count;
 }
 
@@ -126,7 +126,7 @@ ubyte can_hw_rx_error_count(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    uint count = ow_can_rx_error_count(_handles[port]);
+    uint count = urt_can_rx_error_count(_handles[port]);
     return count > 255 ? 255 : cast(ubyte)count;
 }
 
@@ -134,14 +134,14 @@ size_t can_hw_rx_available(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return 0;
-    return ow_can_rx_available(_handles[port]);
+    return urt_can_rx_available(_handles[port]);
 }
 
 void can_hw_rx_flush(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return;
-    ow_can_rx_flush(_handles[port]);
+    urt_can_rx_flush(_handles[port]);
 }
 
 Result can_hw_tx_abort(uint port)
@@ -158,7 +158,7 @@ bool can_hw_bus_recover(uint port)
 {
     if (port >= num_can || _handles[port] is null)
         return false;
-    return ow_can_bus_recover(_handles[port]);
+    return urt_can_bus_recover(_handles[port]);
 }
 
 void can_hw_set_rx_callback(uint port, CanRxCallback cb)
@@ -194,17 +194,17 @@ extern(C) bool rx_ready_trampoline(uint port) nothrow @nogc
 
 extern(C) nothrow @nogc
 {
-    twai_node_handle_t ow_can_open(uint port, uint bitrate, int tx_gpio, int rx_gpio, ubyte sjw, ubyte tseg1, ubyte tseg2, ushort brp,
-                                   bool function(uint) nothrow @nogc rx_cb);
-    void ow_can_close(twai_node_handle_t handle);
-    bool ow_can_transmit(twai_node_handle_t handle, uint id, ubyte flags, ubyte dlc, const(ubyte)* data);
-    bool ow_can_receive(twai_node_handle_t handle, OwCanFrame* frame);
-    uint ow_can_check_errors(twai_node_handle_t handle);
-    uint ow_can_take_rx_drops(twai_node_handle_t handle);
-    uint ow_can_bus_state(twai_node_handle_t handle);
-    uint ow_can_tx_error_count(twai_node_handle_t handle);
-    uint ow_can_rx_error_count(twai_node_handle_t handle);
-    size_t ow_can_rx_available(twai_node_handle_t handle);
-    void ow_can_rx_flush(twai_node_handle_t handle);
-    bool ow_can_bus_recover(twai_node_handle_t handle);
+    twai_node_handle_t urt_can_open(uint port, uint bitrate, int tx_gpio, int rx_gpio, ubyte sjw, ubyte tseg1, ubyte tseg2, ushort brp,
+                                    bool function(uint) nothrow @nogc rx_cb);
+    void urt_can_close(twai_node_handle_t handle);
+    bool urt_can_transmit(twai_node_handle_t handle, uint id, ubyte flags, ubyte dlc, const(ubyte)* data);
+    bool urt_can_receive(twai_node_handle_t handle, OwCanFrame* frame);
+    uint urt_can_check_errors(twai_node_handle_t handle);
+    uint urt_can_take_rx_drops(twai_node_handle_t handle);
+    uint urt_can_bus_state(twai_node_handle_t handle);
+    uint urt_can_tx_error_count(twai_node_handle_t handle);
+    uint urt_can_rx_error_count(twai_node_handle_t handle);
+    size_t urt_can_rx_available(twai_node_handle_t handle);
+    void urt_can_rx_flush(twai_node_handle_t handle);
+    bool urt_can_bus_recover(twai_node_handle_t handle);
 }

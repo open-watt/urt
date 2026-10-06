@@ -53,7 +53,7 @@ void irq_set_priority(uint irq, ubyte priority)
 
 void wait_for_interrupt()
 {
-    ow_irq_wait();
+    urt_irq_wait();
 }
 
 
@@ -66,4 +66,4 @@ __gshared portMUX_TYPE _irq_mux = portMUX_TYPE(portMUX_FREE_VAL, 0);
 // wait_for_interrupt remains a C shim -- it's per-arch inline asm
 // (waiti on Xtensa, wfi on RISC-V) that doesn't fit cleanly in a D
 // binding.
-extern(C) void ow_irq_wait() nothrow @nogc;
+extern(C) void urt_irq_wait() nothrow @nogc;

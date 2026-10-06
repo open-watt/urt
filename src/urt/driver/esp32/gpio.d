@@ -1,4 +1,4 @@
-// ESP32 software GPIO via ESP-IDF (driver/gpio.h) through ow_shim.c.
+// ESP32 software GPIO via ESP-IDF (driver/gpio.h) through idf_shim.c.
 //
 // Peripheral function routing on ESP32 uses the GPIO matrix per-signal,
 // not per-pin function selection, so has_pin_function_muxing = false
@@ -26,60 +26,60 @@ enum bool has_gpio_sampler = false;   // TODO: RMT capture
 enum uint num_gpio_interrupts = 2;
 
 
-uint gpio_count() => ow_gpio_count();
+uint gpio_count() => urt_gpio_count();
 
 void gpio_output_init(uint pin, bool initial = false, DriveMode mode = DriveMode.push_pull)
 {
     assert(mode == DriveMode.push_pull, "esp32 gpio: open-drain not exposed via this API");
-    ow_gpio_output_init(int(pin), initial ? 1 : 0);
+    urt_gpio_output_init(int(pin), initial ? 1 : 0);
 }
 
 void gpio_input_init(uint pin, Pull pull = Pull.none)
 {
-    ow_gpio_input_init(int(pin), int(pull));
+    urt_gpio_input_init(int(pin), int(pull));
 }
 
 @critical void gpio_output_set(uint pin, bool value)
 {
-    ow_gpio_output_set(int(pin), value ? 1 : 0);
+    urt_gpio_output_set(int(pin), value ? 1 : 0);
 }
 
 void gpio_output_toggle(uint pin)
 {
-    ow_gpio_output_set(int(pin), ow_gpio_input_read(int(pin)) ? 0 : 1);
+    urt_gpio_output_set(int(pin), urt_gpio_input_read(int(pin)) ? 0 : 1);
 }
 
 bool gpio_input_read(uint pin)
 {
-    return ow_gpio_input_read(int(pin)) != 0;
+    return urt_gpio_input_read(int(pin)) != 0;
 }
 
 void gpio_set_pull(uint pin, Pull pull)
 {
-    ow_gpio_set_pull(int(pin), int(pull));
+    urt_gpio_set_pull(int(pin), int(pull));
 }
 
 void gpio_release(uint pin)
 {
-    ow_gpio_release(int(pin));
+    urt_gpio_release(int(pin));
 }
 
 Result gpio_interrupt_hw_open(uint port, ref const GpioInterruptConfig config)
 {
     if (config.input.chip != 0)
         return InternalResult.unsupported;
-    return ow_gpio_interrupt_open(port, config.input.line, cast(uint)config.trigger) == 0 ? Result.success : InternalResult.failed;
+    return urt_gpio_interrupt_open(port, config.input.line, cast(uint)config.trigger) == 0 ? Result.success : InternalResult.failed;
 }
 
 void gpio_interrupt_hw_listen(uint port, bool on)
 {
-    ow_gpio_interrupt_set_callback(port, on ? &gpio_interrupt : null);
+    urt_gpio_interrupt_set_callback(port, on ? &gpio_interrupt : null);
 }
 
 void gpio_interrupt_hw_close(uint port, uint line)
 {
-    ow_gpio_interrupt_set_callback(port, null);
-    ow_gpio_interrupt_close(port);
+    urt_gpio_interrupt_set_callback(port, null);
+    urt_gpio_interrupt_close(port);
 }
 
 
@@ -95,14 +95,14 @@ extern(C) alias OwGpioInterruptCallback = bool function(uint port) nothrow @nogc
 
 extern(C) nothrow @nogc
 {
-    void ow_gpio_output_init(int pin, int initial);
-    void ow_gpio_input_init(int pin, int pull);
-    void ow_gpio_output_set(int pin, int value);
-    int  ow_gpio_input_read(int pin);
-    void ow_gpio_set_pull(int pin, int pull);
-    void ow_gpio_release(int pin);
-    uint ow_gpio_count();
-    int ow_gpio_interrupt_open(uint port, uint input_gpio, uint trigger);
-    void ow_gpio_interrupt_set_callback(uint port, OwGpioInterruptCallback callback);
-    void ow_gpio_interrupt_close(uint port);
+    void urt_gpio_output_init(int pin, int initial);
+    void urt_gpio_input_init(int pin, int pull);
+    void urt_gpio_output_set(int pin, int value);
+    int  urt_gpio_input_read(int pin);
+    void urt_gpio_set_pull(int pin, int pull);
+    void urt_gpio_release(int pin);
+    uint urt_gpio_count();
+    int urt_gpio_interrupt_open(uint port, uint input_gpio, uint trigger);
+    void urt_gpio_interrupt_set_callback(uint port, OwGpioInterruptCallback callback);
+    void urt_gpio_interrupt_close(uint port);
 }

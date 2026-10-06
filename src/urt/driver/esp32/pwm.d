@@ -18,7 +18,7 @@ Result pwm_hw_open(uint port, ref const PwmConfig config)
 
     if (config.output.chip != 0)
         return InternalResult.unsupported;
-    if (ow_pwm_open(port, config.output.line, config.frequency, resolution, config.initial_duty, config.inverted) != 0)
+    if (urt_pwm_open(port, config.output.line, config.frequency, resolution, config.initial_duty, config.inverted) != 0)
         return InternalResult.failed;
 
     _open[port] = true;
@@ -29,14 +29,14 @@ Result pwm_hw_set_duty(uint port, uint duty)
 {
     if (port >= num_hw_pwm || !_open[port])
         return InternalResult.invalid_parameter;
-    return ow_pwm_set_duty(port, duty) == 0 ? Result.success : InternalResult.failed;
+    return urt_pwm_set_duty(port, duty) == 0 ? Result.success : InternalResult.failed;
 }
 
 void pwm_hw_close(uint port)
 {
     if (port >= num_hw_pwm || !_open[port])
         return;
-    ow_pwm_close(port);
+    urt_pwm_close(port);
     _open[port] = false;
 }
 
@@ -60,7 +60,7 @@ ubyte resolution_bits(uint period)
 
 extern(C) nothrow @nogc
 {
-    int ow_pwm_open(uint port, uint gpio, uint frequency, uint resolution, uint initial_duty, bool inverted);
-    int ow_pwm_set_duty(uint port, uint duty);
-    void ow_pwm_close(uint port);
+    int urt_pwm_open(uint port, uint gpio, uint frequency, uint resolution, uint initial_duty, bool inverted);
+    int urt_pwm_set_duty(uint port, uint duty);
+    void urt_pwm_close(uint port);
 }

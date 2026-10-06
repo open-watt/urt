@@ -4,7 +4,7 @@ import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_lin
 import urt.driver.gpio : Pull;
 import urt.driver.rp2350 : clk_peri_hz, gpio_route, out_of_reset, reset_io_bank0, reset_pads_bank0, reset_pulse, reset_uart0, reset_uart1, unreset_wait;
 import urt.driver.rp2350.gpio : gpio_set_pull;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
     UartRxTiming, UartTxCallback, uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
 import urt.mem.page : Page;
@@ -103,14 +103,26 @@ UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
 
 // UARTIFLS takes a new level while the UART runs; the receive timeout is fixed.
-UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+// The interrupt mask survives the reprogramming.
+bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
 {
-    _ports.retime(id, set_rx_level(id, cfg));
-    return _ports.timing(id);
+    if (!divider_x64(cfg.baud_rate))
+        return false;
+    {
+        auto guard = irq_critical();
+        if (!uart_hw_init(id, cfg))
+            return false;
+    }
+    _ports.reconfigure(id, cfg, set_rx_level(id, cfg));
+    _ports.kick(id);
+    return true;
 }
 
 size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
+
+UartCounters uart_hw_counters(uint id)
+    => _ports.counters(id);
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);

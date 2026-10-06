@@ -2,7 +2,7 @@
 module urt.driver.mt7621.uart;
 
 import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_line_enable;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
     UartRxTiming, UartTxCallback, uart_chars_us, uart_rate_close, uart_rx_chars;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
 import urt.mem.page : Page;
@@ -101,16 +101,28 @@ Page* uart_hw_rx_take(uint id)
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id - first_uart);
 
-// The FCR trigger takes a new level while the UART runs; the character timeout is fixed at four characters.
-UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+// The character timeout is fixed at four characters.
+bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
 {
-    auto guard = irq_critical();
-    _ports.retime(id - first_uart, set_rx_timing(id, cfg));
-    return _ports.timing(id - first_uart);
+    if (!divisor(cfg.baud_rate))
+        return false;
+    UartRxTiming timing;
+    {
+        auto guard = irq_critical();
+        uart_hw_init(id, cfg);
+        timing = set_rx_timing(id, cfg);
+        write_reg(uart_base(id), ier, ier_rda | ier_rls);
+    }
+    _ports.reconfigure(id - first_uart, cfg, timing);
+    _ports.kick(id - first_uart);
+    return true;
 }
 
 size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id - first_uart);
+
+UartCounters uart_hw_counters(uint id)
+    => _ports.counters(id - first_uart);
 
 UartError uart_hw_check_errors(uint id)
 {

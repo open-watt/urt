@@ -41,7 +41,6 @@ static immutable uint[2] batch_pins = [ 8, 9 ];
 enum UartError line_errors = UartError.parity;
 enum bool shows_tx_busy = true;
 enum bool keeps_bad_bytes = true;
-enum bool retimes_latency_live = true;
 enum bool programs_rx_gap = true;
 
 void reset()

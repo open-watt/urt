@@ -38,6 +38,7 @@ enum UartError : ubyte
     overrun  = 1 << 2,
     noise    = 1 << 3,
     break_   = 1 << 4,
+    lost     = 1 << 5,      // the device went away, as a USB adapter unplugged
 }
 
 static assert(UartError.framing == 1 << 0);
@@ -131,6 +132,50 @@ struct UartRxTiming
     ubyte gap;
 }
 
+// What the port has moved and the line errors it has seen since it opened.
+struct UartCounters
+{
+    ulong rx_bytes;
+    ulong tx_bytes;
+    uint framing;
+    uint parity;
+    uint overrun;
+    uint noise;
+    uint breaks;
+}
+
+enum UartLine : ubyte
+{
+    rts,
+    dtr,
+}
+
+// The modem lines: what the port asserts, where it can read them back, and what the peer presents.
+struct UartLines
+{
+    bool valid;
+    bool outputs_valid;
+    bool rts;
+    bool dtr;
+    bool cts;
+    bool dsr;
+    bool dcd;
+    bool ri;
+}
+
+// A port the platform knows: the name uart_find takes, and what it can say of the hardware behind it.
+struct UartPortInfo
+{
+    const(char)[] name;
+    const(char)[] description;
+    const(char)[] manufacturer;
+    const(char)[] product;
+    const(char)[] serial;
+    ushort usb_vid;
+    ushort usb_pid;
+    ubyte port;
+}
+
 // Start, data, parity and stop bits; half a stop bit counts as one, one and a half as two.
 uint uart_frame_bits(ref const UartConfig cfg) pure
     => 2 + cfg.data_bits + (cfg.parity != Parity.none) + (cfg.stop_bits >= StopBits.one_point_five);
@@ -168,11 +213,9 @@ enum UartCallbackContext : ubyte
     interrupt,
 }
 
-// A backend with has_rx_timing applies UartConfig's RX latency and gap, live too, and reports what it runs with; one
-// that reports no gap says so with uart_reports_rx_gap.
-enum bool has_rx_timing = __traits(compiles, { UartConfig c; uart_hw_set_rx_timing(0, c); });
+// A backend that cannot report the gap it programs says so with uart_reports_rx_gap.
 static if (!__traits(compiles, uart_reports_rx_gap))
-    enum bool uart_reports_rx_gap = has_rx_timing;
+    enum bool uart_reports_rx_gap = num_uarts > 0;
 
 // Raised when bytes arrived, the line went quiet, or an error was recorded; uart_rx_take then takes what arrived. Like
 // the TX callback it only signals: it must not block or call back into the driver, and in interrupt context returns
@@ -239,7 +282,45 @@ void uart_deinit()
     }
 }
 
-// Port operations
+// Ports
+
+// The port a name stands for, or ubyte.max. A part names its ports uart0 and on; a host takes any name its OS gives
+// the device, and every name for one device finds the same port, for as long as the process runs.
+ubyte uart_find(const(char)[] name)
+{
+    static if (__traits(compiles, uart_hw_find(name)))
+        return uart_hw_find(name);
+    else
+    {
+        if (name.length < 5 || name[0 .. 4] != "uart")
+            return ubyte.max;
+        uint port;
+        foreach (c; name[4 .. $])
+        {
+            if (c < '0' || c > '9' || port > first_uart + num_uarts)
+                return ubyte.max;
+            port = port * 10 + (c - '0');
+        }
+        return port >= first_uart && port < first_uart + num_uarts ? cast(ubyte)port : ubyte.max;
+    }
+}
+
+// The ports the platform knows, from cursor 0; info's strings hold until the next call.
+bool uart_enumerate(ref uint cursor, out UartPortInfo info)
+{
+    static if (__traits(compiles, uart_hw_enumerate(cursor, info)))
+        return uart_hw_enumerate(cursor, info);
+    else
+    {
+        static immutable string[10] names = [ "uart0", "uart1", "uart2", "uart3", "uart4", "uart5", "uart6", "uart7", "uart8", "uart9" ];
+        static assert(first_uart + num_uarts <= names.length);
+        if (cursor >= num_uarts)
+            return false;
+        info.port = cast(ubyte)(first_uart + cursor++);
+        info.name = names[info.port];
+        return true;
+    }
+}
 
 Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, UartRxCallback rx_cb = null, UartTxCallback tx_cb = null)
 {
@@ -257,8 +338,28 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, UartRxCall
         if (!uart_hw_open(port, cfg, rx_cb, tx_cb))
             return InternalResult.failed;
         _open_ports |= owned;
+        _pins[port - first_uart] = Pins(cfg);
         uart.port = port;
         return Result.success;
+    }
+}
+
+// Applies cfg to an open port at once: what the FIFOs and the line held at that moment may come out mangled either way,
+// and what is queued goes out under the new settings. A change in how the line is read ends the frame arriving then,
+// which the caller takes; no callback reports it. Pins are fixed while it is open.
+Result uart_reconfigure(ref Uart uart, ref const UartConfig cfg)
+{
+    static if (num_uarts == 0)
+        assert(false, "no UART on this platform");
+    else
+    {
+        if (!is_open(uart))
+            return InternalResult.invalid_parameter;
+        if (cfg.baud_rate == 0 || Pins(cfg) != _pins[uart.port - first_uart])
+            return InternalResult.invalid_parameter;
+        if (!uart_config_supported(cfg))
+            return InternalResult.unsupported;
+        return uart_hw_reconfigure(uart.port, cfg) ? Result.success : InternalResult.failed;
     }
 }
 
@@ -338,13 +439,29 @@ UartError uart_check_errors(ref Uart uart)
         return is_open(uart) ? uart_hw_check_errors(uart.port) : UartError.none;
 }
 
-// Reprograms an open port's RX latency and gap in place, leaving TX and what is queued alone; the rest of cfg is what
-// the port was opened with. A backend may keep a setting until the port next opens; the result, like uart_rx_timing,
-// is the timing the port now runs with.
-static if (has_rx_timing)
+UartCounters uart_counters(ref const Uart uart)
 {
-    UartRxTiming uart_set_rx_timing(ref Uart uart, ref const UartConfig cfg)
-        => is_open(uart) ? uart_hw_set_rx_timing(uart.port, cfg) : UartRxTiming();
+    static if (num_uarts == 0)
+        assert(false, "no UART on this platform");
+    else
+        return is_open(uart) ? uart_hw_counters(uart.port) : UartCounters();
+}
+
+// Drives a modem line the port's flow control does not own; false where the port has no such line.
+bool uart_set_line(ref Uart uart, UartLine line, bool asserted)
+{
+    static if (__traits(compiles, uart_hw_set_line(0, line, asserted)))
+        return is_open(uart) && uart_hw_set_line(uart.port, line, asserted);
+    else
+        return false;
+}
+
+UartLines uart_lines(ref Uart uart)
+{
+    static if (__traits(compiles, uart_hw_lines(0)))
+        return is_open(uart) ? uart_hw_lines(uart.port) : UartLines();
+    else
+        return UartLines();
 }
 
 UartRxTiming uart_rx_timing(ref const Uart uart)
@@ -438,5 +555,21 @@ unittest
 
 private:
 
+struct Pins
+{
+nothrow @nogc:
+    ubyte tx, rx, rts, cts, de;
+    this(ref const UartConfig cfg) pure
+    {
+        tx = cfg.tx_gpio;
+        rx = cfg.rx_gpio;
+        rts = cfg.rts_gpio;
+        cts = cfg.cts_gpio;
+        de = cfg.rs485.enabled ? cfg.rs485.de_gpio : ubyte.max;
+    }
+}
+
 __gshared ubyte _init_refcount;
 __gshared uint _open_ports;
+static if (num_uarts > 0)
+    __gshared Pins[num_uarts] _pins;

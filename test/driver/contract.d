@@ -245,67 +245,60 @@ void uart_contract()
     assert(wire() == big[0 .. 1200] && pages_in_use() == pages, "and everything goes out in the order it was given");
 
     ubyte[600] buf;
-    static if (has_rx_timing)
+    // a reconfigure applies at once, and what is queued beyond the FIFO goes out under it
+    wire_clear();
+    tx_hold(true);
+    send(u, big[0 .. 1000]);
+    UartConfig slow = cfg;
+    slow.baud_rate = 57_600;
+    slow.rx_latency_us = 2000;
+    slow.rx_gap = 50;
+    assert(uart_reconfigure(u, slow), "an open port takes new settings in place");
+    assert(programmed_baud() > 57_600 * 97 / 100 && programmed_baud() < 57_600 * 103 / 100, "programmed at once");
+    tx_hold(false);
+    run_line();
+    assert(wire().length >= 500 && wire() == big[1000 - wire().length .. 1000], "and queued TX goes out after it, whatever the FIFO held");
+    assert(pages_in_use() == pages);
+    immutable UartRxTiming retimed = uart_rx_timing(u);
+    assert(retimed.latency_us > timing.latency_us, "the new latency runs at once");
+    static if (programs_rx_gap)
+        assert(uart_gap_tenths(slow, rx_gap_bits()) == retimed.gap, "with the gap it reports programmed");
+    immutable uint trigger = chars_in(slow, retimed);
+    rx_calls = 0;
+    foreach (i; 0 .. trigger - 1)
+        rx(cast(ubyte)i);
+    assert(rx_calls == 0, "a burst short of the reported threshold waits");
+    rx(cast(ubyte)(trigger - 1));
+    assert(rx_calls > 0, "and the threshold delivers it");
+    size_t delivered = read(u, buf[]);
+    assert(delivered + 1 >= trigger);
+    immutable uint before_gap = rx_calls;
+    line_idle();
+    assert(rx_calls > before_gap, "a gap that ends a frame already taken is still heard");
+    assert(delivered + read(u, buf[delivered .. $]) == trigger && buf[trigger - 1] == trigger - 1);
+
+    assert(uart_reconfigure(u, cfg) && uart_rx_timing(u) == timing, "a reconfigure back restores the timing");
+    static if (programs_rx_gap)
+        assert(uart_gap_tenths(cfg, rx_gap_bits()) == timing.gap);
+    immutable uint threshold = chars_in(cfg, timing);
+    rx_calls = 0;
+    foreach (i; 0 .. threshold - 1)
+        rx(cast(ubyte)i);
+    assert(rx_calls == 0);
+    rx(cast(ubyte)(threshold - 1));
+    assert(rx_calls > 0, "and the threshold");
+    size_t taken = read(u, buf[]);
+    assert(taken + 1 >= threshold);
+    line_idle();
+    assert(taken + read(u, buf[taken .. $]) == threshold);
+    static if (uart_has_pin_select)
     {
-        wire_clear();
-        tx_hold(true);
-        send(u, big[0 .. 100]);
-        immutable size_t queued = uart_tx_queued(u);
-        rx_overrun();
-        rx('<');
-        UartConfig slow = cfg;
-        slow.rx_latency_us = 2000;
-        slow.rx_gap = 50;
-        assert(uart_set_rx_timing(u, slow) == uart_rx_timing(u), "a retime reports the timing the port runs with");
-        assert(uart_tx_queued(u) == queued, "and leaves queued TX alone");
-        tx_hold(false);
-        run_line();
-        assert(wire() == big[0 .. 100], "which is sent");
-        line_idle();
-        assert(read(u, buf[]) == 1 && buf[0] == '<', "as is what arrived before the retime");
-        assert(uart_check_errors(u) & UartError.overrun, "and the errors it had not reported");
-        immutable UartRxTiming retimed = uart_rx_timing(u);
-        static if (retimes_latency_live)
-            assert(retimed.latency_us > timing.latency_us, "the new latency runs at once");
-        else
-            assert(retimed.latency_us == timing.latency_us, "or the old one, reported as such, until the port next opens");
-        static if (programs_rx_gap)
-            assert(uart_gap_tenths(slow, rx_gap_bits()) == retimed.gap, "with the gap it reports programmed");
-        immutable uint trigger = chars_in(slow, retimed);
-        rx_calls = 0;
-        foreach (i; 0 .. trigger - 1)
-            rx(cast(ubyte)i);
-        assert(rx_calls == 0, "a burst short of the reported threshold waits");
-        rx(cast(ubyte)(trigger - 1));
-        assert(rx_calls > 0, "and the threshold delivers it");
-        size_t delivered = read(u, buf[]);
-        assert(delivered + 1 >= trigger);
-        immutable uint before_gap = rx_calls;
-        line_idle();
-        assert(rx_calls > before_gap, "a gap that ends a frame already taken is still heard");
-        assert(delivered + read(u, buf[delivered .. $]) == trigger && buf[trigger - 1] == trigger - 1);
-
-        assert(uart_set_rx_timing(u, cfg) == timing, "a retime back restores the timing");
-        static if (programs_rx_gap)
-            assert(uart_gap_tenths(cfg, rx_gap_bits()) == timing.gap);
-        immutable uint threshold = chars_in(cfg, timing);
-        rx_calls = 0;
-        foreach (i; 0 .. threshold - 1)
-            rx(cast(ubyte)i);
-        assert(rx_calls == 0);
-        rx(cast(ubyte)(threshold - 1));
-        assert(rx_calls > 0, "and the threshold");
-        size_t taken = read(u, buf[]);
-        assert(taken + 1 >= threshold);
-        line_idle();
-        assert(taken + read(u, buf[taken .. $]) == threshold);
-
-        uart_close(u);
-        assert(uart_open(u, uart_port, slow, &on_rx, &on_tx));
-        assert(uart_rx_timing(u).latency_us > timing.latency_us, "an open applies the latency");
-        uart_close(u);
-        assert(uart_open(u, uart_port, cfg, &on_rx, &on_tx));
+        UartConfig moved = cfg;
+        moved.tx_gpio = alt_tx_pin;
+        assert(uart_reconfigure(u, moved) == InternalResult.invalid_parameter, "pins stay as the port opened with them");
     }
+    UartCounters counted = uart_counters(u);
+    assert(counted.tx_bytes >= 1000 && counted.rx_bytes >= trigger + threshold, "the port counts what it moves");
 
     static if (shows_tx_busy)
     {
@@ -399,12 +392,12 @@ void uart_contract()
     wire_clear();
     send(u, "bye");
     rx('r');
+    immutable uint cut_short = tx_disabled_while_busy();
     uart_close(u);
-    assert(!u.is_open && wire() == "bye" && tx_disabled_while_busy() == 0, "a close sends everything queued before it stops the transmitter");
+    assert(!u.is_open && wire() == "bye" && tx_disabled_while_busy() == cut_short, "a close sends everything queued before it stops the transmitter");
     assert(pages_in_use() == pages, "and releases every page it held");
     assert(uart_rx_timing(u) == UartRxTiming(), "a closed port reports no RX timing");
-    static if (has_rx_timing)
-        assert(uart_set_rx_timing(u, cfg) == UartRxTiming(), "and takes no retime");
+    assert(uart_reconfigure(u, cfg) == InternalResult.invalid_parameter, "and takes no reconfigure");
     assert(!send(u, "x") && uart_write(u, "x") == 0, "and takes nothing");
 
     cfg.parity = Parity.even;

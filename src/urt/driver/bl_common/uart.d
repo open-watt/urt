@@ -5,7 +5,7 @@ module urt.driver.bl_common.uart;
 import core.volatile;
 
 import urt.driver.irq : irq_handler_set, irq_line_disable, irq_line_enable;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
     UartRxTiming, UartTxCallback, uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
 import urt.driver.uart_core : UartPorts;
 import urt.mem.page : Page;
@@ -132,35 +132,7 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, Uar
     immutable base = uart_base[id];
     irq_line_disable(uart_irq[id]);
     reg_write(base, INT_MASK, INT_MASK_ALL);
-
-    auto tx_cfg = reg_read(base, UTX_CONFIG);
-    auto rx_cfg = reg_read(base, URX_CONFIG);
-    tx_cfg &= ~CR_UTX_EN;
-    rx_cfg &= ~CR_URX_EN;
-    reg_write(base, UTX_CONFIG, tx_cfg);
-    reg_write(base, URX_CONFIG, rx_cfg);
-
-    reg_write(base, BIT_PRD, (period - 1) << 16 | (period - 1));
-
-    tx_cfg &= ~(CR_UTX_BIT_CNT_D_MASK | CR_UTX_BIT_CNT_P_MASK | CR_UTX_PRT_EN | CR_UTX_PRT_SEL | CR_UTX_FRM_EN);
-    tx_cfg |= uint(cfg.data_bits - 1) << CR_UTX_BIT_CNT_D_SHIFT;
-    tx_cfg |= uint(cfg.stop_bits) << CR_UTX_BIT_CNT_P_SHIFT;
-    tx_cfg |= CR_UTX_FRM_EN;
-    if (cfg.parity != Parity.none)
-    {
-        tx_cfg |= CR_UTX_PRT_EN;
-        if (cfg.parity == Parity.odd)
-            tx_cfg |= CR_UTX_PRT_SEL;
-    }
-
-    rx_cfg &= ~(CR_URX_BIT_CNT_D_MASK | CR_URX_PRT_EN | CR_URX_PRT_SEL);
-    rx_cfg |= uint(cfg.data_bits - 1) << CR_URX_BIT_CNT_D_SHIFT;
-    if (cfg.parity != Parity.none)
-    {
-        rx_cfg |= CR_URX_PRT_EN;
-        if (cfg.parity == Parity.odd)
-            rx_cfg |= CR_URX_PRT_SEL;
-    }
+    stop(base);
 
     reg_write(base, FIFO_CONFIG_0, (reg_read(base, FIFO_CONFIG_0) & DMA_EN) | TX_FIFO_CLR | RX_FIFO_CLR);
 
@@ -171,13 +143,25 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, Uar
     reg_write(base, INT_EN, INT_UTX_FIFO | INT_RX);
     reg_write(base, INT_MASK, INT_MASK_ALL & ~INT_RX);
 
-    tx_cfg |= CR_UTX_EN;
-    rx_cfg |= CR_URX_EN;
-    reg_write(base, UTX_CONFIG, tx_cfg);
-    reg_write(base, URX_CONFIG, rx_cfg);
+    program(base, cfg, period);
 
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
+    return true;
+}
+
+bool uart_hw_reconfigure(uint port, ref const UartConfig cfg)
+{
+    immutable id = port - first_uart;
+    immutable uint period = bit_period(cfg.baud_rate);
+    if (!period)
+        return false;
+    immutable base = uart_base[id];
+    stop(base);
+    immutable UartRxTiming timing = set_rx_timing(id, cfg);
+    program(base, cfg, period);
+    _ports.reconfigure(id, cfg, timing);
+    _ports.kick(id);
     return true;
 }
 
@@ -206,13 +190,6 @@ UartRxTiming uart_hw_rx_timing(uint port)
     => _ports.timing(port - first_uart);
 
 // The RX threshold and timeout take new values while the UART runs.
-UartRxTiming uart_hw_set_rx_timing(uint port, ref const UartConfig cfg)
-{
-    immutable id = port - first_uart;
-    _ports.retime(id, set_rx_timing(id, cfg));
-    return _ports.timing(id);
-}
-
 size_t uart_hw_tx_pending(uint port)
     => _ports.tx_pending(port - first_uart);
 
@@ -223,11 +200,49 @@ void uart_hw_flush(uint port)
         _ports.drain(id);
 }
 
+UartCounters uart_hw_counters(uint port)
+    => _ports.counters(port - first_uart);
+
 UartError uart_hw_check_errors(uint port)
     => _ports.take_errors(port - first_uart);
 
 
 private:
+
+void stop(uint base)
+{
+    reg_write(base, UTX_CONFIG, reg_read(base, UTX_CONFIG) & ~CR_UTX_EN);
+    reg_write(base, URX_CONFIG, reg_read(base, URX_CONFIG) & ~CR_URX_EN);
+}
+
+// framing and rate, with the transmitter and receiver stopped, which then start
+void program(uint base, ref const UartConfig cfg, uint period)
+{
+    reg_write(base, BIT_PRD, (period - 1) << 16 | (period - 1));
+
+    uint tx_cfg = reg_read(base, UTX_CONFIG) & ~(CR_UTX_BIT_CNT_D_MASK | CR_UTX_BIT_CNT_P_MASK | CR_UTX_PRT_EN | CR_UTX_PRT_SEL | CR_UTX_FRM_EN);
+    tx_cfg |= uint(cfg.data_bits - 1) << CR_UTX_BIT_CNT_D_SHIFT;
+    tx_cfg |= uint(cfg.stop_bits) << CR_UTX_BIT_CNT_P_SHIFT;
+    tx_cfg |= CR_UTX_FRM_EN;
+    if (cfg.parity != Parity.none)
+    {
+        tx_cfg |= CR_UTX_PRT_EN;
+        if (cfg.parity == Parity.odd)
+            tx_cfg |= CR_UTX_PRT_SEL;
+    }
+
+    uint rx_cfg = reg_read(base, URX_CONFIG) & ~(CR_URX_BIT_CNT_D_MASK | CR_URX_PRT_EN | CR_URX_PRT_SEL);
+    rx_cfg |= uint(cfg.data_bits - 1) << CR_URX_BIT_CNT_D_SHIFT;
+    if (cfg.parity != Parity.none)
+    {
+        rx_cfg |= CR_URX_PRT_EN;
+        if (cfg.parity == Parity.odd)
+            rx_cfg |= CR_URX_PRT_SEL;
+    }
+
+    reg_write(base, UTX_CONFIG, tx_cfg | CR_UTX_EN);
+    reg_write(base, URX_CONFIG, rx_cfg | CR_URX_EN);
+}
 
 __gshared UartPorts!(num_uarts, first_uart, tx_idle, fill_tx_fifo) _ports;
 

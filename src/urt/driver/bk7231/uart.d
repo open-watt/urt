@@ -4,12 +4,12 @@ module urt.driver.bk7231.uart;
 
 import core.volatile;
 
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
     UartRxTiming, UartTxCallback, uart_chars_us, uart_frame_bits, uart_rate_close, uart_rx_chars;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
 import urt.driver.bk7231.timer : mtime_freq_hz, timer2_set_periodic;
 import urt.driver.gpio : Pull, gpio_set_function;
-import urt.driver.irq : irq_handler_set, irq_line_enable;
+import urt.driver.irq : irq_critical, irq_handler_set, irq_line_enable;
 import urt.mem.page : Page;
 import urt.time : MonoTime, getTime, usecs;
 
@@ -236,9 +236,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
         _ports.release(id);
         return false;
     }
-    _ports.start(id, rx_cb, tx_cb, UartRxTiming(uart_chars_us(cfg, rx_threshold(cfg))));
-    _char_ticks[id] = cast(uint)usecs(uart_chars_us(cfg, 1) + 1).ticks;
-    _refill_ticks[id] = cast(uint)(ulong(mtime_freq_hz) * (FIFO_DEPTH / 2) * uart_frame_bits(cfg) / cfg.baud_rate);
+    _ports.start(id, rx_cb, tx_cb, line_timing(id, cfg));
     _fifo_empty[id] = false;
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
@@ -269,16 +267,26 @@ UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
 
 // The RX threshold takes a new value while the UART runs.
-UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+// The interrupts the port runs on survive the reprogramming.
+bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
 {
-    immutable uint config = uart_bases[id] + REG_FIFO_CONFIG;
-    reg_write(config, (reg_read(config) & ~FIFO_RX_THRESHOLD_MASK) | rx_threshold(cfg) << FIFO_RX_THRESHOLD_POS);
-    _ports.retime(id, UartRxTiming(uart_chars_us(cfg, rx_threshold(cfg))));
-    return _ports.timing(id);
+    {
+        auto guard = irq_critical();
+        immutable uint enabled = reg_read(uart_bases[id] + REG_INT_ENABLE);
+        if (!uart_hw_init(id, cfg))
+            return false;
+        reg_write(uart_bases[id] + REG_INT_ENABLE, enabled);
+    }
+    _ports.reconfigure(id, cfg, line_timing(id, cfg));
+    _ports.kick(id);
+    return true;
 }
 
 size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
+
+UartCounters uart_hw_counters(uint id)
+    => _ports.counters(id);
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
@@ -309,6 +317,13 @@ void uart0_hw_puts(const(char)[] s)
 
 
 private:
+
+UartRxTiming line_timing(uint id, ref const UartConfig cfg)
+{
+    _char_ticks[id] = cast(uint)usecs(uart_chars_us(cfg, 1) + 1).ticks;
+    _refill_ticks[id] = cast(uint)(ulong(mtime_freq_hz) * (FIFO_DEPTH / 2) * uart_frame_bits(cfg) / cfg.baud_rate);
+    return UartRxTiming(uart_chars_us(cfg, rx_threshold(cfg)));
+}
 
 // driver/include/intc_pub.h: IRQ_UART1 = 0, IRQ_UART2 = 1
 immutable uint[2] uart_irq = [0, 1];

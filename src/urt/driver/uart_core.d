@@ -1,10 +1,12 @@
-// The buffering, delivery and bounded progress every interrupt-driven UART backend shares. The backend supplies tx_idle,
-// and tx_fill, which moves TX bytes into the FIFO with interrupts held off and arms TX while more waits.
+// The buffering, delivery and bounded progress every UART backend shares. The backend supplies tx_idle, and tx_fill,
+// which moves TX bytes into the FIFO inside section() and arms TX while more waits. On a part the ISR side runs in the
+// interrupt and section() holds interrupts off; on a host it runs in the backend's I/O thread, which takes section() too.
 module urt.driver.uart_core;
 
-import urt.driver.irq : irq_critical;
-import urt.driver.uart : Uart, UartBurst, UartCallbackContext, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    UartTxCallback, uart_frame_bits;
+import urt.driver.irq : irq_critical, irq_max;
+import urt.driver.uart : Uart, UartBurst, UartCallbackContext, UartConfig, UartCounters, UartError, UartRxCallback,
+    UartRxTiming, UartTxCallback, uart_frame_bits;
+import urt.sync.spinlock : Spinlock;
 import urt.mem.pagepool;
 import urt.time : Duration, MonoTime, getTime, msecs, nsecs;
 
@@ -142,12 +144,13 @@ nothrow @nogc:
         immutable uint frame = uart_frame_bits(cfg);
         immutable ubyte category = cfg.baud_rate / frame / 50 > rx_room(0) / 2 ? largest() : 0;
         {
-            auto guard = irq_critical();
+            auto guard = section();
             Port* p = &_port[id];
             *p = Port.init;
             p.open = true;
             p.tx_starved = true;
-            p.char_ticks = cast(uint)nsecs(ulong(frame) * 1_000_000_000 / cfg.baud_rate).ticks;
+            p.char_ticks = char_ticks(cfg);
+            p.format = line_format(cfg);
             p.rx_category = category;
         }
         page_pool_reserve(category, rx_reserve_pages);
@@ -159,6 +162,42 @@ nothrow @nogc:
         _port[id].rx_cb = rx_cb;
         _port[id].tx_cb = tx_cb;
         retime(id, timing);
+    }
+
+    // After the backend applies cfg to the open port: the line's character time and RX timing follow it.
+    // A change in how the line is read ends the frame arriving at that moment, and what follows lands in a page of its own,
+    // so each page's character time holds for every frame ending on it.
+    void reconfigure(uint id, ref const UartConfig cfg, UartRxTiming timing)
+    {
+        auto guard = section();
+        Port* p = &_port[id];
+        immutable uint ticks = char_ticks(cfg);
+        immutable ubyte format = line_format(cfg);
+        if (ticks != p.char_ticks || format != p.format)
+        {
+            if (p.rx_frame_open)
+            {
+                p.rx_frame_open = false;
+                end_frame(p, getTime().ticks);
+            }
+            if (p.rx_page && (p.rx_page.length || rx_tags(p.rx_page)))
+                close_page(p);
+            else if (p.rx_page)
+            {
+                page_release_isr(p.rx_page);
+                p.rx_page = null;
+            }
+        }
+        p.char_ticks = ticks;
+        p.format = format;
+        retime(id, timing);
+    }
+
+    // After the backend reprograms the port: queued TX picks up again.
+    void kick(uint id)
+    {
+        auto guard = section();
+        tx_fill(id);
     }
 
     void retime(uint id, UartRxTiming timing)
@@ -176,7 +215,7 @@ nothrow @nogc:
         Page*[4] held;
         ubyte category;
         {
-            auto guard = irq_critical();
+            auto guard = section();
             if (!p.open)
                 return;
             held = [ p.tx_queue, p.tx_fill, p.rx_closed, p.rx_page ];
@@ -206,7 +245,7 @@ nothrow @nogc:
         Page* last = chain;
         while (last.next)
             last = last.next;
-        auto guard = irq_critical();
+        auto guard = section();
         if (p.tx_fill)
         {
             enqueue(p, p.tx_fill, p.tx_fill);
@@ -227,7 +266,7 @@ nothrow @nogc:
             return 0;
         Page* page;
         {
-            auto guard = irq_critical();
+            auto guard = section();
             page = p.tx_fill;
             p.tx_fill = null;
         }
@@ -257,7 +296,7 @@ nothrow @nogc:
             bytes = bytes[n .. $];
             total += n;
         }
-        auto guard = irq_critical();
+        auto guard = section();
         if (full)
             enqueue(p, full, full_last);
         p.tx_fill = page;
@@ -273,7 +312,7 @@ nothrow @nogc:
     size_t tx_pending(uint id)
     {
         Port* p = &_port[id];
-        auto guard = irq_critical();
+        auto guard = section();
         size_t bytes = p.tx_fill ? p.tx_fill.length : 0;
         for (Page* page = p.tx_queue; page; page = page.next)
             bytes += page.length;
@@ -310,6 +349,7 @@ nothrow @nogc:
         Page* head = p.tx_queue;
         head.offset += cast(ushort)n;
         head.length -= cast(ushort)n;
+        p.counters.tx_bytes += n;
         if (head.length)
             return false;
         dequeue_sent(p);
@@ -322,7 +362,7 @@ nothrow @nogc:
         immutable deadline = getTime() + tx_drain_limit;
         while (getTime() < deadline)
         {
-            auto guard = irq_critical();
+            auto guard = section();
             tx_fill(id);
             if (!tx_queued(id))
                 break;
@@ -339,7 +379,7 @@ nothrow @nogc:
         Page* closed;
         Page* active;
         {
-            auto guard = irq_critical();
+            auto guard = section();
             if (!p.open)
                 return null;
             closed = p.rx_closed;
@@ -356,9 +396,15 @@ nothrow @nogc:
     UartRxTiming timing(uint id)
         => UartRxTiming(_port[id].latency_us, _port[id].gap);
 
+    UartCounters counters(uint id)
+    {
+        auto guard = section();
+        return _port[id].counters;
+    }
+
     UartError take_errors(uint id)
     {
-        auto guard = irq_critical();
+        auto guard = section();
         immutable errors = _port[id].errors;
         _port[id].errors = UartError.none;
         return errors;
@@ -380,6 +426,7 @@ nothrow @nogc:
         if (!page && (page = open_page(p)) is null)
             return false;
         p.rx_frame_open = true;
+        ++p.counters.rx_bytes;
         (cast(ubyte*)page)[page.offset + page.length] = b;
         ++page.length;
         return true;
@@ -399,7 +446,16 @@ nothrow @nogc:
 
     void error(uint id, UartError errors)
     {
-        _port[id].errors = cast(UartError)(_port[id].errors | errors);
+        record(&_port[id], errors);
+    }
+
+    // interrupts held off on a part; on a host, the lock the I/O thread shares
+    auto section()
+    {
+        static if (irq_max > 0)
+            return irq_critical();
+        else
+            return _lock.acquire();
     }
 
     bool notify(uint id)
@@ -419,6 +475,7 @@ private:
         Page* rx_closed_tail;
         UartRxCallback rx_cb;
         UartTxCallback tx_cb;
+        UartCounters counters;
         uint char_ticks;
         uint gap_ticks;
         uint latency_us;
@@ -427,12 +484,21 @@ private:
         ubyte rx_category;
         ubyte rx_up;
         ubyte rx_down;
+        ubyte format;               // data bits, parity and stop bits: with char_ticks, how the line is read
         bool open;
         bool tx_starved;            // the line ran dry; the next write or send restarts it
         bool rx_frame_open;         // bytes arrived since the last gap
     }
 
     Port[count] _port;
+    static if (irq_max == 0)
+        Spinlock _lock;
+
+    static ubyte line_format(ref const UartConfig cfg)
+        => cast(ubyte)((cfg.data_bits - 5) | cfg.parity << 2 | cfg.stop_bits << 5);
+
+    static uint char_ticks(ref const UartConfig cfg)
+        => cast(uint)nsecs(ulong(uart_frame_bits(cfg)) * 1_000_000_000 / cfg.baud_rate).ticks;
 
     static ubyte largest()
         => cast(ubyte)(page_pool_num_categories() - 1);
@@ -460,12 +526,22 @@ private:
         page_release_isr(head);
     }
 
+    static void record(Port* p, UartError errors)
+    {
+        p.errors = cast(UartError)(p.errors | errors);
+        p.counters.framing += (errors & UartError.framing) != 0;
+        p.counters.parity += (errors & UartError.parity) != 0;
+        p.counters.overrun += (errors & UartError.overrun) != 0;
+        p.counters.noise += (errors & UartError.noise) != 0;
+        p.counters.breaks += (errors & UartError.break_) != 0;
+    }
+
     static Page* open_page(Port* p)
     {
         Page* page = page_alloc_isr(0, uint.alignof, uint.sizeof, rx_room(p.rx_category));
         if (!page)
         {
-            p.errors = cast(UartError)(p.errors | UartError.overrun);
+            record(p, UartError.overrun);
             return null;
         }
         *cast(uint*)(cast(ubyte*)page + page.offset - uint.sizeof) = p.char_ticks;
@@ -540,6 +616,8 @@ private:
 
 unittest
 {
+    import urt.driver.uart : FlowControl;
+
     static struct Model
     {
         static __gshared bool stalled, busy;
@@ -723,9 +801,53 @@ unittest
     assert(page_category(page) == 0, "takes a small page would have held go back to small pages");
     page_free(page);
 
+    // a change in how the line is read ends the frame arriving, and each frame keeps the character time it arrived at
+    ports.receive(1, 'A');
+    ports.gap(1);
+    immutable uint slow_ticks = ports._port[1].char_ticks;
+    ports.receive(1, 'a');
+    UartConfig flow = cfg;
+    flow.flow_control = FlowControl.hardware;
+    ports.reconfigure(1, flow, UartRxTiming(80, 35));
+    assert(ports._port[1].rx_frame_open, "flow control changes nothing a frame is read by");
+    UartConfig fast = cfg;
+    fast.baud_rate *= 2;
+    immutable MonoTime changed = getTime();
+    ports.reconfigure(1, fast, UartRxTiming(80, 35));
+    assert(!ports.gap(1), "the change ended the frame");
+    ports.receive(1, 'B');
+    assert(ports.gap(1) && !ports.gap(1), "a gap reports the frame it ends, once");
+    page = ports.rx_take(1);
+    assert(page_category(page) == 0, "a page closed for a new line rate is not a full one");
+    assert(uart_burst_count(page) == 3);
+    UartBurst a = uart_burst(page, 0), cut = uart_burst(page, 1), b = uart_burst(page, 2);
+    assert(a.end - a.start == Duration(slow_ticks) && cut.length == 1 && cut.gap && cut.end >= changed,
+           "the frame arriving at the change ends at the change");
+    assert(b.end - b.start == Duration(ports._port[1].char_ticks), "and what follows keeps the new character time");
+    page_free(page.next);
+    page_free(page);
+    ports.reconfigure(1, cfg, UartRxTiming(80, 35));
+
     ports.error(1, UartError.parity);
     ports.error(1, UartError.framing);
     assert(ports.take_errors(1) == (UartError.parity | UartError.framing) && ports.take_errors(1) == UartError.none);
+
+    Page* hoard;
+    while (Page* taken = page_alloc_isr(0, uint.alignof, uint.sizeof, room))
+    {
+        taken.next = hoard;
+        hoard = taken;
+    }
+    immutable uint overruns = ports.counters(1).overrun;
+    assert(!ports.receive(1, 'z') && ports.take_errors(1) == UartError.overrun && ports.counters(1).overrun == overruns + 1,
+           "a byte with no page to land in is an overrun, and counted");
+    while (hoard)
+    {
+        Page* next = hoard.next;
+        hoard.next = null;
+        page_free(hoard);
+        hoard = next;
+    }
 
     Model.stalled = true;
     ports.send(1, make("unsent"));

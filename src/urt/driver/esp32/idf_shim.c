@@ -1327,10 +1327,25 @@ void urt_uart_close(unsigned port)
             gpio_reset_pin((gpio_num_t)uart_pins[port][i]);
 }
 
-void urt_uart_set_rx(unsigned port, uint8_t rx_full, uint8_t rx_timeout)
+// An open port takes new framing and RX timing in place; its pins and interrupts stay.
+int urt_uart_configure(unsigned port, uint32_t baud_rate, uint8_t data_bits, uint8_t stop_bits, uint8_t parity,
+                       bool rs485_enabled, bool de_active_high, uint8_t rx_full, uint8_t rx_timeout)
 {
-    uart_hal_set_rxfifo_full_thr(&uart_hal[port], rx_full);
-    uart_hal_set_rx_timeout(&uart_hal[port], rx_timeout);
+    if (port >= NUM_UARTS || !uart_intr[port] || data_bits < 5 || data_bits > 8)
+        return 0;
+    uart_port_t uart = (uart_port_t)port;
+    if (uart_set_baudrate(uart, baud_rate) != ESP_OK ||
+        uart_set_word_length(uart, (uart_word_length_t)(UART_DATA_5_BITS + data_bits - 5)) != ESP_OK ||
+        uart_set_parity(uart, parity < sizeof(parity_map) / sizeof(parity_map[0]) ? parity_map[parity] : UART_PARITY_DISABLE) != ESP_OK ||
+        uart_set_stop_bits(uart, stop_bits < sizeof(stop_bits_map) / sizeof(stop_bits_map[0]) ? stop_bits_map[stop_bits] : UART_STOP_BITS_1) != ESP_OK ||
+        uart_set_line_inverse(uart, rs485_enabled && !de_active_high ? UART_SIGNAL_RTS_INV : 0) != ESP_OK)
+        return 0;
+    uart_hal_context_t *hal = &uart_hal[port];
+    uart_hal_set_mode(hal, rs485_enabled ? UART_MODE_RS485_HALF_DUPLEX : UART_MODE_UART);
+    uart_rs485[port] = rs485_enabled;
+    uart_hal_set_rxfifo_full_thr(hal, rx_full);
+    uart_hal_set_rx_timeout(hal, rx_timeout);
+    return 1;
 }
 
 // In the ISR: what raised it, cleared.

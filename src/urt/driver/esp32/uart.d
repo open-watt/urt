@@ -3,7 +3,7 @@
 module urt.driver.esp32.uart;
 
 import urt.driver.irq : irq_critical;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
     UartRxTiming, UartTxCallback, uart_chars_us, uart_rx_chars;
 import urt.driver.uart_core : UartPorts;
 import urt.mem.page : Page;
@@ -74,18 +74,25 @@ Page* uart_hw_rx_take(uint id)
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
 
-UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
 {
+    if (cfg.rs485.enabled && (cfg.rs485.de_assert_us || cfg.rs485.de_deassert_us || cfg.rs485.turnaround_us))
+        return false;
     ubyte full, timeout;
     immutable UartRxTiming timing = rx_timing(id, cfg, full, timeout);
-    auto guard = irq_critical();
-    urt_uart_set_rx(id, full, timeout);
-    _ports.retime(id, timing);
-    return timing;
+    if (!urt_uart_configure(id, cfg.baud_rate, cfg.data_bits, cast(ubyte)cfg.stop_bits, cast(ubyte)cfg.parity,
+                            cfg.rs485.enabled, cfg.rs485.de_active_high, full, timeout))
+        return false;
+    _ports.reconfigure(id, cfg, timing);
+    _ports.kick(id);
+    return true;
 }
 
 size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
+
+UartCounters uart_hw_counters(uint id)
+    => _ports.counters(id);
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
@@ -196,7 +203,8 @@ extern(C) nothrow @nogc
     int urt_uart_open(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits, ubyte parity, byte tx_gpio, byte rx_gpio,
                       bool rs485_enabled, byte de_gpio, bool de_active_high, ubyte rx_full, ubyte rx_timeout);
     void urt_uart_close(uint port);
-    void urt_uart_set_rx(uint port, ubyte rx_full, ubyte rx_timeout);
+    int urt_uart_configure(uint port, uint baud_rate, ubyte data_bits, ubyte stop_bits, ubyte parity, bool rs485_enabled,
+                           bool de_active_high, ubyte rx_full, ubyte rx_timeout);
     uint urt_uart_take_causes(uint port);
     uint urt_uart_rx_len(uint port);
     uint urt_uart_rx_read(uint port, ubyte* buf, uint len);

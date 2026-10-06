@@ -6,7 +6,7 @@ import urt.driver.gpio : Pull;
 import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_line_enable;
 import urt.driver.stm32 : clock_enable, pclk1_hz, pclk2_hz, rcc_apb1enr, rcc_apb2enr, reg_read, reg_write;
 import urt.driver.stm32.gpio : gpio_set_function;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback,
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
     UartRxTiming, UartTxCallback, uart_chars_us, uart_rate_close, uart_rx_chars, uart_rx_gap_bits;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
 import urt.mem.page : Page;
@@ -137,14 +137,22 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
     _ports.start(id, rx_cb, tx_cb, rx_timing(id, cfg));
     irq_handler_set(uart_irq[id], &uart_isr);
     irq_line_enable(uart_irq[id]);
-    immutable base = uart_base[id];
-    immutable uint c1 = reg_read(base + cr1);
-    static if (has_fifo)
-        enum uint rx_ie3 = cr3_rxftie, rx_ie1 = 0;
-    else
-        enum uint rx_ie3 = 0, rx_ie1 = cr1_rxneie;
-    reg_write(base + cr3, reg_read(base + cr3) | cr3_eie | rx_ie3);
-    reg_write(base + cr1, c1 | rx_ie1 | (c1 & cr1_pce ? cr1_peie : 0) | gap_ie(id));
+    arm(id);
+    return true;
+}
+
+bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
+{
+    {
+        auto guard = irq_critical();
+        if (!uart_hw_init(id, cfg))
+            return false;
+        static if (!has_fifo)
+            _rx_count[id] = 0;
+        arm(id);
+    }
+    _ports.reconfigure(id, cfg, rx_timing(id, cfg));
+    _ports.kick(id);
     return true;
 }
 
@@ -169,26 +177,11 @@ Page* uart_hw_rx_take(uint id)
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
 
-// The receiver timeout takes a new value while the USART runs; the H7 FIFO trigger only with it disabled, so its
-// latency waits for the next open.
-UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
-{
-    auto guard = irq_critical();
-    static if (!legacy_usart)
-    {
-        if (has_receiver_timeout(id))
-            reg_write(uart_base[id] + rtor, uart_rx_gap_bits(cfg));
-    }
-    immutable UartRxTiming timing = rx_timing(id, cfg);
-    static if (has_fifo)
-        _ports.retime(id, UartRxTiming(_ports.timing(id).latency_us, timing.gap));
-    else
-        _ports.retime(id, timing);
-    return _ports.timing(id);
-}
-
 size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
+
+UartCounters uart_hw_counters(uint id)
+    => _ports.counters(id);
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
@@ -228,6 +221,19 @@ void uart0_hw_puts(const(char)[] s)
 
 
 private:
+
+// the RX, error and gap interrupts the port runs on
+void arm(uint id)
+{
+    immutable base = uart_base[id];
+    immutable uint c1 = reg_read(base + cr1);
+    static if (has_fifo)
+        enum uint rx_ie3 = cr3_rxftie, rx_ie1 = 0;
+    else
+        enum uint rx_ie3 = 0, rx_ie1 = cr1_rxneie;
+    reg_write(base + cr3, reg_read(base + cr3) | cr3_eie | rx_ie3);
+    reg_write(base + cr1, c1 | rx_ie1 | (c1 & cr1_pce ? cr1_peie : 0) | gap_ie(id));
+}
 
 version (STM32F4) enum legacy_usart = true;
 else              enum legacy_usart = false;

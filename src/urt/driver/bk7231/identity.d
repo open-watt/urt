@@ -13,16 +13,16 @@ ulong chip_unique_id()
     size_t n = 0;
 
     ubyte[8] uid = void;
-    immutable ubyte uid_len = ow_efuse_uid_len();
-    if (read_efuse(ow_efuse_uid_addr(), uid_len, uid[]))
+    immutable ubyte uid_len = urt_efuse_uid_len();
+    if (read_efuse(urt_efuse_uid_addr(), uid_len, uid[]))
     {
         material[n .. n + uid_len] = uid[0 .. uid_len];
         n += uid_len;
     }
 
     ubyte[6] mac = void;
-    immutable ubyte mac_len = ow_efuse_mac_len();
-    if (read_efuse(ow_efuse_mac_addr(), mac_len, mac[]))
+    immutable ubyte mac_len = urt_efuse_mac_len();
+    if (read_efuse(urt_efuse_mac_addr(), mac_len, mac[]))
     {
         material[n .. n + mac_len] = mac[0 .. mac_len];
         n += mac_len;
@@ -43,11 +43,11 @@ ulong chip_unique_id()
 
 private:
 
-extern(C) int ow_efuse_read_byte(ubyte addr, ubyte* value);
-extern(C) ubyte ow_efuse_uid_addr();
-extern(C) ubyte ow_efuse_uid_len();
-extern(C) ubyte ow_efuse_mac_addr();
-extern(C) ubyte ow_efuse_mac_len();
+extern(C) int urt_efuse_read_byte(ubyte addr, ubyte* value);
+extern(C) ubyte urt_efuse_uid_addr();
+extern(C) ubyte urt_efuse_uid_len();
+extern(C) ubyte urt_efuse_mac_addr();
+extern(C) ubyte urt_efuse_mac_len();
 
 // Returns zero on failure, per the vendor SDK's own callers.
 extern(C) int manual_cal_get_macaddr_from_flash(ubyte* mac);
@@ -70,7 +70,7 @@ bool read_efuse(ubyte addr, ubyte len, ubyte[] dst)
         return false;
     foreach (i; 0 .. len)
     {
-        if (ow_efuse_read_byte(cast(ubyte)(addr + i), &dst[i]) != 0)
+        if (urt_efuse_read_byte(cast(ubyte)(addr + i), &dst[i]) != 0)
             return false;
     }
     return !blank(dst[0 .. len]);

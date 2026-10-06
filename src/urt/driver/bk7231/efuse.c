@@ -7,7 +7,7 @@
 extern UINT32 sctrl_ctrl(UINT32 cmd, void *param);
 
 // 0 on success; *out is 0xFF when the cell is unprogrammed.
-int ow_efuse_read_byte(unsigned char addr, unsigned char *out)
+int urt_efuse_read_byte(unsigned char addr, unsigned char *out)
 {
     EFUSE_OPER_ST oper;
     oper.addr = addr;
@@ -17,7 +17,7 @@ int ow_efuse_read_byte(unsigned char addr, unsigned char *out)
     return r;
 }
 
-unsigned char ow_efuse_uid_addr(void)  { return EFUSE_UID_ADDR; }
-unsigned char ow_efuse_uid_len(void)   { return EFUSE_UID_LEN; }
-unsigned char ow_efuse_mac_addr(void)  { return EFUSE_MAC_START_ADDR; }
-unsigned char ow_efuse_mac_len(void)   { return EFUSE_MAC_LEN; }
+unsigned char urt_efuse_uid_addr(void)  { return EFUSE_UID_ADDR; }
+unsigned char urt_efuse_uid_len(void)   { return EFUSE_UID_LEN; }
+unsigned char urt_efuse_mac_addr(void)  { return EFUSE_MAC_START_ADDR; }
+unsigned char urt_efuse_mac_len(void)   { return EFUSE_MAC_LEN; }

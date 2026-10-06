@@ -10,9 +10,9 @@
 
 #define OW_IDF_LOG_BUFFER_CAPACITY 256
 
-typedef void (*ow_idf_log_sink_t)(void *task, const char *data, size_t length, int truncated);
+typedef void (*urt_idf_log_sink_t)(void *task, const char *data, size_t length, int truncated);
 
-static _Atomic(ow_idf_log_sink_t) log_sink;
+static _Atomic(urt_idf_log_sink_t) log_sink;
 static atomic_uint callbacks_in_flight;
 static atomic_bool capture_open;
 static vprintf_like_t previous_vprintf;
@@ -21,7 +21,7 @@ static int capture_vprintf(const char *format, va_list arguments)
 {
     atomic_fetch_add_explicit(&callbacks_in_flight, 1, memory_order_acquire);
 
-    ow_idf_log_sink_t sink = atomic_load_explicit(&log_sink, memory_order_acquire);
+    urt_idf_log_sink_t sink = atomic_load_explicit(&log_sink, memory_order_acquire);
     int result;
     if (sink != NULL)
     {
@@ -47,7 +47,7 @@ static int capture_vprintf(const char *format, va_list arguments)
     return result;
 }
 
-int ow_idf_log_open(ow_idf_log_sink_t sink)
+int urt_idf_log_open(urt_idf_log_sink_t sink)
 {
     if (sink == NULL)
         return 0;
@@ -62,7 +62,7 @@ int ow_idf_log_open(ow_idf_log_sink_t sink)
     return 1;
 }
 
-void ow_idf_log_close(void)
+void urt_idf_log_close(void)
 {
     if (!atomic_exchange_explicit(&capture_open, false, memory_order_acq_rel))
         return;

@@ -1,6 +1,6 @@
 #include <assert.h>
 #include <stdlib.h>
-#include "../src/urt/driver/bk7231/ow_rw.c"
+#include "../src/urt/driver/bk7231/rw_shim.c"
 
 // Host build: SDK include flags, -m32 -malign-double -DLWIP_NO_STDINT_H=1 -Wl,--gc-sections.
 
@@ -64,10 +64,10 @@ int main(void)
 {
     uint8_t key[16] = {1};
     uint8_t rsc[6] = {1, 2, 3, 4, 5, 6};
-    assert(ow_rw_key_add_ccmp(0, 0xff, 2, key, sizeof(key), rsc) == 0);
+    assert(urt_rw_key_add_ccmp(0, 0xff, 2, key, sizeof(key), rsc) == 0);
     struct OwKeyRequest *group = submitted;
     memset(rsc, 0, sizeof(rsc));
-    assert(ow_rw_key_add_ccmp(0, 0, 0, key, sizeof(key), rsc) == 0);
+    assert(urt_rw_key_add_ccmp(0, 0, 0, key, sizeof(key), rsc) == 0);
     struct OwKeyRequest *pair = submitted;
     __wrap_vif_mgmt_add_key(&group->key, 2);
     __wrap_sta_mgmt_add_key(&pair->key, 24);
@@ -86,13 +86,13 @@ int main(void)
     free(ke_param2msg(legacy));
     submitted = NULL;
     fail_alloc = 1;
-    assert(ow_rw_key_add_ccmp(0, 0, 0, key, sizeof(key), rsc) == -1);
+    assert(urt_rw_key_add_ccmp(0, 0, 0, key, sizeof(key), rsc) == -1);
     assert(!submitted);
     fail_alloc = 0;
-    assert(ow_rw_key_add_ccmp(0, 0, 0, key, 15, rsc) == -1);
-    assert(ow_rw_key_add_ccmp(NX_VIRT_DEV_MAX, 0, 0, key, 16, rsc) == -1);
-    assert(ow_rw_key_add_ccmp(0, STA_MAX, 0, key, 16, rsc) == -1);
-    assert(ow_rw_key_add_ccmp(0, 0xff, MAC_DEFAULT_KEY_COUNT, key, 16, rsc) == -1);
+    assert(urt_rw_key_add_ccmp(0, 0, 0, key, 15, rsc) == -1);
+    assert(urt_rw_key_add_ccmp(NX_VIRT_DEV_MAX, 0, 0, key, 16, rsc) == -1);
+    assert(urt_rw_key_add_ccmp(0, STA_MAX, 0, key, 16, rsc) == -1);
+    assert(urt_rw_key_add_ccmp(0, 0xff, MAC_DEFAULT_KEY_COUNT, key, 16, rsc) == -1);
     assert(!submitted);
     return 0;
 }

@@ -59,7 +59,7 @@ Result link_hw_open(uint slot, EventSource event, Task task, LinkTier minimum, o
         case EventKind.gpio_rising:
         case EventKind.gpio_falling:
         case EventKind.gpio_change:
-            if (ow_link_gpio_open(slot, event.index, cast(uint)(event.kind - EventKind.gpio_rising)) != 0)
+            if (urt_link_gpio_open(slot, event.index, cast(uint)(event.kind - EventKind.gpio_rising)) != 0)
                 break;
             return Result.success;
 
@@ -67,7 +67,7 @@ Result link_hw_open(uint slot, EventSource event, Task task, LinkTier minimum, o
             if (event.index >= _counter_slots.length)
                 break;
             _counter_slots[event.index] = cast(ubyte)slot;
-            ow_counter_set_callback(event.index, &link_counter_alarm);
+            urt_counter_set_callback(event.index, &link_counter_alarm);
             return Result.success;
 
         case EventKind.none:
@@ -87,11 +87,11 @@ void link_hw_close(uint slot)
         case EventKind.gpio_rising:
         case EventKind.gpio_falling:
         case EventKind.gpio_change:
-            ow_link_gpio_close(slot, event.index);
+            urt_link_gpio_close(slot, event.index);
             break;
 
         case EventKind.counter_alarm:
-            ow_counter_set_callback(event.index, null);
+            urt_counter_set_callback(event.index, null);
             _counter_slots[event.index] = ubyte.max;
             break;
 
@@ -116,12 +116,12 @@ void link_hw_close(uint slot)
 // edge would re-enter forever). Task masks are immediates baked into the
 // code; the fired latch lives in DRAM, which is never cached on this part.
 
-extern(C) shared uint ow_reflex_fired0;
+extern(C) shared uint urt_reflex_fired0;
 
 extern(C) nothrow @nogc
 {
-    int ow_reflex_open(uint gpio, uint trigger);
-    void ow_reflex_close(uint gpio);
+    int urt_reflex_open(uint gpio, uint trigger);
+    void urt_reflex_close(uint gpio);
 }
 
 mixin template ReflexBackend(reflexes...)
@@ -211,7 +211,7 @@ mixin template ReflexBackend(reflexes...)
         }}
 
         // Latch what fired for the main loop, then acknowledge the edge.
-        s ~= "movi a2, ow_reflex_fired0\nl32i a3, a2, 0\n";
+        s ~= "movi a2, urt_reflex_fired0\nl32i a3, a2, 0\n";
         static if (multi)
             s ~= "or a3, a3, a4\ns32i a3, a2, 0\n" ~
                  "movi a2, " ~ dec(STATUS_W1TC) ~ "\ns32i a4, a2, 0\n";
@@ -238,7 +238,7 @@ mixin template ReflexBackend(reflexes...)
     {
         static foreach (r; reflexes)
         {
-            if (ow_reflex_open(r.event.index, r.event.kind - EventKind.gpio_rising) != 0)
+            if (urt_reflex_open(r.event.index, r.event.kind - EventKind.gpio_rising) != 0)
             {
                 close();
                 return InternalResult.failed;
@@ -250,13 +250,13 @@ mixin template ReflexBackend(reflexes...)
     void close()
     {
         static foreach (r; reflexes)
-            ow_reflex_close(r.event.index);
+            urt_reflex_close(r.event.index);
     }
 
     uint fired()
     {
         import urt.atomic : atomicExchange;
-        return atomicExchange(&ow_reflex_fired0, 0u);
+        return atomicExchange(&urt_reflex_fired0, 0u);
     }
 }
 
@@ -278,7 +278,7 @@ struct LinkSlot
 __gshared LinkSlot[num_links] _slots = void;
 __gshared ubyte[num_counters] _counter_slots = ubyte.max;
 
-@critical extern(C) bool ow_link_fire(uint slot)
+@critical extern(C) bool urt_link_fire(uint slot)
 {
     if (slot >= num_links || !atomicLoad!(MemoryOrder.acquire)(_slots[slot].active))
         return false;
@@ -294,7 +294,7 @@ __gshared ubyte[num_counters] _counter_slots = ubyte.max;
             gpio_output_set(task.index, false);
             return false;
         case TaskKind.counter_reload:
-            ow_counter_reload(task.index);
+            urt_counter_reload(task.index);
             return false;
         case TaskKind.none:
             return false;
@@ -306,13 +306,13 @@ __gshared ubyte[num_counters] _counter_slots = ubyte.max;
     if (port >= _counter_slots.length)
         return false;
     ubyte slot = _counter_slots[port];
-    return slot != ubyte.max ? ow_link_fire(slot) : false;
+    return slot != ubyte.max ? urt_link_fire(slot) : false;
 }
 
 extern(C) nothrow @nogc
 {
-    int ow_link_gpio_open(uint slot, uint gpio, uint trigger);
-    void ow_link_gpio_close(uint slot, uint gpio);
-    void ow_counter_set_callback(uint port, bool function(uint port) nothrow @nogc callback);
-    void ow_counter_reload(uint port);
+    int urt_link_gpio_open(uint slot, uint gpio, uint trigger);
+    void urt_link_gpio_close(uint slot, uint gpio);
+    void urt_counter_set_callback(uint port, bool function(uint port) nothrow @nogc callback);
+    void urt_counter_reload(uint port);
 }

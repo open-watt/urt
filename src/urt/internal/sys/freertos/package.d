@@ -123,11 +123,11 @@ version (Espressif)
 {
     // IDF's xTaskCreate is a static inline, and the affinity constant it passes is
     // 0x7FFFFFFF on IDF's kernel but -1 on the SMP one, so the shim calls it instead.
-    extern(C) BaseType_t ow_task_create(TaskFunction_t code, const(char)* name, uint stack_depth, void* params, UBaseType_t priority, TaskHandle_t* task);
+    extern(C) BaseType_t urt_task_create(TaskFunction_t code, const(char)* name, uint stack_depth, void* params, UBaseType_t priority, TaskHandle_t* task);
 
     pragma(inline, true)
     BaseType_t xTaskCreate(TaskFunction_t code, const(char)* name, uint stack_depth, void* params, UBaseType_t priority, TaskHandle_t* task)
-        => ow_task_create(code, name, stack_depth, params, priority, task);
+        => urt_task_create(code, name, stack_depth, params, priority, task);
 }
 else
 {

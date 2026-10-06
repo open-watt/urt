@@ -4,9 +4,10 @@ import urt.driver.irq : irq_critical, irq_handler_set, irq_line_disable, irq_lin
 import urt.driver.gpio : Pull;
 import urt.driver.rp2350 : clk_peri_hz, gpio_route, out_of_reset, reset_io_bank0, reset_pads_bank0, reset_pulse, reset_uart0, reset_uart1, unreset_wait;
 import urt.driver.rp2350.gpio : gpio_set_pull;
-import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartError, UartRxCallback, UartRxTiming,
-    uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars;
+import urt.driver.uart : DriveMode, FlowControl, Parity, StopBits, UartConfig, UartCounters, UartError, UartRxCallback,
+    UartRxTiming, UartTxCallback, uart_chars_us, uart_gap_tenths, uart_rate_close, uart_rx_chars;
 import urt.driver.uart_core : UartPorts, puts_stall_spins;
+import urt.mem.page : Page;
 
 import core.volatile;
 
@@ -57,13 +58,13 @@ bool uart_hw_init(uint id, UartConfig cfg)
 }
 
 // A warm reset spares the UART, so it is reset here: what is queued goes out first, then it starts clean.
-bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
+bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartTxCallback tx_cb)
 {
     if (!divider_x64(cfg.baud_rate))
         return false;
     uart_hw_flush(id);
     reset_pulse(id == 0 ? reset_uart0 : reset_uart1);
-    if (!_ports.acquire(id))
+    if (!_ports.acquire(id, cfg))
         return false;
     if (!uart_hw_init(id, cfg))
     {
@@ -71,7 +72,7 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb)
         return false;
     }
     immutable base = uart_base(id);
-    _ports.start(id, rx_cb, set_rx_level(id, cfg));
+    _ports.start(id, rx_cb, tx_cb, set_rx_level(id, cfg));
     uart_write_reg(base, uarticr, 0x7FF);
     uart_write_reg(base, uartimsc, im_rx | im_rt | im_errors);
     irq_handler_set(uart_irq[id], &uart_isr);
@@ -89,38 +90,47 @@ void uart_hw_close(uint id)
     _ports.release(id);
 }
 
-ptrdiff_t uart_hw_read(uint id, void[] buffer)
-    => _ports.read(id, buffer);
+bool uart_hw_send(uint id, Page* chain)
+    => _ports.send(id, chain);
 
-ptrdiff_t uart_hw_write(uint id, const(void)[] data)
+size_t uart_hw_write(uint id, const(void)[] data)
     => _ports.write(id, data);
+
+Page* uart_hw_rx_take(uint id)
+    => _ports.rx_take(id);
 
 UartRxTiming uart_hw_rx_timing(uint id)
     => _ports.timing(id);
 
 // UARTIFLS takes a new level while the UART runs; the receive timeout is fixed.
-UartRxTiming uart_hw_set_rx_timing(uint id, ref const UartConfig cfg)
+// The interrupt mask survives the reprogramming.
+bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
 {
-    _ports.retime(id, set_rx_level(id, cfg));
-    return _ports.timing(id);
+    if (!divider_x64(cfg.baud_rate))
+        return false;
+    {
+        auto guard = irq_critical();
+        if (!uart_hw_init(id, cfg))
+            return false;
+    }
+    _ports.reconfigure(id, cfg, set_rx_level(id, cfg));
+    _ports.kick(id);
+    return true;
 }
 
-ptrdiff_t uart_hw_tx_pending(uint id)
+size_t uart_hw_tx_pending(uint id)
     => _ports.tx_pending(id);
 
-void uart_hw_poll(uint id) {}
+UartCounters uart_hw_counters(uint id)
+    => _ports.counters(id);
 
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-ptrdiff_t uart_hw_rx_pending(uint id)
-    => _ports.rx_pending(id);
-
-ptrdiff_t uart_hw_flush(uint id)
+void uart_hw_flush(uint id)
 {
     if (out_of_reset(id == 0 ? reset_uart0 : reset_uart1) && (uart_read_reg(uart_base(id), uartcr) & cr_uarten))
         _ports.drain(id);
-    return 0;
 }
 
 // Blocking console output for early boot and fault context; queued output goes first. Each
@@ -232,6 +242,7 @@ uint divider_x64(uint baud) pure
 UartRxTiming set_rx_level(uint id, ref const UartConfig cfg)
 {
     immutable uint level = rx_level(uart_rx_chars(cfg));
+    _rx_take[id] = cast(ubyte)(rx_level_chars[level] - 1);
     uart_write_reg(uart_base(id), uartifls, level << 3 | ifls_tx_eighth);
     return UartRxTiming(uart_chars_us(cfg, rx_level_chars[level]), uart_gap_tenths(cfg, rx_timeout_bits));
 }
@@ -245,15 +256,23 @@ uint rx_level(uint chars) pure
 }
 
 __gshared UartPorts!(num_uarts, 0, tx_idle, tx_fill) _ports;
+__gshared ubyte[num_uarts] _rx_take;
 
 // Caller holds interrupts off, or runs in the ISR. The PL011 raises TX only on the FIFO falling to its level, so
 // the FIFO is filled here directly and TX is armed only while the ring still holds more.
 void tx_fill(uint id)
 {
     immutable base = uart_base(id);
-    ubyte b;
-    while (!(uart_read_reg(base, uartfr) & fr_txff) && _ports.tx_pop(id, b))
-        uart_write_reg(base, uartdr, b);
+    while (!(uart_read_reg(base, uartfr) & fr_txff))
+    {
+        const(ubyte)[] bytes = _ports.tx_bytes(id);
+        if (!bytes.length)
+            break;
+        size_t n;
+        while (n < bytes.length && !(uart_read_reg(base, uartfr) & fr_txff))
+            uart_write_reg(base, uartdr, bytes[n++]);
+        _ports.tx_advance(id, n);
+    }
     uint mask = uart_read_reg(base, uartimsc);
     mask = _ports.tx_queued(id) ? mask | im_tx : mask & ~im_tx;
     uart_write_reg(base, uartimsc, mask);
@@ -271,8 +290,10 @@ void uart_isr(uint irq)
     uart_write_reg(base, uarticr, status);
     if (status & im_errors)
         _ports.error(id, pl011_errors[(status & im_errors) >> 7]);
+    // the receive timeout runs only while the FIFO holds a byte, so the level interrupt leaves one for it
+    uint budget = status & (im_rt | im_errors) ? uint.max : _rx_take[id];
     bool read;
-    while (!(uart_read_reg(base, uartfr) & fr_rxfe))
+    while (budget-- && !(uart_read_reg(base, uartfr) & fr_rxfe))
     {
         immutable uint d = uart_read_reg(base, uartdr);
         if (d & dr_errors)
@@ -281,6 +302,8 @@ void uart_isr(uint irq)
             _ports.receive(id, cast(ubyte)d);
         read = true;
     }
+    if (status & im_rt)
+        _ports.gap(id);
     if (read || (status & (im_rt | im_errors)))
         _ports.notify(id);
     if (status & im_tx)

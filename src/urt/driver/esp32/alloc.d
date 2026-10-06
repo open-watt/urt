@@ -44,7 +44,7 @@ void[] _alloc(size_t size, size_t alignment, MemFlags flags) pure
     return p[0 .. size];
 }
 
-extern(C) void ow_alloc_failed_reclaim(size_t size)
+extern(C) void urt_alloc_failed_reclaim(size_t size)
 {
     import urt.mem.reclaim : reclaim_memory;
     reclaim_memory(size);

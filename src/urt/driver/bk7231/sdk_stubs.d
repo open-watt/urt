@@ -107,40 +107,40 @@ void mr_kmsg_init()
 {
 }
 
-int ow_rw_add_if(void*)
+int urt_rw_add_if(void*)
 {
     return 0;
 }
 
-int ow_rw_disconnect(ubyte, ushort)
+int urt_rw_disconnect(ubyte, ushort)
 {
     return 0;
 }
 
-byte ow_rw_get_rssi()
+byte urt_rw_get_rssi()
 {
     return 0;
 }
 
-void ow_rw_mac_quiesce()
+void urt_rw_mac_quiesce()
 {
 }
 
-void ow_rw_monitor_start(ubyte)
+void urt_rw_monitor_start(ubyte)
 {
 }
 
-int ow_rw_mac_step(uint)
-{
-    return 0;
-}
-
-int ow_rw_scan(ubyte, void*, ubyte)
+int urt_rw_mac_step(uint)
 {
     return 0;
 }
 
-int ow_rw_transfer(ubyte, void*, uint)
+int urt_rw_scan(ubyte, void*, ubyte)
+{
+    return 0;
+}
+
+int urt_rw_transfer(ubyte, void*, uint)
 {
     return 0;
 }
@@ -149,7 +149,7 @@ void rwnx_cal_initial_calibration()
 {
 }
 
-int ow_rw_receive()
+int urt_rw_receive()
 {
     return 0;
 }

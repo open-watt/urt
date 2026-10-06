@@ -1,5 +1,6 @@
 // BK7231 register model: UART2 with 128-entry FIFOs. Its TX interrupt never fires, as on the part; RX raises
-// at the FIFO threshold and on the stop-detect gap. Everything else is plain storage.
+// at the FIFO threshold and on the stop-detect gap. Timer2 fires as the line runs, with write-one-to-clear flags.
+// Everything else is plain storage.
 module fixture;
 
 import model.cpu : deliver;
@@ -17,7 +18,6 @@ enum uint output_pin = 10;
 static immutable uint[2] batch_pins = [ 8, 9 ];
 enum UartError line_errors = cast(UartError)(UartError.parity | UartError.framing);
 enum bool shows_tx_busy = false;
-enum bool retimes_latency_live = true;
 enum bool programs_rx_gap = false;
 enum bool keeps_bad_bytes = true;
 enum bool has_links = false;
@@ -27,7 +27,7 @@ void reset()
     import model.cpu : asserted, line_on, irq_on, storms;
     _regs.clear();
     _line = typeof(_line).init;
-    _config = _fifo_config = _int_en = _latched = 0;
+    _config = _fifo_config = _int_en = _latched = _timer_ctl = 0;
     asserted = &is_asserted;
     line_on[] = false;
     irq_on = true;
@@ -81,6 +81,8 @@ void run_line()
     foreach (_; 0 .. 20_000)
     {
         _line.step();
+        if (_timer_ctl & timer2_en)
+            _timer_ctl |= timer2_int;
         deliver();
     }
 }
@@ -94,6 +96,8 @@ uint mmio_read(size_t addr)
 {
     if (addr >= uart && addr < uart + 0x20)
         return uart_read(cast(uint)(addr - uart));
+    if (addr == timer_ctl)
+        return _timer_ctl;
     return _regs.get(addr);
 }
 
@@ -101,6 +105,11 @@ void mmio_write(size_t addr, uint value)
 {
     if (addr >= uart && addr < uart + 0x20)
         return uart_write(cast(uint)(addr - uart), value);
+    if (addr == timer_ctl)
+    {
+        _timer_ctl = (value & ~timer_flags) | (_timer_ctl & timer_flags & ~value);
+        return;
+    }
     _regs.set(addr, value);
 }
 
@@ -109,6 +118,9 @@ private:
 
 enum size_t uart = 0x0080_2200;
 enum uint uart_line = 1;
+enum size_t timer_ctl = 0x0080_2A0C;
+enum uint timer_line = 8;
+enum uint timer2_en = 1 << 2, timer2_int = 1 << 9, timer_flags = 0x7 << 7;
 
 enum uint config = 0x00, fifo_config = 0x04, fifo_status = 0x08, fifo_port = 0x0C, int_enable = 0x10, int_status = 0x14;
 enum uint tx_enable = 1 << 0, rx_enable = 1 << 1;
@@ -117,7 +129,7 @@ enum uint tx_empty = 1 << 17, wr_ready = 1 << 20, rd_ready = 1 << 21;
 
 __gshared Registers _regs;
 __gshared Line!(128, 128) _line;
-__gshared uint _config, _fifo_config, _int_en, _latched;
+__gshared uint _config, _fifo_config, _int_en, _latched, _timer_ctl;
 __gshared bool _since_idle;
 
 uint status()
@@ -129,7 +141,7 @@ uint status()
 }
 
 bool is_asserted(uint line)
-    => line == uart_line && (status() & _int_en) != 0;
+    => (line == uart_line && (status() & _int_en) != 0) || (line == timer_line && (_timer_ctl & timer_flags) != 0);
 
 uint uart_read(uint off)
 {

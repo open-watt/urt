@@ -1,4 +1,4 @@
-// ESP32 counter backend over ESP-IDF gptimer through ow_shim.c.
+// ESP32 counter backend over ESP-IDF gptimer through idf_shim.c.
 //
 // counter_hw_reload executes from interrupt context; the shim requires
 // CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM and CONFIG_GPTIMER_ISR_CACHE_SAFE and
@@ -17,32 +17,32 @@ enum uint num_counters = 4;
 
 Result counter_hw_open(uint port, ref const CounterConfig config)
 {
-    return Result(ow_counter_open(port, config.resolution_hz));
+    return Result(urt_counter_open(port, config.resolution_hz));
 }
 
 Result counter_hw_arm(uint port, ulong ticks, bool periodic)
 {
-    return Result(ow_counter_arm(port, ticks, periodic));
+    return Result(urt_counter_arm(port, ticks, periodic));
 }
 
 @critical void counter_hw_reload(uint port)
 {
-    ow_counter_reload(port);
+    urt_counter_reload(port);
 }
 
 @critical void counter_hw_rearm(uint port, ulong ticks)
 {
-    ow_counter_rearm(port, ticks);
+    urt_counter_rearm(port, ticks);
 }
 
 @critical ulong counter_hw_read(uint port)
 {
-    return ow_counter_read(port);
+    return urt_counter_read(port);
 }
 
 void counter_hw_close(uint port)
 {
-    ow_counter_close(port);
+    urt_counter_close(port);
 }
 
 
@@ -50,10 +50,10 @@ private:
 
 extern(C) nothrow @nogc
 {
-    uint ow_counter_open(uint port, uint resolution_hz);
-    uint ow_counter_arm(uint port, ulong ticks, bool periodic);
-    void ow_counter_reload(uint port);
-    void ow_counter_rearm(uint port, ulong ticks);
-    ulong ow_counter_read(uint port);
-    void ow_counter_close(uint port);
+    uint urt_counter_open(uint port, uint resolution_hz);
+    uint urt_counter_arm(uint port, ulong ticks, bool periodic);
+    void urt_counter_reload(uint port);
+    void urt_counter_rearm(uint port, ulong ticks);
+    ulong urt_counter_read(uint port);
+    void urt_counter_close(uint port);
 }

@@ -22,27 +22,27 @@ extern int main(int argc, char **argv);
 
 static TaskHandle_t main_task;
 
-void ow_main_stack_stats(size_t *size, size_t *peak)
+void urt_main_stack_stats(size_t *size, size_t *peak)
 {
     // IDF's StackType_t is a byte, so the high-water mark is in bytes.
     *size = ESP_TASK_MAIN_STACK;
     *peak = ESP_TASK_MAIN_STACK - uxTaskGetStackHighWaterMark(main_task);
 }
 
-void ow_watchdog_feed(void)
+void urt_watchdog_feed(void)
 {
     esp_task_wdt_reset();
 }
 
 #ifdef OW_ENABLE_COREDUMP
-bool ow_crash_dump_size(size_t *size)
+bool urt_crash_dump_size(size_t *size)
 {
     size_t address;
     return esp_core_dump_image_check() == ESP_OK &&
            esp_core_dump_image_get(&address, size) == ESP_OK;
 }
 
-bool ow_crash_dump_read(size_t offset, void *buffer, size_t length)
+bool urt_crash_dump_read(size_t offset, void *buffer, size_t length)
 {
     const esp_partition_t *partition = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
@@ -50,28 +50,28 @@ bool ow_crash_dump_read(size_t offset, void *buffer, size_t length)
            esp_partition_read(partition, offset, buffer, length) == ESP_OK;
 }
 
-bool ow_crash_dump_clear(void)
+bool urt_crash_dump_clear(void)
 {
     return esp_core_dump_image_erase() == ESP_OK;
 }
 #endif
 
-extern void ow_alloc_failed_reclaim(size_t size);
+extern void urt_alloc_failed_reclaim(size_t size);
 
 // Blob allocations (esp_wifi, NimBLE) go straight to heap_caps and bypass the D
 // allocator's reclaim-on-failure walk. This hook is notification-only: the failed
 // call still returns NULL; reclaiming here serves the caller's retry (radio init
 // re-runs on the state machine's backoff, drivers re-allocate on the next packet).
-static void ow_heap_alloc_failed(size_t size, uint32_t caps, const char *function_name)
+static void urt_heap_alloc_failed(size_t size, uint32_t caps, const char *function_name)
 {
     (void)caps; (void)function_name;
-    ow_alloc_failed_reclaim(size);
+    urt_alloc_failed_reclaim(size);
 }
 
 void app_main(void)
 {
     main_task = xTaskGetCurrentTaskHandle();
-    heap_caps_register_failed_alloc_callback(&ow_heap_alloc_failed);
+    heap_caps_register_failed_alloc_callback(&urt_heap_alloc_failed);
 
     // Initialize NVS -- required by WiFi for calibration data storage.
     esp_err_t ret = nvs_flash_init();

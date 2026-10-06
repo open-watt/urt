@@ -200,8 +200,8 @@ else version (lwIP)
         int lwip_getsockopt(SocketHandle, int, int, void*, socklen_t*);
         int lwip_getsockname(SocketHandle, sockaddr*, socklen_t*);
         int lwip_getpeername(SocketHandle, sockaddr*, socklen_t*);
-        int ow_lwip_getaddrinfo(const(char)*, const(char)*, const(addrinfo)*, addrinfo**);
-        void ow_lwip_freeaddrinfo(addrinfo*);
+        int urt_lwip_getaddrinfo(const(char)*, const(char)*, const(addrinfo)*, addrinfo**);
+        void urt_lwip_freeaddrinfo(addrinfo*);
         int lwip_close(int);
         int lwip_fcntl(int, int, int);
         int lwip_ioctl(int, int, void*);
@@ -227,8 +227,8 @@ else version (lwIP)
     alias getsockopt = lwip_getsockopt;
     alias getsockname = lwip_getsockname;
     alias getpeername = lwip_getpeername;
-    alias getaddrinfo = ow_lwip_getaddrinfo;
-    alias freeaddrinfo = ow_lwip_freeaddrinfo;
+    alias getaddrinfo = urt_lwip_getaddrinfo;
+    alias freeaddrinfo = urt_lwip_freeaddrinfo;
     alias _close = lwip_close;
     alias fcntl = lwip_fcntl;
     alias ioctlsocket = lwip_ioctl;

@@ -127,8 +127,8 @@ unittest
 
 extern(C):
 
-int ow_wpan_enable(Rx rx, Tx tx) { ++api_calls; receive = rx; complete = tx; return 0; }
-void ow_wpan_disable() { ++api_calls; receive = null; complete = null; }
+int urt_wpan_enable(Rx rx, Tx tx) { ++api_calls; receive = rx; complete = tx; return 0; }
+void urt_wpan_disable() { ++api_calls; receive = null; complete = null; }
 int esp_ieee802154_set_channel(ubyte channel) { ++api_calls; return 0; }
 ubyte esp_ieee802154_get_channel() { ++api_calls; return 11; }
 int esp_ieee802154_set_txpower(byte power) { ++api_calls; return 0; }

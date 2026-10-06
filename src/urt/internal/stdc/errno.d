@@ -78,8 +78,8 @@ else version (CRuntime_Picolibc)
     {
         // On FreeRTOS, picolibc defines errno as _Thread_local which conflicts
         // with emulated-TLS. Use a C shim to access it indirectly.
-        extern(C) int* ow_errno_location() nothrow @nogc;
-        @property ref int errno() nothrow @nogc { return *ow_errno_location(); }
+        extern(C) int* urt_errno_location() nothrow @nogc;
+        @property ref int errno() nothrow @nogc { return *urt_errno_location(); }
     }
     else
     {

@@ -1,7 +1,7 @@
 // ESP32 BLE driver -- D wrapper over NimBLE via C shim + direct calls
 //
-// The C shim (ow_shim.c) handles:
-//   - ow_ble_init/deinit: NimBLE host config struct, port init, host task
+// The C shim (idf_shim.c) handles:
+//   - urt_ble_init/deinit: NimBLE host config struct, port init, host task
 //
 // Everything else (scan, connect, GATT) calls NimBLE C API directly.
 //
@@ -45,7 +45,7 @@ bool ble_hw_open(uint port, ref const BLEConfig cfg)
 
     reset_queues();
 
-    if (ow_ble_init() != 0)
+    if (urt_ble_init() != 0)
         return false;
 
     _opened = true;
@@ -66,7 +66,7 @@ void ble_hw_close(uint port)
             ble_gap_terminate(s.nimble_handle, 0x13); // Remote User Terminated
     }
 
-    if (ow_ble_deinit() != 0)
+    if (urt_ble_deinit() != 0)
     {
         // The host task may still be producing events, so its queues cannot be reset safely.
         _opened = false;
@@ -1436,8 +1436,8 @@ enum int BLE_HS_FOREVER = int.max;
 // C shim functions
 extern(C) nothrow @nogc
 {
-    int ow_ble_init();
-    int ow_ble_deinit();
+    int urt_ble_init();
+    int urt_ble_deinit();
 }
 
 // Direct NimBLE calls

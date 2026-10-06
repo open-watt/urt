@@ -1,5 +1,6 @@
-// MT7621 register model: UART2 (a 16550 with 16-entry FIFOs, whose line-status errors clear when read) and the
-// GPIO block's edge latches; everything else is plain storage.
+// MT7621 register model: UART2 (a 16550 with 16-entry FIFOs, whose line-status errors clear when read, raising its
+// interrupt on GIC line 27 by priority: line status, data at the FCR trigger, the character timeout after a pause,
+// and an empty transmitter) and the GPIO block's edge latches; everything else is plain storage.
 module fixture;
 
 import model.cpu : deliver;
@@ -18,7 +19,6 @@ enum uint output_pin = 13;
 static immutable uint[2] batch_pins = [ 6, 7 ];
 enum UartError line_errors = cast(UartError)(UartError.parity | UartError.framing | UartError.break_);
 enum bool shows_tx_busy = true;
-enum bool retimes_latency_live = true;
 enum bool programs_rx_gap = false;
 enum bool keeps_bad_bytes = true;
 enum bool has_links = true;
@@ -28,8 +28,9 @@ void reset()
     import model.cpu : asserted, line_on, irq_on, storms;
     _regs.clear();
     _line = typeof(_line).init;
-    _lcr = 0;
-    _overrun = false;
+    _lcr = _ier = 0;
+    _trigger = 1;
+    _overrun = _timeout = false;
     asserted = &is_asserted;
     line_on[] = false;
     irq_on = true;
@@ -50,7 +51,11 @@ void rx_overrun()
     deliver();
 }
 
-void line_idle() { deliver(); }
+void line_idle()
+{
+    _timeout = _line.rx_count != 0;
+    deliver();
+}
 
 void tx_hold(bool hold) { _line.held = hold; }
 void shift_busy(bool busy) { _line.busy = busy; }
@@ -123,14 +128,31 @@ enum size_t uart = 0xBE00_0D00, gpio = 0xBE00_0600;
 enum uint ctrl = 0x00, data = 0x20, dset = 0x30, dclr = 0x40, redge = 0x50, fedge = 0x60, stat = 0x90;
 enum uint gpio_line = 12;
 
-enum uint rbr = 0x00, fcr = 0x08, lcr = 0x0C, lsr = 0x14;
+enum uint rbr = 0x00, ier = 0x04, iir = 0x08, fcr = 0x08, lcr = 0x0C, lsr = 0x14;
+enum uint uart_line = 27;
+enum uint ier_rda = 1 << 0, ier_thre = 1 << 1, ier_rls = 1 << 2;
+static immutable ubyte[4] triggers = [ 1, 4, 8, 14 ];
 enum uint dlab = 1 << 7;
 enum ubyte dr = 1 << 0, oe = 1 << 1, pe = 1 << 2, fe = 1 << 3, bi = 1 << 4, thre = 1 << 5, temt = 1 << 6;
 
 __gshared Registers _regs;
 __gshared Line!(16, 16) _line;
-__gshared uint _lcr;
-__gshared bool _overrun;
+__gshared uint _lcr, _ier, _trigger;
+__gshared bool _overrun, _timeout;
+
+// IIR's cause, highest priority first: line status, data at the trigger, the character timeout, an empty transmitter.
+uint cause()
+{
+    if ((_ier & ier_rls) && (_overrun || (_line.rx_count && _line.head_err)))
+        return 0x6;
+    if ((_ier & ier_rda) && _line.rx_count >= _trigger)
+        return 0x4;
+    if ((_ier & ier_rda) && _timeout && _line.rx_count)
+        return 0xC;
+    if ((_ier & ier_thre) && !_line.tx_count)
+        return 0x2;
+    return 0x1;
+}
 
 void latch(uint pin, bool rising)
 {
@@ -141,7 +163,7 @@ void latch(uint pin, bool rising)
 }
 
 bool is_asserted(uint line)
-    => line == gpio_line && (_regs.get(gpio + stat) | _regs.get(gpio + stat + 4)) != 0;
+    => (line == gpio_line && (_regs.get(gpio + stat) | _regs.get(gpio + stat + 4)) != 0) || (line == uart_line && cause() != 0x1);
 
 uint uart_read(uint off)
 {
@@ -150,7 +172,12 @@ uint uart_read(uint off)
     switch (off)
     {
         case rbr:
+            _timeout = false;
             return _line.pop();
+        case ier:
+            return _ier;
+        case iir:
+            return cause();
         case lsr:
             _line.step();
             uint s = _line.head_err;
@@ -180,11 +207,15 @@ void uart_write(uint off, uint value)
         case rbr:
             _line.put(cast(ubyte)value);
             break;
+        case ier:
+            _ier = value;
+            break;
         case fcr:
             if (value & 2)
                 _line.rx_clear();
             if (value & 4)
                 _line.tx_clear();
+            _trigger = triggers[(value >> 6) & 3];
             break;
         case lcr:
             _lcr = value;

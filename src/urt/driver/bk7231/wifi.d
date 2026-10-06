@@ -144,7 +144,7 @@ bool wifi_hw_set_mode(ubyte port, WifiMode mode)
             if (!prepare_raw_rx_pages())
                 return false;
             bk_wlan_register_monitor_cb(&monitor_callback);
-            ow_rw_monitor_start(_channel);
+            urt_rw_monitor_start(_channel);
             break;
 
         case WifiMode.sta:
@@ -248,7 +248,7 @@ bool wifi_hw_scan_start(ubyte port, ref const WifiScanConfig cfg)
     if (!_open || _mac_state != MacState.ready || _mode == WifiMode.monitor || _scanning || (_sta_state != StaState.offline && _sta_state != StaState.idle) || cfg.ssid.length || has_bssid || cfg.channel || cfg.passive || cfg.dwell_ms || (cfg.band != WifiBand.any && cfg.band != WifiBand._2_4ghz))
         return false;
 
-    if (ow_rw_scan(no_vif, null, 0) != 0)
+    if (urt_rw_scan(no_vif, null, 0) != 0)
         return false;
     _scanning = true;
     arm_deadline(10.seconds);
@@ -306,7 +306,7 @@ bool wifi_hw_tx(ubyte port, WifiVif vif, const(ubyte)[] data)
     if (!_open || _mac_state != MacState.ready || vif != WifiVif.sta || _sta_state != StaState.connected || data.length < 14 || data.length > max_frame)
         return false;
 
-    return ow_rw_transfer(_sta_vif, cast(ubyte*)data.ptr, cast(uint)data.length) == 0;
+    return urt_rw_transfer(_sta_vif, cast(ubyte*)data.ptr, cast(uint)data.length) == 0;
 }
 
 void wifi_hw_set_rx_callback(ubyte port, WifiRxCallback cb)
@@ -423,7 +423,7 @@ bool wifi_hw_service(ubyte port, size_t budget)
     ke_evt_core_scheduler();
     if (epoch != _service_epoch)
         return _open && needs_service_wake();
-    while (served < budget && ow_rw_receive())
+    while (served < budget && urt_rw_receive())
     {
         ++served;
         if (epoch != _service_epoch)
@@ -739,12 +739,12 @@ extern(C) nothrow @nogc
     ubyte bk_wlan_get_scan_ap_result_numbers();
     void bk_wlan_get_scan_ap_result(StaScanResult* table, ubyte count);
     int bk_wlan_set_channel(int channel);
-    void ow_rw_monitor_start(ubyte channel);
+    void urt_rw_monitor_start(ubyte channel);
     int bk_wlan_stop_monitor();
     void bk_wlan_register_monitor_cb(MonitorDataCallback fn);
     void wifi_get_mac_address(char* mac, ubyte role);
 
-    int ow_rw_receive();
+    int urt_rw_receive();
     void ke_evt_core_scheduler();
     void ke_evt_none_core_scheduler();
     void rxl_cntrl_evt(int dummy);
@@ -761,24 +761,24 @@ extern(C) nothrow @nogc
     void manual_cal_load_xtal_tag_flash();
     void rwnx_cal_initial_calibration();
 
-    int ow_rw_mac_step(uint step);
-    void ow_rw_mac_quiesce();
-    int ow_rw_add_if(const(ubyte)* mac);
-    int ow_rw_scan(ubyte vif_idx, const(ubyte)* ssid, ubyte ssid_len);
-    int ow_rw_transfer(ubyte vif_idx, ubyte* buf, uint len);
-    byte ow_rw_get_rssi();
-    int ow_rw_connect(ubyte vif_idx, const(ubyte)* ssid, ubyte ssid_len, const(ubyte)* bssid, const(ubyte)* ie, ushort ie_len, int psk, byte* rssi, ubyte* channel);
-    int ow_rw_disconnect(ubyte vif_idx, ushort reason);
-    int ow_rw_key_add_ccmp(ubyte vif_idx, ubyte sta_idx, ubyte key_idx, const(ubyte)* key, ubyte len, const(ubyte)* rsc);
-    int ow_rw_control_port(ubyte sta_idx, int open);
-    int ow_rw_classify(const(KeMsg)* m);
-    void ow_rw_add_if_cfm(const(KeMsg)* m, ubyte* status, ubyte* vif_idx);
-    void ow_rw_scanu_start_cfm(const(KeMsg)* m, ubyte* status, ubyte* vif_idx);
-    void ow_rw_connect_cfm(const(KeMsg)* m, ubyte* status);
-    void ow_rw_connect_ind(const(KeMsg)* m, ushort* status, ubyte* vif_idx, ubyte* ap_idx, ubyte* bssid);
-    void ow_rw_disconnect_ind(const(KeMsg)* m, ubyte* vif_idx, ushort* reason);
-    void ow_rw_fail_ind(const(KeMsg)* m, ushort* status);
-    void ow_rw_key_add_cfm(const(KeMsg)* m, ubyte* status);
+    int urt_rw_mac_step(uint step);
+    void urt_rw_mac_quiesce();
+    int urt_rw_add_if(const(ubyte)* mac);
+    int urt_rw_scan(ubyte vif_idx, const(ubyte)* ssid, ubyte ssid_len);
+    int urt_rw_transfer(ubyte vif_idx, ubyte* buf, uint len);
+    byte urt_rw_get_rssi();
+    int urt_rw_connect(ubyte vif_idx, const(ubyte)* ssid, ubyte ssid_len, const(ubyte)* bssid, const(ubyte)* ie, ushort ie_len, int psk, byte* rssi, ubyte* channel);
+    int urt_rw_disconnect(ubyte vif_idx, ushort reason);
+    int urt_rw_key_add_ccmp(ubyte vif_idx, ubyte sta_idx, ubyte key_idx, const(ubyte)* key, ubyte len, const(ubyte)* rsc);
+    int urt_rw_control_port(ubyte sta_idx, int open);
+    int urt_rw_classify(const(KeMsg)* m);
+    void urt_rw_add_if_cfm(const(KeMsg)* m, ubyte* status, ubyte* vif_idx);
+    void urt_rw_scanu_start_cfm(const(KeMsg)* m, ubyte* status, ubyte* vif_idx);
+    void urt_rw_connect_cfm(const(KeMsg)* m, ubyte* status);
+    void urt_rw_connect_ind(const(KeMsg)* m, ushort* status, ubyte* vif_idx, ubyte* ap_idx, ubyte* bssid);
+    void urt_rw_disconnect_ind(const(KeMsg)* m, ubyte* vif_idx, ushort* reason);
+    void urt_rw_fail_ind(const(KeMsg)* m, ushort* status);
+    void urt_rw_key_add_cfm(const(KeMsg)* m, ubyte* status);
     int rwm_raw_frame_with_cb(ubyte* buffer, int len, void* cb, void* param);
 }
 
@@ -815,7 +815,7 @@ void ethernet_input(uint iface, Page* pages)
     }
 
     const(ubyte)[] frame = cast(const(ubyte)[])frame_page.data;
-    _rssi = ow_rw_get_rssi();
+    _rssi = urt_rw_get_rssi();
     if (frame[12] == 0x88 && frame[13] == 0x8E)
         _supp.receive_eapol(frame[14 .. $]);
     else if (_sta_state == StaState.connected && _rx_cb)
@@ -971,7 +971,7 @@ void arm_deadline(Duration timeout)
 
 void mac_submit_step()
 {
-    if (ow_rw_mac_step(_mac_state - MacState.reset) == 0)
+    if (urt_rw_mac_step(_mac_state - MacState.reset) == 0)
         arm_deadline(2.seconds);
     else
     {
@@ -997,7 +997,7 @@ void request_mac_reset()
 
 void mac_reset()
 {
-    ow_rw_mac_quiesce();
+    urt_rw_mac_quiesce();
     ++_service_epoch;
     _mac_state = _open ? MacState.retry : MacState.stopped;
     _sta_vif = no_vif;
@@ -1042,7 +1042,7 @@ bool sta_vif_up()
         return true;
     ubyte[6] mac = void;
     wifi_get_mac_address(cast(char*)mac.ptr, bk_role_sta);
-    if (ow_rw_add_if(mac.ptr) != 0)
+    if (urt_rw_add_if(mac.ptr) != 0)
         return false;
     _sta_state = StaState.starting;
     arm_deadline(2.seconds);
@@ -1068,7 +1068,7 @@ void sta_derive_slice()
 
 bool sta_scan()
 {
-    if (ow_rw_scan(_sta_vif, _sta_ssid_buf.ptr, _sta_ssid_len) != 0)
+    if (urt_rw_scan(_sta_vif, _sta_ssid_buf.ptr, _sta_ssid_len) != 0)
     {
         _sta_state = StaState.idle;
         _sta_status = StaStatus.scan_failed;
@@ -1093,7 +1093,7 @@ void sta_join()
     const(ubyte)* bssid = any_bssid ? null : _sta_bssid.ptr;
     const(ubyte)* ie = psk ? wpa2_psk_ccmp_rsn_ie.ptr : null;
     ushort ie_length = psk ? cast(ushort)wpa2_psk_ccmp_rsn_ie.length : 0;
-    int rc = ow_rw_connect(_sta_vif, _sta_ssid_buf.ptr, _sta_ssid_len, bssid, ie, ie_length, psk, &_rssi, &_channel);
+    int rc = urt_rw_connect(_sta_vif, _sta_ssid_buf.ptr, _sta_ssid_len, bssid, ie, ie_length, psk, &_rssi, &_channel);
     if (rc != 0)
     {
         StaStatus status = rc == -2 ? StaStatus.network_not_found : StaStatus.connect_request_failed;
@@ -1134,7 +1134,7 @@ bool sta_send_eapol(const(ubyte)[] eapol)
     frame[12] = 0x88;
     frame[13] = 0x8E;
     frame[14 .. 14 + eapol.length] = eapol[];
-    return ow_rw_transfer(_sta_vif, frame.ptr, cast(uint)(eapol.length + 14)) == 0;
+    return urt_rw_transfer(_sta_vif, frame.ptr, cast(uint)(eapol.length + 14)) == 0;
 }
 
 bool sta_install_pairwise(const(ubyte)[] tk, const(ubyte)[] rsc)
@@ -1145,7 +1145,7 @@ bool sta_install_group(ubyte key_idx, const(ubyte)[] gtk, const(ubyte)[] rsc)
 
 bool sta_install_key(ubyte sta_idx, ubyte key_idx, const(ubyte)[] key, const(ubyte)[] rsc)
 {
-    if (key.length != 16 || rsc.length != 6 || ow_rw_key_add_ccmp(_sta_vif, sta_idx, key_idx, key.ptr, cast(ubyte)key.length, rsc.ptr) != 0)
+    if (key.length != 16 || rsc.length != 6 || urt_rw_key_add_ccmp(_sta_vif, sta_idx, key_idx, key.ptr, cast(ubyte)key.length, rsc.ptr) != 0)
         return false;
     ++_key_pending;
     arm_deadline(2.seconds);
@@ -1157,7 +1157,7 @@ bool sta_auth_done(ushort reason)
     if (reason != 0)
     {
         writeDebug("wifi: sta auth failed reason=", reason);
-        ow_rw_disconnect(_sta_vif, reason);
+        urt_rw_disconnect(_sta_vif, reason);
         sta_failed(StaStatus.auth_failed, reason);
         return true;
     }
@@ -1171,9 +1171,9 @@ bool sta_auth_done(ushort reason)
 
 bool sta_auth_complete()
 {
-    if (ow_rw_control_port(_sta_ap_idx, 1) != 0)
+    if (urt_rw_control_port(_sta_ap_idx, 1) != 0)
     {
-        ow_rw_disconnect(_sta_vif, reason_deauth_leaving);
+        urt_rw_disconnect(_sta_vif, reason_deauth_leaving);
         sta_failed(StaStatus.control_port_failed, 0);
         return false;
     }
@@ -1208,11 +1208,11 @@ bool mac_confirmation(OwRwMsg kind)
     return true;
 }
 
-extern(C) void ow_wifi_message(KeMsg* m)
+extern(C) void urt_wifi_message(KeMsg* m)
 {
     if (_mac_state == MacState.reset_pending || !_open)
         return;
-    OwRwMsg kind = cast(OwRwMsg)ow_rw_classify(m);
+    OwRwMsg kind = cast(OwRwMsg)urt_rw_classify(m);
     if (mac_confirmation(kind))
         return;
     if (_mac_state != MacState.ready)
@@ -1222,7 +1222,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.add_if_cfm:
         {
             ubyte status, idx;
-            ow_rw_add_if_cfm(m, &status, &idx);
+            urt_rw_add_if_cfm(m, &status, &idx);
             if (_sta_state == StaState.starting)
             {
                 _deadline = MonoTime.init;
@@ -1241,7 +1241,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.scanu_start_cfm:
         {
             ubyte status, vif;
-            ow_rw_scanu_start_cfm(m, &status, &vif);
+            urt_rw_scanu_start_cfm(m, &status, &vif);
             if (_scanning && vif == no_vif)
             {
                 _deadline = MonoTime.init;
@@ -1264,7 +1264,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.auth_fail_ind:
         {
             ushort status;
-            ow_rw_fail_ind(m, &status);
+            urt_rw_fail_ind(m, &status);
             if (_sta_state == StaState.associating)
             {
                 StaStatus failure = status == reason_too_many_stations ? StaStatus.association_refused : StaStatus.auth_failed;
@@ -1275,7 +1275,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.assoc_fail_ind:
         {
             ushort status;
-            ow_rw_fail_ind(m, &status);
+            urt_rw_fail_ind(m, &status);
             if (_sta_state == StaState.associating)
             {
                 StaStatus failure = status == status_too_many_stations ? StaStatus.association_refused : StaStatus.association_failed;
@@ -1286,7 +1286,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.disassoc_ind:
         {
             ushort status;
-            ow_rw_fail_ind(m, &status);
+            urt_rw_fail_ind(m, &status);
             if (_sta_state >= StaState.keying)
                 sta_failed(StaStatus.disconnected, status);
             break;
@@ -1294,7 +1294,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.connect_cfm:
         {
             ubyte status;
-            ow_rw_connect_cfm(m, &status);
+            urt_rw_connect_cfm(m, &status);
             if (status != 0 && _sta_state == StaState.associating)
                 sta_failed(StaStatus.connect_request_failed, status);
             break;
@@ -1304,7 +1304,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
             ushort status;
             ubyte vif, ap_idx;
             ubyte[6] bssid = void;
-            ow_rw_connect_ind(m, &status, &vif, &ap_idx, bssid.ptr);
+            urt_rw_connect_ind(m, &status, &vif, &ap_idx, bssid.ptr);
             if (vif != _sta_vif || _sta_state != StaState.associating)
                 break;
             if (status != 0)
@@ -1323,7 +1323,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         {
             ushort reason;
             ubyte vif;
-            ow_rw_disconnect_ind(m, &vif, &reason);
+            urt_rw_disconnect_ind(m, &vif, &reason);
             writeDebug("wifi: sta disconnect ind reason=", reason);
             if (vif == _sta_vif && _sta_state >= StaState.associating)
                 sta_failed(StaStatus.disconnected, reason);
@@ -1332,7 +1332,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
         case OwRwMsg.key_add_cfm:
         {
             ubyte status;
-            ow_rw_key_add_cfm(m, &status);
+            urt_rw_key_add_cfm(m, &status);
             if (_key_pending == 0 || (_sta_state != StaState.installing && _sta_state != StaState.connected))
                 break;
             --_key_pending;
@@ -1343,7 +1343,7 @@ extern(C) void ow_wifi_message(KeMsg* m)
             }
             else if (status != 0)
             {
-                ow_rw_disconnect(_sta_vif, reason_deauth_leaving);
+                urt_rw_disconnect(_sta_vif, reason_deauth_leaving);
                 sta_failed(StaStatus.key_install_failed, status);
             }
             else if (_key_pending == 0)
@@ -1423,7 +1423,7 @@ extern(C) void __wrap_bmsg_rx_sender(void* arg)
 extern(C) int __wrap_bmsg_is_empty()
     => _rx_pending == 0 ? 1 : 0;
 
-extern(C) void ow_log_vendor(const(char)* msg, size_t len) nothrow @nogc
+extern(C) void urt_log_vendor(const(char)* msg, size_t len) nothrow @nogc
 {
     const(char)[] s = msg[0 .. len];
     while (s.length && (s[$-1] == '\r' || s[$-1] == '\n'))

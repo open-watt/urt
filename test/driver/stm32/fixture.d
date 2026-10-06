@@ -37,7 +37,6 @@ enum bool has_links = true;
 // F4 takes the IDLE line as its gap, so only F7 and H7 program one.
 enum bool programs_rx_gap = !legacy;
 // The H7's RX FIFO trigger is written only with the USART disabled.
-enum bool retimes_latency_live = depth == 1;
 
 void reset()
 {

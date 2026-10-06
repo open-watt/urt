@@ -1,6 +1,6 @@
 #include <assert.h>
 #include <stdlib.h>
-#include "../src/urt/driver/bk7231/ow_rw.c"
+#include "../src/urt/driver/bk7231/rw_shim.c"
 
 struct sm_env_tag sm_env;
 struct co_list rw_msg_rx_head;
@@ -113,7 +113,7 @@ int main(void)
         sm_env.connect_ind = (void *)message()->param;
         sm_env.bss_config.first = sm_env.bss_config.last = &message()->hdr;
         pending.first = pending.last = &message()->hdr;
-        ow_rw_mac_quiesce();
+        urt_rw_mac_quiesce();
         assert(!allocations);
         assert(!sm_env.connect_param && !sm_env.connect_ind);
         assert(!sm_env.bss_config.first && !pending.first && !rw_msg_rx_head.first);

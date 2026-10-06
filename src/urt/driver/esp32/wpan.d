@@ -1,4 +1,4 @@
-// ESP32 IEEE 802.15.4 radio over the ow_shim.c event bridge.
+// ESP32 IEEE 802.15.4 radio over the idf_shim.c event bridge.
 module urt.driver.esp32.wpan;
 
 import urt.atomic : MemoryOrder, atomicExchange, atomicFetchAdd, atomicLoad, atomicStore, cas;
@@ -34,7 +34,7 @@ bool wpan_hw_open(uint port, ref const WpanConfig cfg)
             return false;
         }
     }
-    if (ow_wpan_enable(&wpan_rx_trampoline, &wpan_tx_trampoline) != 0)
+    if (urt_wpan_enable(&wpan_rx_trampoline, &wpan_tx_trampoline) != 0)
     {
         reset_queues();
         return false;
@@ -60,7 +60,7 @@ bool wpan_hw_open(uint port, ref const WpanConfig cfg)
         ok = esp_ieee802154_receive() == ESP_OK;
     if (!ok)
     {
-        ow_wpan_disable();
+        urt_wpan_disable();
         reset_queues();
         return false;
     }
@@ -75,7 +75,7 @@ void wpan_hw_close(uint port)
         return;
     _rx_cb = null;
     _tx_cb = null;
-    ow_wpan_disable();
+    urt_wpan_disable();
     reset_queues();
     _opened = false;
 }
@@ -379,9 +379,9 @@ extern(C) void wpan_tx_trampoline(int error, const(ubyte)* ack, byte rssi, ubyte
 
 extern(C) nothrow @nogc
 {
-    int ow_wpan_enable(void function(const(ubyte)*, byte, ubyte, ubyte, int) nothrow @nogc rx,
-                       void function(int, const(ubyte)*, byte, ubyte, ubyte) nothrow @nogc tx);
-    void ow_wpan_disable();
+    int urt_wpan_enable(void function(const(ubyte)*, byte, ubyte, ubyte, int) nothrow @nogc rx,
+                        void function(int, const(ubyte)*, byte, ubyte, ubyte) nothrow @nogc tx);
+    void urt_wpan_disable();
 
     int esp_ieee802154_set_channel(ubyte channel);
     ubyte esp_ieee802154_get_channel();

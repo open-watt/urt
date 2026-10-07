@@ -355,6 +355,8 @@ nothrow @nogc:
         if (head.length)
             return false;
         dequeue_sent(p);
+        if (!p.tx_queue && !p.tx_fill)
+            p.tx_starved = true;
         return p.tx_cb ? p.tx_cb(Uart(p.port), UartCallbackContext.interrupt) : false;
     }
 
@@ -624,6 +626,7 @@ unittest
     static struct Model
     {
         static __gshared bool stalled, busy;
+        static __gshared size_t room = size_t.max;
         static __gshared ubyte[4096] wire;
         static __gshared size_t sent;
         static __gshared UartPorts!(2, 1, idle, fill) ports;
@@ -632,12 +635,14 @@ unittest
     nothrow @nogc:
         static void fill(uint id)
         {
-            while (!stalled)
+            for (size_t left = room; !stalled && left; )
             {
                 const(ubyte)[] bytes = ports.tx_bytes(id);
                 if (!bytes.length)
                     break;
-                immutable size_t n = bytes.length < 16 ? bytes.length : 16;
+                size_t n = bytes.length < 16 ? bytes.length : 16;
+                n = n < left ? n : left;
+                left -= n;
                 wire[sent .. sent + n] = bytes[0 .. n];
                 sent += n;
                 ports.tx_advance(id, n);
@@ -719,6 +724,13 @@ unittest
     foreach (i; 0 .. 100)
         assert(Model.wire[14 + i * 4 .. 18 + i * 4] == "0123");
     assert(Model.wire[414 .. 424] == "|lent|tail", "what was written goes out before what was sent after it");
+
+    // a FIFO filled by the last queued byte leaves the line idle with its interrupt off, so the next write restarts it
+    Model.room = 4;
+    immutable size_t mark = Model.sent;
+    assert(ports.write(1, "abcd") == 4 && Model.wire[mark .. mark + 4] == "abcd");
+    assert(ports.write(1, "efgh") == 4 && Model.wire[mark + 4 .. mark + 8] == "efgh", "a line that ran dry on a full FIFO starts again");
+    Model.room = size_t.max;
 
     // RX: a frame ends at its gap, tagged with when its last stop bit ended; bytes after the last tag are a frame arriving
     immutable Duration gap_time = Duration(ports._port[1].gap_ticks);

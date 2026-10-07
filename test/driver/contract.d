@@ -237,7 +237,8 @@ void uart_contract()
     tx_hold(true);
     foreach (i; 0 .. 200)
         assert(uart_write(u, big[i * 5 .. i * 5 + 5]) == 5);
-    assert(uart_tx_queued(u) > 0 && pages_in_use() <= pages + 1000 / 300 + 1, "short writes share pages");
+    // the first write starts the idle line, which takes its page; the rest share
+    assert(uart_tx_queued(u) > 0 && pages_in_use() <= pages + 1000 / 300 + 2, "short writes share pages");
     send(u, big[1000 .. 1100]);
     assert(uart_write(u, big[1100 .. 1200]) == 100);
     tx_hold(false);

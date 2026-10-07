@@ -1296,7 +1296,7 @@ int urt_uart_open(unsigned port, uint32_t baud_rate, uint8_t data_bits, uint8_t 
     uart_pins[port][2] = de_gpio;
 
     uart_hal_context_t *hal = &uart_hal[port];
-    uart_hal_init(hal, uart);
+    hal->dev = UART_LL_GET_HW(port);    // not uart_hal_init: it resets the framing uart_param_config just set
     uart_hal_set_mode(hal, rs485_enabled ? UART_MODE_RS485_HALF_DUPLEX : UART_MODE_UART);
     uart_rs485[port] = rs485_enabled;
     uart_hal_set_rxfifo_full_thr(hal, rx_full);

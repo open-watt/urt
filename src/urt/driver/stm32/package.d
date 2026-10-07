@@ -399,7 +399,8 @@ version (STM32F4) {} else
     {
         version (STM32H7)
         {
-            // SRAM1-3 hold the DMA heap: normal memory, uncached, shareable, never executed.
+            // SRAM1-3 hold the DMA heap: normal memory, uncached, never executed. Not shareable: an exclusive access to
+            // shareable memory goes out to the AHB, which faults it, and the one core's local monitor is all LDREX needs.
             // The 512 KB region covers their 288 KB.
             enum ulong mpu_ctrl = 0xE000_ED94;
             enum ulong mpu_rnr  = 0xE000_ED98;
@@ -407,7 +408,7 @@ version (STM32F4) {} else
             enum ulong mpu_rasr = 0xE000_EDA0;
             reg_write(mpu_rnr, 0);
             reg_write(mpu_rbar, 0x3000_0000);
-            reg_write(mpu_rasr, (1 << 28) | (3 << 24) | (1 << 19) | (1 << 18) | ((19 - 1) << 1) | 1);
+            reg_write(mpu_rasr, (1 << 28) | (3 << 24) | (1 << 19) | ((19 - 1) << 1) | 1);
             // Backup SRAM holds the reset record: a write-back line would still be dirty at reset.
             reg_write(mpu_rnr, 1);
             reg_write(mpu_rbar, 0x3880_0000);

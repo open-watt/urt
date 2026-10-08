@@ -7,6 +7,7 @@ import urt.driver.bl808_m0.wifi_lmac;
 import urt.driver.bl808_m0.wifi_pm;
 import urt.driver.bl808_m0.wifi_wpa;
 import urt.attribute : fast_data, section;
+import urt.crypto.pbkdf2 : Pbkdf2Sha1;
 import urt.driver.wifi;
 import urt.driver.wpa.eapol;
 
@@ -281,6 +282,7 @@ bool wifi_hw_sta_configure(ubyte port, ref const WifiStaConfig cfg)
     _sta_cfg_pmf  = cfg.pmf_required;
     if (!same_psk)
     {
+        _sta_deriving = false;
         _sta_pending_pmk_hex_len = 0;
         _sta_candidate_channel = 0;
     }
@@ -301,28 +303,26 @@ bool wifi_hw_sta_connect(ubyte port)
     if (!ensure_vif_sta())
         return false;
 
-    if (_sta_pending_pmk_hex_len == 0)
+    if (_sta_cfg_pw_len >= 8 && _sta_pending_pmk_hex_len == 0)
     {
         _sta_pending_pmk[] = 0;
         _sta_pending_pmk_hex[] = 0;
+        if (_sta_kdf.begin(_sta_cfg_pw_buf[0 .. _sta_cfg_pw_len], _sta_cfg_ssid_buf[0 .. _sta_cfg_ssid_len], 4096, _sta_pending_pmk[]).failed)
+            return false;
+        _sta_deriving = true;
+        return true;
     }
-    if (_sta_cfg_pw_len >= 8 && _sta_pending_pmk_hex_len == 0)
-    {
-        import urt.crypto.pbkdf2 : wpa2_psk_to_pmk;
-        auto pw = cast(const(char)[])_sta_cfg_pw_buf[0 .. _sta_cfg_pw_len];
-        auto ss = cast(const(char)[])_sta_cfg_ssid_buf[0 .. _sta_cfg_ssid_len];
-        if (wpa2_psk_to_pmk(pw, ss, _sta_pending_pmk).succeeded)
-        {
-            static immutable string hexdig = "0123456789abcdef";
-            foreach (i; 0 .. 32)
-            {
-                _sta_pending_pmk_hex[i*2 + 0] = cast(ubyte)hexdig[_sta_pending_pmk[i] >> 4];
-                _sta_pending_pmk_hex[i*2 + 1] = cast(ubyte)hexdig[_sta_pending_pmk[i] & 0xF];
-            }
-            _sta_pending_pmk_hex_len = 64;
-        }
-    }
+    return sta_issue_connect();
+}
 
+bool wifi_hw_sta_disconnect(ubyte port)
+{
+    _sta_deriving = false;
+    return bl_send_sm_disconnect_req(&_bl_hw) == 0;
+}
+
+private bool sta_issue_connect()
+{
     ubyte* bssid;
     foreach (b; _sta_cfg_bssid)
     {
@@ -347,9 +347,26 @@ bool wifi_hw_sta_connect(ubyte port)
     return true;
 }
 
-bool wifi_hw_sta_disconnect(ubyte port)
+private void sta_derive_slice()
 {
-    return bl_send_sm_disconnect_req(&_bl_hw) == 0;
+    import urt.driver.bl618.timer : mtime_freq_hz, mtime_read;
+    immutable ulong until = mtime_read() + mtime_freq_hz / 1000 * 4;
+    bool done;
+    do
+        done = _sta_kdf.step(8);
+    while (!done && mtime_read() < until);
+    if (!done)
+        return;
+
+    _sta_deriving = false;
+    static immutable string hexdig = "0123456789abcdef";
+    foreach (i; 0 .. 32)
+    {
+        _sta_pending_pmk_hex[i*2 + 0] = cast(ubyte)hexdig[_sta_pending_pmk[i] >> 4];
+        _sta_pending_pmk_hex[i*2 + 1] = cast(ubyte)hexdig[_sta_pending_pmk[i] & 0xF];
+    }
+    _sta_pending_pmk_hex_len = 64;
+    sta_issue_connect();
 }
 
 bool wifi_hw_ap_configure(ubyte port, ref const WifiApConfig cfg)
@@ -596,6 +613,21 @@ bool wifi_hw_set_channel(ubyte port, ubyte primary)
     return false;
 }
 
+// The vendor hands received frames over without their RX vector, so a station's RSSI is unknown (0).
+bool wifi_hw_get_sta_link_info(ubyte port, ref WifiStaLinkInfo info)
+{
+    if (port != 0 || _bl_hw.vif_index_sta < 0 || _sta_ap_idx >= STA_TABLE_LEN)
+        return false;
+    info = WifiStaLinkInfo.init;
+    info.bssid = _bl_hw.sta_table[_sta_ap_idx].sta_addr.array_;
+    info.rssi = _bl_hw.sta_table[_sta_ap_idx].rssi;
+    info.band = WifiBand._2_4ghz;
+    info.phy_mode = WifiPhyMode.n;
+    info.bandwidth = WifiBandwidth.bw_20mhz;
+    info.nss = 1;
+    return true;
+}
+
 byte wifi_hw_get_rssi(ubyte port)
 {
     // STA RSSI lands in sta_table[ap_idx].rssi via SM_CONNECT_IND. We
@@ -635,6 +667,8 @@ bool wifi_hw_service(ubyte port, size_t budget)
     if (_bl_hw.is_up && _bl_hw.ipc_env !is null)
         bl_irq_bottomhalf(&_bl_hw);
     wifi_fibre_pump();
+    if (_sta_deriving)
+        sta_derive_slice();
     uint generation = _queue_generation;
     dispatch_queued_callbacks(budget, generation);
     if (generation == _queue_generation)
@@ -711,6 +745,8 @@ __gshared ubyte[32] _sta_pending_pmk;
 // The vendor STA connect struct expects the PMK as 64 ASCII hex bytes.
 __gshared ubyte[64] _sta_pending_pmk_hex;
 __gshared ubyte     _sta_pending_pmk_hex_len;
+__gshared Pbkdf2Sha1 _sta_kdf;
+__gshared bool      _sta_deriving;
 __gshared ubyte[16] _sta_pending_tk;
 __gshared ubyte[32] _sta_pending_gtk;
 __gshared ubyte[6]  _sta_pending_pair_rsc;
@@ -966,7 +1002,8 @@ private void reset_queues()
 private bool queues_pending()
 {
     return _wifi_evt_head != _wifi_evt_tail ||
-           _wifi_rx_head != _wifi_rx_tail;
+           _wifi_rx_head != _wifi_rx_tail ||
+           _sta_deriving;
 }
 
 private void queue_rx(WifiVif vif, const(ubyte)[] frame)

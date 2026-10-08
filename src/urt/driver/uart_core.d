@@ -15,10 +15,10 @@ nothrow @nogc:
 enum tx_drain_limit = 250.msecs;
 enum uint puts_stall_spins = 1_000_000;     // tens of milliseconds of register reads: no clock on a fault path
 
-// A received page holds its character time in its headroom, its bytes from its start, and a tag per frame that ends on
-// it from its end down, each (ticks << 16) | offset: when the frame's last stop bit ended, and where its bytes end. The gap
-// interrupt comes a fixed time after that stop bit, so the tag is its time less the gap. Each tag lowers the page's
-// capacity, so its tailroom is the room left; a page no frame ends on has none.
+// A received page holds its bytes from its start, and a tag per frame that ends on it from its end down, each
+// (ticks << 16) | offset: when the frame's last stop bit ended, and where its bytes end. The gap interrupt comes a fixed
+// time after that stop bit, so the tag is its time less the gap. Each tag lowers the page's capacity, so its tailroom is
+// the room left; a page no frame ends on has none.
 enum uint rx_tag_size = 8;
 
 // How full a received page must be, in percent, to call for larger pages; and how little of a small page a large page's
@@ -29,107 +29,42 @@ enum uint rx_reserve_pages = 2;
 
 // The frames of a taken chain, read as one series of bytes: each ends at a tag, and bytes after the last tag are a frame
 // still arriving. A frame that ended before the chain's first byte shows as an empty first one.
-uint uart_burst_count(const(Page)* chain)
-{
-    uint count;
-    UartBurst burst;
-    for (BurstWalk walk = BurstWalk(chain); walk.next(burst); )
-        ++count;
-    return count;
-}
-
-UartBurst uart_burst(const(Page)* chain, uint index)
-{
-    UartBurst burst;
-    BurstWalk walk = BurstWalk(chain);
-    foreach (i; 0 .. index + 1)
-    {
-        immutable bool found = walk.next(burst);
-        assert(found, "no such burst");
-    }
-    return burst;
-}
-
-private uint rx_tags(const(Page)* page)
-    => cast(uint)(page_payload_size(page_category(page)) - page.capacity) / rx_tag_size;
-
-private ulong rx_tag(const(Page)* page, uint index)
-    => (cast(const(ulong)*)(cast(const(ubyte)*)page + page_payload_size(page_category(page))))[-1 - cast(int)index];
-
-// the tags of a chain in series order
-private struct TagWalk
+struct UartBursts
 {
 nothrow @nogc:
-    const(Page)* page;
-    uint index;
-    size_t base;
-
-    bool next(out size_t at, out ulong time, out uint ticks)
-    {
-        while (page && index >= rx_tags(page))
-        {
-            base += page.length;
-            page = (cast(Page*)page).next;
-            index = 0;
-        }
-        if (!page)
-            return false;
-        immutable ulong tag = rx_tag(page, index++);
-        ticks = rx_char_ticks(page);
-        at = base + cast(ushort)tag;
-        time = tag >> 16;
-        return true;
-    }
-}
-
-private struct BurstWalk
-{
-nothrow @nogc:
-    TagWalk tags;
-    size_t total;
-    size_t from;
-
     this(const(Page)* chain)
     {
-        tags.page = chain;
-        for (const(Page)* page = chain; page; page = (cast(Page*)page).next)
-            total += page.length;
+        _page = chain;
     }
 
     bool next(out UartBurst burst)
     {
-        size_t at;
-        ulong time;
-        uint ticks;
-        burst.offset = from;
-        if (!tags.next(at, time, ticks))
+        burst.offset = _from;
+        while (_page && _index >= rx_tags(_page))
         {
-            burst.length = total - from;
-            from = total;
+            _base += _page.length;
+            _page = (cast(Page*)_page).next;
+            _index = 0;
+        }
+        if (!_page)
+        {
+            burst.length = _base - _from;
+            _from = _base;
             return burst.length != 0;
         }
-        burst.length = at - from;
-        burst.gap = true;
-        burst.end = rx_rebuild(time);
-        burst.start = burst.end - Duration(cast(long)burst.length * ticks);
-        from = at;
-        TagWalk ahead = tags;
-        if (ahead.next(at, time, ticks))
-            burst.quiet = rx_rebuild(time) - Duration(cast(long)(at - from) * ticks) - burst.end;
+        immutable ulong tag = rx_tag(_page, _index++);
+        immutable size_t at = _base + cast(ushort)tag;
+        burst.length = at - _from;
+        burst.end = rx_rebuild(tag >> 16);
+        _from = at;
         return true;
     }
-}
 
-// a page's character time, stamped when it opened; a frame takes the time of the page it ends on
-private uint rx_char_ticks(const(Page)* page)
-    => *cast(const(uint)*)(cast(const(ubyte)*)page + page.offset - uint.sizeof);
-
-private MonoTime rx_rebuild(ulong tag48)
-{
-    enum ulong mask = (ulong(1) << 48) - 1;
-    immutable ulong now = getTime().ticks;
-    immutable ulong high = (now >> 48) - (tag48 > (now & mask));
-    return MonoTime(high << 48 | tag48);
+private:
+    const(Page)* _page;
+    size_t _base;
+    size_t _from;
+    uint _index;
 }
 
 struct UartPorts(uint count, uint first, alias tx_idle, alias tx_fill)
@@ -152,7 +87,6 @@ nothrow @nogc:
             p.port = port != ubyte.max ? port : cast(ubyte)(id + first);
             p.tx_starved = true;
             p.char_ticks = char_ticks(cfg);
-            p.format = line_format(cfg);
             p.rx_category = category;
         }
         page_pool_reserve(category, rx_reserve_pages);
@@ -167,31 +101,10 @@ nothrow @nogc:
     }
 
     // After the backend applies cfg to the open port: the line's character time and RX timing follow it.
-    // A change in how the line is read ends the frame arriving at that moment, and what follows lands in a page of its own,
-    // so each page's character time holds for every frame ending on it.
     void reconfigure(uint id, ref const UartConfig cfg, UartRxTiming timing)
     {
         auto guard = section();
-        Port* p = &_port[id];
-        immutable uint ticks = char_ticks(cfg);
-        immutable ubyte format = line_format(cfg);
-        if (ticks != p.char_ticks || format != p.format)
-        {
-            if (p.rx_frame_open)
-            {
-                p.rx_frame_open = false;
-                end_frame(p, getTime().ticks);
-            }
-            if (p.rx_page && (p.rx_page.length || rx_tags(p.rx_page)))
-                close_page(p);
-            else if (p.rx_page)
-            {
-                page_release_isr(p.rx_page);
-                p.rx_page = null;
-            }
-        }
-        p.char_ticks = ticks;
-        p.format = format;
+        _port[id].char_ticks = char_ticks(cfg);
         retime(id, timing);
     }
 
@@ -489,7 +402,6 @@ private:
         ubyte rx_category;
         ubyte rx_up;
         ubyte rx_down;
-        ubyte format;               // data bits, parity and stop bits: with char_ticks, how the line is read
         bool open;
         bool tx_starved;            // the line ran dry; the next write or send restarts it
         bool rx_frame_open;         // bytes arrived since the last gap
@@ -499,18 +411,15 @@ private:
     static if (irq_max == 0)
         Spinlock _lock;
 
-    static ubyte line_format(ref const UartConfig cfg)
-        => cast(ubyte)((cfg.data_bits - 5) | cfg.parity << 2 | cfg.stop_bits << 5);
-
     static uint char_ticks(ref const UartConfig cfg)
         => cast(uint)nsecs(ulong(uart_frame_bits(cfg)) * 1_000_000_000 / cfg.baud_rate).ticks;
 
     static ubyte largest()
         => cast(ubyte)(page_pool_num_categories() - 1);
 
-    // the tailroom that fills a page of category with the character time ahead of the bytes
+    // the tailroom that fills a page of category
     static size_t rx_room(ubyte category)
-        => page_payload_size(category) - page_required_capacity(0, uint.alignof, uint.sizeof, 0);
+        => page_payload_size(category) - page_required_capacity(0, 1, 0, 0);
 
     static void enqueue(Port* p, Page* chain, Page* last)
     {
@@ -543,13 +452,12 @@ private:
 
     static Page* open_page(Port* p)
     {
-        Page* page = page_alloc_isr(0, uint.alignof, uint.sizeof, rx_room(p.rx_category));
+        Page* page = page_alloc_isr(0, 1, 0, rx_room(p.rx_category));
         if (!page)
         {
             record(p, UartError.overrun);
             return null;
         }
-        *cast(uint*)(cast(ubyte*)page + page.offset - uint.sizeof) = p.char_ticks;
         p.rx_page = page;
         return page;
     }
@@ -619,10 +527,25 @@ private:
 }
 
 
+private:
+
+uint rx_tags(const(Page)* page)
+    => cast(uint)(page_payload_size(page_category(page)) - page.capacity) / rx_tag_size;
+
+ulong rx_tag(const(Page)* page, uint index)
+    => (cast(const(ulong)*)(cast(const(ubyte)*)page + page_payload_size(page_category(page))))[-1 - cast(int)index];
+
+MonoTime rx_rebuild(ulong tag48)
+{
+    enum ulong mask = (ulong(1) << 48) - 1;
+    immutable ulong now = getTime().ticks;
+    immutable ulong high = (now >> 48) - (tag48 > (now & mask));
+    return MonoTime(high << 48 | tag48);
+}
+
+
 unittest
 {
-    import urt.driver.uart : FlowControl;
-
     static struct Model
     {
         static __gshared bool stalled, busy;
@@ -734,7 +657,18 @@ unittest
 
     // RX: a frame ends at its gap, tagged with when its last stop bit ended; bytes after the last tag are a frame arriving
     immutable Duration gap_time = Duration(ports._port[1].gap_ticks);
-    Duration chars(size_t n) => Duration(cast(long)n * ports._port[1].char_ticks);
+    UartBurst[4] bursts(const(Page)* chain, out uint n)
+    {
+        UartBurst[4] found;
+        UartBursts walk = UartBursts(chain);
+        while (n < found.length && walk.next(found[n]))
+            ++n;
+        UartBurst extra;
+        assert(!walk.next(extra), "no more bursts than the test reads");
+        return found;
+    }
+    uint count;
+    UartBurst[4] got;
     foreach (ch; "one")
         assert(ports.receive(1, ch));
     ports.notify(1);
@@ -749,15 +683,12 @@ unittest
     ports.receive(1, '+');
     ports.notify(1);
     Page* page = ports.rx_take(1);
-    assert(page && !page.next && rx_tags(page) == 2 && uart_burst_count(page) == 3);
-    UartBurst one = uart_burst(page, 0);
-    assert(one.offset == 0 && one.length == 3 && one.gap && cast(const(char)[])page_chain_span(page, 0, 3) == "one");
-    assert(one.end + gap_time >= before_gap && one.end + gap_time <= after_gap, "a frame ends the gap time before its gap");
-    assert(one.end - one.start == chars(3), "and began its length before that");
-    UartBurst two = uart_burst(page, 1);
-    assert(two.offset == 3 && two.length == 3 && two.gap && one.end + one.quiet == two.start, "the quiet reaches the next frame's start");
-    UartBurst open = uart_burst(page, 2);
-    assert(open.offset == 6 && open.length == 1 && !open.gap && !open.end && !two.quiet, "a frame still arriving has no times yet");
+    got = bursts(page, count);
+    assert(page && !page.next && rx_tags(page) == 2 && count == 3);
+    assert(got[0].offset == 0 && got[0].length == 3 && cast(const(char)[])page_chain_span(page, 0, 3) == "one");
+    assert(got[0].end + gap_time >= before_gap && got[0].end + gap_time <= after_gap, "a frame ends the gap time before its gap");
+    assert(got[1].offset == 3 && got[1].length == 3 && got[1].end >= got[0].end);
+    assert(got[2].offset == 6 && got[2].length == 1 && !got[2].end, "a frame still arriving has no end yet");
     page_free(page);
 
     ports.gap(1);
@@ -765,15 +696,15 @@ unittest
     ports.receive(1, 'r');
     ports.notify(1);
     page = ports.rx_take(1);
-    assert(uart_burst_count(page) == 2 && rx_tags(page) == 1);
-    UartBurst ends = uart_burst(page, 0);
-    assert(ends.length == 0 && ends.gap && ends.end, "a gap after the take ends the frame taken, and keeps its time");
-    UartBurst r = uart_burst(page, 1);
-    assert(r.offset == 0 && r.length == 1 && !r.gap && cast(const(char)[])page_chain_span(page, 0, 1) == "r");
+    got = bursts(page, count);
+    assert(count == 2 && rx_tags(page) == 1);
+    assert(got[0].length == 0 && got[0].end, "a gap after the take ends the frame taken, and keeps its time");
+    assert(got[1].offset == 0 && got[1].length == 1 && !got[1].end && cast(const(char)[])page_chain_span(page, 0, 1) == "r");
     page_free(page);
     ports.gap(1);
     page = ports.rx_take(1);
-    assert(uart_burst_count(page) == 1 && uart_burst(page, 0).gap && !uart_burst(page, 0).length);
+    got = bursts(page, count);
+    assert(count == 1 && got[0].end && !got[0].length);
     page_free(page);
     ports.gap(1);
     assert(ports.rx_take(1) is null, "a gap with no frame before it is nothing");
@@ -788,9 +719,10 @@ unittest
     ports.receive(1, 'n');
     page = ports.rx_take(1);
     assert(page && page.next && !page.next.next && page_category(page) == 0 && !rx_tags(page));
-    assert(uart_burst_count(page) == 2, "a frame a page boundary cuts is still one");
-    UartBurst whole = uart_burst(page, 0);
-    assert(whole.offset == 0 && whole.length == room + 10 && whole.gap && whole.end - whole.start == chars(room + 10));
+    got = bursts(page, count);
+    assert(count == 2, "a frame a page boundary cuts is still one");
+    UartBurst whole = got[0];
+    assert(whole.offset == 0 && whole.length == room + 10 && whole.end);
     size_t at = 0, pieces;
     while (at < whole.length)
     {
@@ -800,7 +732,7 @@ unittest
         ++pieces;
     }
     assert(pieces == 2, "its bytes come in a span per page");
-    UartBurst n = uart_burst(page, 1);
+    UartBurst n = got[1];
     assert(n.offset == room + 10 && n.length == 1 && cast(const(char)[])page_chain_span(page, n.offset, 1) == "n");
     page_free(page.next);
     page_free(page);
@@ -816,30 +748,18 @@ unittest
     assert(page_category(page) == 0, "takes a small page would have held go back to small pages");
     page_free(page);
 
-    // a change in how the line is read ends the frame arriving, and each frame keeps the character time it arrived at
-    ports.receive(1, 'A');
-    ports.gap(1);
-    immutable uint slow_ticks = ports._port[1].char_ticks;
+    // a new line rate retimes the gap; the frame arriving carries on, and its gap back-dates it by the new rate
+    immutable uint slow_gap = ports._port[1].gap_ticks;
     ports.receive(1, 'a');
-    UartConfig flow = cfg;
-    flow.flow_control = FlowControl.hardware;
-    ports.reconfigure(1, flow, UartRxTiming(80, 35));
-    assert(ports._port[1].rx_frame_open, "flow control changes nothing a frame is read by");
     UartConfig fast = cfg;
     fast.baud_rate *= 2;
-    immutable MonoTime changed = getTime();
     ports.reconfigure(1, fast, UartRxTiming(80, 35));
-    assert(!ports.gap(1), "the change ended the frame");
-    ports.receive(1, 'B');
+    assert(ports._port[1].rx_frame_open && ports._port[1].gap_ticks < slow_gap);
+    ports.receive(1, 'b');
     assert(ports.gap(1) && !ports.gap(1), "a gap reports the frame it ends, once");
     page = ports.rx_take(1);
-    assert(page_category(page) == 0, "a page closed for a new line rate is not a full one");
-    assert(uart_burst_count(page) == 3);
-    UartBurst a = uart_burst(page, 0), cut = uart_burst(page, 1), b = uart_burst(page, 2);
-    assert(a.end - a.start == Duration(slow_ticks) && cut.length == 1 && cut.gap && cut.end >= changed,
-           "the frame arriving at the change ends at the change");
-    assert(b.end - b.start == Duration(ports._port[1].char_ticks), "and what follows keeps the new character time");
-    page_free(page.next);
+    got = bursts(page, count);
+    assert(count == 1 && got[0].length == 2 && got[0].end && cast(const(char)[])page_chain_span(page, 0, 2) == "ab");
     page_free(page);
     ports.reconfigure(1, cfg, UartRxTiming(80, 35));
 
@@ -848,7 +768,7 @@ unittest
     assert(ports.take_errors(1) == (UartError.parity | UartError.framing) && ports.take_errors(1) == UartError.none);
 
     Page* hoard;
-    while (Page* taken = page_alloc_isr(0, uint.alignof, uint.sizeof, room))
+    while (Page* taken = page_alloc_isr(0, 1, 0, room))
     {
         taken.next = hoard;
         hoard = taken;

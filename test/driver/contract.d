@@ -107,9 +107,9 @@ size_t read(ref Uart u, ubyte[] buf, bool* gap = null, size_t* gaps = null)
 {
     size_t got;
     Page* chain = uart_rx_take(u);
-    foreach (i; 0 .. uart_burst_count(chain))
+    UartBurst burst;
+    for (UartBursts bursts = UartBursts(chain); bursts.next(burst); )
     {
-        UartBurst burst = uart_burst(chain, i);
         assert(got + burst.length <= buf.length, "the read buffer holds what arrived");
         for (size_t at = 0; at < burst.length; )
         {
@@ -119,9 +119,9 @@ size_t read(ref Uart u, ubyte[] buf, bool* gap = null, size_t* gaps = null)
         }
         got += burst.length;
         if (gap)
-            *gap = burst.gap;
+            *gap = cast(bool)burst.end;
         if (gaps)
-            *gaps += burst.gap;
+            *gaps += burst.end ? 1 : 0;
     }
     free_chain(chain);
     return got;
@@ -339,11 +339,12 @@ void uart_contract()
         rx(cast(ubyte)('x' + i));
     line_idle();
     Page* chain = uart_rx_take(u);
-    assert(chain && uart_burst_count(chain) == 2, "a gap splits the bursts");
-    UartBurst first = uart_burst(chain, 0), second = uart_burst(chain, 1);
-    assert(first.length == 3 && first.gap && cast(const(char)[])page_chain_span(chain, first.offset, 3) == "pqr");
-    assert(second.length == 2 && second.gap && cast(const(char)[])page_chain_span(chain, second.offset, 2) == "xy", "each ended by its own");
-    assert(second.start >= first.start && first.end >= first.start && first.end + first.quiet == second.start, "each carrying when its bytes arrived");
+    UartBursts bursts = UartBursts(chain);
+    UartBurst first, second, after;
+    assert(chain && bursts.next(first) && bursts.next(second) && !bursts.next(after), "a gap splits the bursts");
+    assert(first.length == 3 && first.end && cast(const(char)[])page_chain_span(chain, first.offset, 3) == "pqr");
+    assert(second.length == 2 && second.end && cast(const(char)[])page_chain_span(chain, second.offset, 2) == "xy", "each ended by its own");
+    assert(second.end >= first.end, "each carrying when its last byte arrived");
     free_chain(chain);
 
     // a gap after a take still ends the run taken, ahead of the run after it

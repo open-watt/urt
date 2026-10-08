@@ -845,9 +845,10 @@ unittest
             break;
     }
     chain = uart_rx_take(u);
-    assert(chain && uart_burst_count(chain) == 1, "the bytes arrive");
-    UartBurst burst = uart_burst(chain, 0);
-    assert(burst.length == 5 && !burst.gap && !burst.end && cast(const(char)[])page_chain_span(chain, 0, 5) == "hello", "a host reports no gap");
+    UartBursts bursts = UartBursts(chain);
+    UartBurst burst, after;
+    assert(chain && bursts.next(burst) && !bursts.next(after), "the bytes arrive");
+    assert(burst.length == 5 && !burst.end && cast(const(char)[])page_chain_span(chain, 0, 5) == "hello", "a host reports no gap");
     page_free(chain);
 
     assert(uart_write(u, "world") == 5);

@@ -35,7 +35,6 @@ enum has_exec     = false;
 enum has_retain   = false;
 enum has_memflags = true;
 enum has_pool_usage = true;
-enum account_usable_size = true;
 
 struct HeapRegion
 {

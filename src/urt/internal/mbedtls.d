@@ -101,6 +101,7 @@ void mbedtls_ssl_set_bio(mbedtls_ssl_context* ssl, void* p_bio, int function(voi
 int mbedtls_ssl_handshake(mbedtls_ssl_context* ssl);
 int mbedtls_ssl_read(mbedtls_ssl_context* ssl, ubyte* buf, size_t len);
 int mbedtls_ssl_write(mbedtls_ssl_context* ssl, const(ubyte)* buf, size_t len);
+int mbedtls_ssl_get_record_expansion(const(mbedtls_ssl_context)* ssl);
 int mbedtls_ssl_close_notify(mbedtls_ssl_context* ssl);
 int mbedtls_ssl_set_hostname(mbedtls_ssl_context* ssl, const(char)* hostname);
 uint mbedtls_ssl_get_verify_result(const(mbedtls_ssl_context)* ssl);

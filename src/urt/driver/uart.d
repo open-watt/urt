@@ -2,7 +2,7 @@ module urt.driver.uart;
 
 import urt.mem.page : Page;
 import urt.result : Result, InternalResult;
-import urt.time : Duration, MonoTime;
+import urt.time : MonoTime;
 
 version (Bouffalo)
     public import urt.driver.bl_common.uart;
@@ -230,17 +230,13 @@ alias UartRxCallback = bool function(Uart uart, UartCallbackContext context) not
 // Raised when the line finished a page and has room for more.
 alias UartTxCallback = bool function(Uart uart, UartCallbackContext context) nothrow @nogc;
 
-// A burst of received bytes in a taken chain, read as one series of bytes (page_chain_span walks it): start and end are
-// when its first and last bytes arrived, gap says a quiet line ended it, and quiet is how long the line stayed quiet
-// before the next burst, when that had begun by the take.
+// A burst of received bytes in a taken chain, read as one series of bytes (page_chain_span walks it): end is when its last
+// byte arrived, as a quiet line ended it; a burst still arriving at the take has none.
 struct UartBurst
 {
     size_t offset;
     size_t length;
-    MonoTime start;
     MonoTime end;
-    Duration quiet;
-    bool gap;
 }
 
 struct Uart
@@ -446,7 +442,7 @@ Page* uart_rx_take(ref Uart uart)
         return is_open(uart) ? uart_hw_rx_take(uart.port) : null;
 }
 
-public import urt.driver.uart_core : uart_burst, uart_burst_count;
+public import urt.driver.uart_core : UartBursts;
 
 UartError uart_check_errors(ref Uart uart)
 {

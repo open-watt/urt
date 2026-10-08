@@ -123,4 +123,4 @@ struct Chain
 }
 
 static if (num_ws2812 != 0)
-    __gshared Chain[num_ws2812] _chains;
+    __gshared Chain[num_ws2812] _chains = void;

@@ -304,7 +304,7 @@ struct serial_icounter
     int[9] reserved;
 }
 
-__gshared Known[ubyte.max] _known;
+__gshared Known[ubyte.max] _known = void;
 __gshared Device[num_uarts] _devices;
 __gshared ubyte _last_id = ubyte.max;
 

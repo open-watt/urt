@@ -177,7 +177,7 @@ struct Slot
 
 static if (num_pwm != 0)
 {
-    __gshared Slot[num_pwm] _slots;
+    __gshared Slot[num_pwm] _slots = void;
     __gshared ubyte[num_hw_pwm] _hw_owner = none;
     __gshared ubyte[num_soft_pwm] _soft_owner = none;
 

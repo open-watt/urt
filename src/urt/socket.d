@@ -401,6 +401,15 @@ Result create_socket(AddressFamily af, SocketType type, Protocol proto, out Sock
         if (socket == Socket.invalid)
             return socket_getlasterror();
 
+        version (WinSock)
+        {
+            // an ICMP port-unreachable would otherwise surface as WSAECONNRESET on every later recv
+            if (type == SocketType.datagram)
+            {
+                uint no = 0, returned;
+                WSAIoctl(socket.handle, SIO_UDP_CONNRESET, &no, no.sizeof, null, 0, &returned, null, null);
+            }
+        }
         return Result.success;
     }
 }

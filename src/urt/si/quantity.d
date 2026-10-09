@@ -347,7 +347,7 @@ nothrow @nogc:
     ptrdiff_t toString(char[] buffer, const(char)[], const(FormatArg)[]) const
     {
         static if (is_some_float!T)
-            return format_quantity_floating(value, unit, buffer);
+            return format_quantity_floating(value, unit, buffer, is(T == float));
         else
             return format_quantity_integer(cast(ulong)value, is_signed_int!T, unit, buffer);
     }
@@ -620,14 +620,14 @@ unittest
 }
 
 
-private:
+package(urt):
 
-ptrdiff_t format_quantity_floating(double value, ScaledUnit unit, char[] buffer)
+ptrdiff_t format_quantity_floating(double value, ScaledUnit unit, char[] buffer, bool as_float)
 {
     import urt.conv : format_float_shortest;
 
     value *= normalise_quantity_unit(unit);
-    ptrdiff_t length = format_float_shortest(value, buffer);
+    ptrdiff_t length = as_float ? format_float_shortest(cast(float)value, buffer) : format_float_shortest(value, buffer);
     return append_quantity_unit(buffer, length, unit);
 }
 
@@ -646,6 +646,8 @@ ptrdiff_t format_quantity_integer(ulong value, bool signed_value, ScaledUnit uni
         length = signed_value ? format_int(cast(long)value, buffer) : format_uint(value, buffer);
     return append_quantity_unit(buffer, length, unit);
 }
+
+private:
 
 double normalise_quantity_unit(ref ScaledUnit unit)
 {

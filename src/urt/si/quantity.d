@@ -622,12 +622,13 @@ unittest
 
 private:
 
-ptrdiff_t format_quantity_floating(double value, ScaledUnit unit, char[] buffer)
+ptrdiff_t format_quantity_floating(F)(F value, ScaledUnit unit, char[] buffer)
 {
     import urt.conv : format_float_shortest;
+    import urt.traits : Unqual;
 
-    value *= normalise_quantity_unit(unit);
-    ptrdiff_t length = format_float_shortest(value, buffer);
+    Unqual!F scaled = value * cast(F)normalise_quantity_unit(unit);
+    ptrdiff_t length = format_float_shortest(scaled, buffer);
     return append_quantity_unit(buffer, length, unit);
 }
 

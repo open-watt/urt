@@ -747,6 +747,7 @@ int WSAIoctl(SOCKET s, uint dwIoControlCode,
 
 enum IOC_VENDOR = 0x18000000;
 enum SIO_KEEPALIVE_VALS = IOC_IN | IOC_VENDOR | 4;
+enum SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
 
 /* Argument structure for SIO_KEEPALIVE_VALS */
 struct tcp_keepalive

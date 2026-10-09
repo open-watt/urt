@@ -161,6 +161,17 @@ void urt_ssl_attach_rng(mbedtls_ssl_config *conf)
 #endif
 
 
+// 2.x still offers TLS 1.0 and 1.1, whose CBC suites split one write into two records; 3.0 removed both
+void urt_ssl_conf_min_tls12(mbedtls_ssl_config *conf)
+{
+#if MBEDTLS_VERSION_MAJOR < 3
+    mbedtls_ssl_conf_min_version(conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+#else
+    (void)conf;
+#endif
+}
+
+
 // =====================================================================
 // PK -- ECDSA P-256 generate / sign / import / export
 //

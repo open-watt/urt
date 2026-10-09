@@ -102,6 +102,7 @@ int mbedtls_ssl_handshake(mbedtls_ssl_context* ssl);
 int mbedtls_ssl_read(mbedtls_ssl_context* ssl, ubyte* buf, size_t len);
 int mbedtls_ssl_write(mbedtls_ssl_context* ssl, const(ubyte)* buf, size_t len);
 int mbedtls_ssl_get_record_expansion(const(mbedtls_ssl_context)* ssl);
+int mbedtls_ssl_get_max_out_record_payload(const(mbedtls_ssl_context)* ssl);
 int mbedtls_ssl_close_notify(mbedtls_ssl_context* ssl);
 int mbedtls_ssl_set_hostname(mbedtls_ssl_context* ssl, const(char)* hostname);
 uint mbedtls_ssl_get_verify_result(const(mbedtls_ssl_context)* ssl);
@@ -120,6 +121,9 @@ void mbedtls_ssl_conf_sni(mbedtls_ssl_config* conf, mbedtls_ssl_conf_sni_cb f_sn
 // PSA internally); calls mbedtls_ssl_conf_rng with the module-static CTR-DRBG
 // on <4.
 void urt_ssl_attach_rng(mbedtls_ssl_config* conf);
+
+// floors a config at TLS 1.2, the oldest protocol a 3.x or later build carries
+void urt_ssl_conf_min_tls12(mbedtls_ssl_config* conf);
 
 enum MBEDTLS_SSL_VERIFY_NONE = 0;
 enum MBEDTLS_SSL_VERIFY_OPTIONAL = 1;

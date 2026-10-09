@@ -518,14 +518,10 @@ ifneq ($(filter esp8266 bk7231n bk7231t esp32-c2 esp32-h2 esp32-s2,$(PLATFORM)),
     TINY ?= 1
 endif
 ifeq ($(TINY),1)
-    DFLAGS := $(DFLAGS) -d-version=Tiny
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)Tiny
 endif
 ifeq ($(USE_MBEDTLS),1)
-ifdef VERSIONS
-    VERSIONS := $(VERSIONS),MbedTLS
-else
-    VERSIONS := MbedTLS
-endif
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)MbedTLS
 endif
 
 # Vendor/family versions consumed by URT's urt/driver/<x> code

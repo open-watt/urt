@@ -72,26 +72,21 @@ ulong parse_uint(const(char)[] str, size_t* bytes_taken = null, uint base = 10) 
 
     const(char)* s = str.ptr;
     const(char)* e = s + str.length;
+    const ulong cutoff = ulong.max / base;
+    const uint cutlim = cast(uint)(ulong.max % base);
 
-    if (base <= 10)
+    for (; s < e; ++s)
     {
-        for (; s < e; ++s)
+        uint digit = base <= 10 ? *s - '0' : get_digit(*s);
+        if (digit >= base)
+            break;
+        if (value >= cutoff && (value > cutoff || digit > cutlim))
         {
-            uint digit = *s - '0';
-            if (digit >= base)
-                break;
-            value = value*base + digit;
+            if (bytes_taken)
+                *bytes_taken = 0;
+            return 0;
         }
-    }
-    else
-    {
-        for (; s < e; ++s)
-        {
-            uint digit = get_digit(*s);
-            if (digit >= base)
-                break;
-            value = value*base + digit;
-        }
+        value = value*base + digit;
     }
 
     if (bytes_taken)
@@ -120,7 +115,7 @@ ulong parse_uint_with_exponent_and_base(const(char)[] str, out int exponent, out
     const(char)* s = str.ptr, e = s + str.length, p = s;
     base = parse_base_prefix(p, e);
     ulong value = p[0 .. e - p].parse_uint_with_exponent(exponent, bytes_taken, base);
-    if (value && *bytes_taken != 0)
+    if (bytes_taken && *bytes_taken != 0)
         *bytes_taken += p - s;
     return value;
 }
@@ -138,6 +133,10 @@ unittest
     assert(parse_int("Wow", &taken, 36) == 42368 && taken == 3);
     assert(parse_uint_with_base("0x100", &taken) == 0x100 && taken == 5);
     assert(parse_int_with_base("-0x100", &taken) == -0x100 && taken == 6);
+    assert(parse_uint("18446744073709551615", &taken) == ulong.max && taken == 20);
+    assert(parse_uint("18446744073709551616", &taken) == 0 && taken == 0);
+    assert(parse_uint("10000000000000000", &taken, 16) == 0 && taken == 0);
+    assert(parse_uint_with_base("0x0", &taken) == 0 && taken == 3);
 
     int e;
     assert("0001023000".parse_uint_with_exponent(e, &taken, 10) == 1023 && e == 3 && taken == 10);
@@ -731,6 +730,10 @@ unittest
     check_shortest(float.max);
     check_shortest(double.nan);
     check_shortest(-double.infinity);
+    check_shortest(100.0, "100");
+    check_shortest(1310.0, "1310");
+    check_shortest(1234567.0f, "1234567");
+    check_shortest(1e17, "1e+17");
 
     assert(format_float_shortest(1.5, null) == 3);
     assert(format_float_shortest(double.nan, null) == 3);
@@ -860,6 +863,9 @@ ptrdiff_t format_shortest_impl(double value, char[] buffer, uint max_digits, boo
         return copy_shortest("inf", buffer);
     if (value == -double.infinity)
         return copy_shortest("-inf", buffer);
+    double whole = as_float ? 1e9 : 1e17;
+    if (value > -whole && value < whole && value == cast(long)value)
+        return format_int(cast(long)value, buffer);
 
     version (Tiny)
     {

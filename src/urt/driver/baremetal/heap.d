@@ -293,10 +293,16 @@ void init_pools()
         p.base = cast(void*)heap_regions[i].start;
         p.size = heap_regions[i].end - heap_regions[i].start;
         p.name = heap_regions[i].name;
-        if (p.size <= tlsf_pool_overhead())
-            continue;
-        p.tlsf = tlsf_create(_control[i].ptr);
-        p.pool = tlsf_add_pool(p.tlsf, p.base, p.size);
+        if (p.size > tlsf_pool_overhead())
+        {
+            p.tlsf = tlsf_create(_control[i].ptr);
+            p.pool = tlsf_add_pool(p.tlsf, p.base, p.size);
+        }
+        if (!p.pool)
+        {
+            p.tlsf = null;
+            p.size = 0;
+        }
     }
 }
 

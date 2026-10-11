@@ -1232,13 +1232,21 @@ nothrow @nogc:
                     // unknown scalar enum values fall through to the honest number
                 }
                 if (isQuantity())
-                    return asQuantity().toString(buffer, format, formatArgs);
+                {
+                    if (count == Nanosecond.pack && isLong())
+                        return dur!"nsecs"(value.l).toString(buffer, format, formatArgs);
+                    ScaledUnit unit;
+                    unit.pack = count;
+                    if (isDouble())
+                        return format_quantity_floating(value.d, unit, buffer, isFloat());
+                    return format_quantity_integer(value.ul, isLong(), unit, buffer);
+                }
 
                 if (isDouble())
                 {
                     if (format)
                         return asDouble().format_float(buffer, format);
-                    return asDouble().format_float_shortest(buffer);
+                    return isFloat() ? asFloat().format_float_shortest(buffer) : asDouble().format_float_shortest(buffer);
                 }
 
                 // TODO: parse args?
@@ -1524,6 +1532,7 @@ unittest
     import urt.inet;
     import urt.meta : AliasSeq;
     import urt.si.quantity : Metres;
+    import urt.si.unit : Metre;
 
     // fabricate some variants
     Variant v;
@@ -1540,6 +1549,22 @@ unittest
     assert(v[2]["bogus"].asBool == false);
     assert(v[3].asUser!IPAddr == IPAddrLit!"127.0.0.1");
     assert(v[4].asQuantity == Metres(10));
+
+    char[32] text;
+    ptrdiff_t text_len = Variant(3.2616f).toString(text, null, null);
+    assert(text[0 .. text_len] == "3.2616");
+    text_len = Variant(Quantity!(float, ScaledUnit(Metre))(3.2616f)).toString(text, null, null);
+    assert(text[0 .. text_len] == "3.2616m");
+    text_len = Variant(Quantity!(ushort, ScaledUnit(Metre))(1310)).toString(text, null, null);
+    assert(text[0 .. text_len] == "1310m");
+    text_len = Variant(dur!"seconds"(30)).toString(text, null, null);
+    assert(text[0 .. text_len] == "30s");
+    text_len = Variant(Quantity!(double, Nanosecond)(1.5)).toString(text, null, null);
+    assert(text[0 .. text_len] == "1.5ns");
+    text_len = Variant(Quantity!(long, ScaledUnit(Metre))(9007199254740993)).toString(text, null, null);
+    assert(text[0 .. text_len] == "9007199254740993m");
+    text_len = Variant(Quantity!(ulong, ScaledUnit(Metre))(ulong.max)).toString(text, null, null);
+    assert(text[0 .. text_len] == "18446744073709551615m");
 
     const(Variant)* object = &v[2];
     Variant object_copy = Variant(*object);

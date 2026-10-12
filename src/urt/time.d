@@ -261,106 +261,90 @@ pure nothrow @nogc:
     import urt.string.format : FormatArg;
     ptrdiff_t toString(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
     {
-        return duration_to_string(as!"nsecs", buffer);
+        return duration_to_string(as!"nsecs", buffer, format);
     }
 
     ptrdiff_t fromString(const(char)[] s)
     {
         import urt.conv : parse_uint;
-        import urt.string.ascii : is_alpha, is_numeric, ieq;
+        import urt.string.ascii : is_numeric;
 
-        if (s.length == 0)
+        if (!s.length)
             return -1;
 
-        size_t offset = 0;
-        bool negate = false;
-        if (s[0] == '-' || s[0] == '+')
-        {
-            negate = s[0] == '-';
-            offset = 1;
-        }
-
-        long total_nsecs = 0;
+        const(char)* p = s.ptr, end = p + s.length;
+        bool negate = *p == '-';
+        if (negate || *p == '+')
+            ++p;
+        immutable ulong limit = cast(ulong)long.max + negate;
+        ulong remaining = limit;
         ubyte last_unit = 8;
 
-        while (offset < s.length)
+        while (p < end)
         {
-            if (!s[offset].is_numeric)
-                return last_unit != 8 ? offset : -1;
-            size_t len;
-            long value = s[offset..$].parse_uint(&len);
-            if (len == 0)
-                return last_unit != 8 ? offset : -1;
-            offset += len;
-
-            if (offset >= s.length)
+            if (!(*p).is_numeric)
+                break;
+            size_t digits;
+            ulong whole = p[0 .. end - p].parse_uint(&digits);
+            if (!digits)
                 return -1;
+            p += digits;
 
-            // Parse unit
-            size_t unit_start = offset;
-            while (offset < s.length && s[offset].is_alpha)
-                offset++;
+            uint fraction, divisor = 1;
+            if (p < end && *p == '.')
+            {
+                ++p;
+                fraction = cast(uint)p[0 .. end - p].parse_uint(&digits);
+                if (digits - 1 >= 9)
+                    return -1;
+                p += digits;
+                divisor = digit_multipliers.ptr[9 - digits];
+            }
 
-            if (offset == unit_start)
+            if (p == end)
                 return -1;
-
-            const(char)[] unit = s[unit_start..offset];
-
-            // Convert unit to nanoseconds and check for duplicates
-            ubyte this_unit;
-            if (unit.ieq("w"))
+            // 'd' through 'w' map to unit indices; 8 is invalid.
+            static immutable ubyte[20] unit_map = [6, 8, 8, 8, 5, 8, 8, 8, 8, 2, 0, 8, 8, 8, 8, 3, 8, 1, 8, 7];
+            uint c = (*p++ | 0x20) - 'd';
+            if (c >= unit_map.length)
+                return -1;
+            ubyte this_unit = unit_map.ptr[c];
+            if (this_unit == 2 && end - p >= 2 && (p[0] | 0x20) == 'i' && (p[1] | 0x20) == 'n')
             {
-                value *= 604_800_000_000_000;
-                this_unit = 7;
-            }
-            else if (unit.ieq("d"))
-            {
-                value *= 86_400_000_000_000;
-                this_unit = 6;
-            }
-            else if (unit.ieq("h"))
-            {
-                value *= 3_600_000_000_000;
-                this_unit = 5;
-            }
-            else if (unit.ieq("m"))
-            {
-                value *= 60_000_000_000;
                 this_unit = 4;
+                p += 2;
             }
-            else if (unit.ieq("s"))
+            else if (this_unit < 3)
             {
-                value *= 1_000_000_000;
-                this_unit = 3;
+                if (p == end || (*p++ | 0x20) != 's')
+                    return -1;
             }
-            else if (unit.ieq("ms"))
-            {
-                value *= 1_000_000;
-                this_unit = 2;
-            }
-            else if (unit.ieq("us"))
-            {
-                value *= 1_000;
-                this_unit = 1;
-            }
-            else if (unit.ieq("ns"))
-                this_unit = 0;
-            else
-                return -1;
 
-            // Check for ordering, duplicates, and only one of ms/us/ns may be present
-            if (this_unit >= last_unit || (this_unit < 2 && last_unit < 3))
+            if ((p < end && cast(uint)((*p | 0x20) - 'a') < 26) || this_unit >= last_unit)
                 return -1;
-            last_unit = this_unit;
-
-            total_nsecs += value;
+            last_unit = this_unit < 3 ? 0 : this_unit;
+            uint scale = duration_scales.ptr[this_unit];
+            ulong ns_scale = this_unit >= 3 ? cast(ulong)scale * 1_000_000_000 : scale;
+            if (whole > remaining / ns_scale)
+                return -1;
+            remaining -= whole * ns_scale;
+            fraction *= 1_000_000_000 / divisor;
+            ulong tail = this_unit >= 3 ? cast(ulong)fraction * scale : fraction / (1_000_000_000 / scale);
+            if (tail > remaining)
+                return -1;
+            remaining -= tail;
+            if (divisor != 1)
+            {
+                if (p < end && (*p).is_numeric)
+                    return -1;
+                break;
+            }
         }
 
         if (last_unit == 8)
             return -1;
-
-        ticks = nsecs_to_ticks(negate ? -total_nsecs : total_nsecs);
-        return offset;
+        ticks = nsecs_to_ticks(cast(long)(negate ? remaining - limit : limit - remaining));
+        return p - s.ptr;
     }
 
     version (Windows)
@@ -507,8 +491,8 @@ pure nothrow @nogc:
                 while (nsecs)
                 {
                     ++len;
-                    uint digit = nsecs / digit_multipliers[m];
-                    nsecs -= digit * digit_multipliers[m++];
+                    uint digit = nsecs / digit_multipliers[m + 1];
+                    nsecs -= digit * digit_multipliers[1 + m++];
                 }
             }
             return len;
@@ -544,9 +528,9 @@ pure nothrow @nogc:
             {
                 if (offset == buffer.length)
                     return -1;
-                int digit = nsecs / digit_multipliers[m];
+                int digit = nsecs / digit_multipliers[m + 1];
                 buffer[offset++] = cast(char)('0' + digit);
-                nsecs -= digit * digit_multipliers[m++];
+                nsecs -= digit * digit_multipliers[1 + m++];
             }
         }
         return offset;
@@ -828,8 +812,8 @@ pure nothrow @nogc:
                 while (nsecs)
                 {
                     ++len;
-                    uint digit = nsecs / digit_multipliers[m];
-                    nsecs -= digit * digit_multipliers[m++];
+                    uint digit = nsecs / digit_multipliers[m + 1];
+                    nsecs -= digit * digit_multipliers[1 + m++];
                 }
             }
             return len;
@@ -857,9 +841,9 @@ pure nothrow @nogc:
             {
                 if (offset == buffer.length)
                     return -1;
-                int digit = nsecs / digit_multipliers[m];
+                int digit = nsecs / digit_multipliers[m + 1];
                 buffer[offset++] = cast(char)('0' + digit);
-                nsecs -= digit * digit_multipliers[m++];
+                nsecs -= digit * digit_multipliers[1 + m++];
             }
         }
         return offset;
@@ -1217,7 +1201,7 @@ __gshared Duration g_current_timezone;
 __gshared immutable MonoTime startTime;
 
 __gshared immutable string[12] g_month_names = [ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" ];
-__gshared immutable uint[9] digit_multipliers = [ 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1 ];
+__gshared immutable uint[10] digit_multipliers = [ 1_000_000_000, 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1 ];
 
 version (Windows)
 {
@@ -1387,57 +1371,99 @@ package(urt) void init_clock()
         static assert(false, "TODO");
 }
 
-ptrdiff_t duration_to_string(long ns, char[] buffer) pure
+// Subsecond entries are nanoseconds; the remaining entries are seconds.
+private immutable uint[8] duration_scales = [1, 1_000, 1_000_000, 1, 60, 3_600, 86_400, 604_800];
+
+ptrdiff_t duration_to_string(long ns, char[] buffer, const(char)[] format = null) pure
 {
-    import urt.conv : format_int;
+    import urt.conv : format_uint;
 
-    char[48] tmp = void;
-    size_t len = 0;
-
-    long a = ns;
-    if (a < 0)
+    uint terms = 9, places = 9;
+    if (format.length)
     {
-        tmp[len++] = '-';
-        a = -a;
-    }
-
-    if (a == 0)
-    {
-        tmp[len++] = '0';
-        tmp[len++] = 's';
-    }
-    else
-    {
-        static immutable long[5] divs = [604_800_000_000_000L, 86_400_000_000_000L, 3_600_000_000_000L, 60_000_000_000L, 1_000_000_000L];
-        static immutable string[5] units = ["w", "d", "h", "m", "s"];
-        foreach (i; 0 .. 5)
+        if ((format.length != 2 && format.length != 4) || format.ptr[0] != 't')
+            return -2;
+        terms = format.ptr[1] - '0';
+        if (terms - 1 >= 9)
+            return -2;
+        if (format.length == 4)
         {
-            long c = a / divs[i];
-            if (c == 0)
-                continue;
-            len += c.format_int(tmp[len .. $], 10, 1, '0');
-            foreach (ch; units[i])
-                tmp[len++] = ch;
-            a %= divs[i];
-        }
-        if (a != 0)
-        {
-            long v;
-            const(char)[] u;
-            if (a % 1_000_000 == 0) { v = a / 1_000_000; u = "ms"; }
-            else if (a % 1_000 == 0) { v = a / 1_000; u = "us"; }
-            else { v = a; u = "ns"; }
-            len += v.format_int(tmp[len .. $], 10, 1, '0');
-            foreach (ch; u)
-                tmp[len++] = ch;
+            places = format.ptr[3] - '0';
+            if (format.ptr[2] != '.' || places > 9)
+                return -2;
         }
     }
 
+    ulong a = ns < 0 ? 0UL - cast(ulong)ns : cast(ulong)ns;
+    ulong seconds = a / 1_000_000_000;
+    uint fraction = cast(uint)(a % 1_000_000_000);
+    uint unit = 3;
+    if (!seconds && fraction)
+    {
+        unit = 2;
+        while (fraction < duration_scales.ptr[unit])
+            --unit;
+    }
+    uint quantum = digit_multipliers.ptr[9 - (unit * 3 > places ? unit * 3 - places : 0)];
+    fraction += quantum / 2;
+    fraction -= fraction % quantum;
+    if (fraction == 1_000_000_000)
+    {
+        ++seconds;
+        fraction = 0;
+    }
+    if (unit < 3 && (seconds || fraction >= duration_scales.ptr[unit] * 1_000))
+        ++unit;
+
+    uint i = 7, c = cast(uint)(seconds / 604_800);
+    uint whole = cast(uint)(seconds % 604_800);
+    if (!seconds)
+    {
+        i = unit;
+        c = fraction / duration_scales.ptr[unit];
+        fraction %= duration_scales.ptr[unit];
+    }
+    // At most 30 characters; each numeric field fits in ten.
+    char[32] tmp = void;
+    char* p = tmp.ptr;
+    if (ns < 0)
+        *p++ = '-';
+    while (true)
+    {
+        if (c || i == unit)
+        {
+            p += c.format_uint(p[0 .. 10]);
+            if (i == unit && fraction)
+            {
+                *p++ = '.';
+                p += fraction.format_uint(p[0 .. 10], 10, unit * 3, '0');
+                while (p[-1] == '0')
+                    --p;
+            }
+            *p++ = "numsmhdw".ptr[i];
+            if (i < 3)
+                *p++ = 's';
+            else if (i == 4 && !format.length)
+            {
+                *p++ = 'i';
+                *p++ = 'n';
+            }
+            if (--terms == 0 || !(whole | fraction))
+                break;
+        }
+        if (i == unit)
+            break;
+        --i;
+        c = whole / duration_scales.ptr[i];
+        whole %= duration_scales.ptr[i];
+    }
+
+    size_t len = p - tmp.ptr;
     if (!buffer.ptr)
         return len;
     if (buffer.length < len)
         return -1;
-    buffer.ptr[0 .. len] = tmp[0 .. len];
+    buffer.ptr[0 .. len] = tmp.ptr[0 .. len];
     return len;
 }
 
@@ -1459,8 +1485,8 @@ ptrdiff_t time_to_string(long ns, char[] buffer) pure
             do
             {
                 ++tail;
-                uint digit = cast(uint)(remainder / digit_multipliers[m]);
-                remainder -= digit * digit_multipliers[m++];
+                uint digit = cast(uint)(remainder / digit_multipliers[m + 1]);
+                remainder -= digit * digit_multipliers[1 + m++];
             }
             while (remainder);
         }
@@ -1491,7 +1517,7 @@ ptrdiff_t time_to_string(long ns, char[] buffer) pure
         {
             if (buffer.length <= len)
                 return -1;
-            uint m = digit_multipliers[i++];
+            uint m = digit_multipliers[1 + i++];
             uint digit = cast(uint)(remainder / m);
             buffer.ptr[len++] = cast(char)('0' + digit);
             remainder -= digit * m;
@@ -1503,6 +1529,89 @@ ptrdiff_t time_to_string(long ns, char[] buffer) pure
 unittest
 {
     import urt.mem.temp;
+
+    static void duration_text(long ns, string expected, string spec = null)
+    {
+        char[48] buffer;
+        ptrdiff_t length = duration_to_string(ns, buffer, spec);
+        assert(length == expected.length && buffer[0 .. length] == expected);
+        assert(duration_to_string(ns, null, spec) == length);
+        buffer[] = '?';
+        assert(duration_to_string(ns, buffer[0 .. length - 1], spec) == -1);
+        assert(buffer[0] == '?');
+    }
+    duration_text(0, "0s");
+    duration_text(10_010_000_000, "10.01s");
+    duration_text(-10_010_000_000, "-10.01s");
+    duration_text(350_000_000, "350ms");
+    duration_text(-10_000, "-10us");
+    duration_text(10_000, "10us");
+    duration_text(100, "100ns");
+    duration_text(10_250, "10.25us");
+    duration_text(600_000_000_000, "10min");
+    duration_text(600_000_000_000, "10m", "t2");
+    duration_text(60_300_000_000, "1min0.3s");
+    duration_text(3_723_456_000_000, "1h2min3.456s");
+    duration_text(3_723_456_000_000, "1h2m", "t2");
+    duration_text(3_723_456_000_000, "1h2m3.456s", "t9");
+    duration_text(3_603_000_000_000, "1h3s", "t2");
+    duration_text(3_603_000_000_000, "1h", "t1");
+    duration_text(-62_300_000_000, "-1m2.3s", "t2.1");
+    duration_text(10_014_000_000, "10.01s", "t2.2");
+    duration_text(10_016_000_000, "10.02s", "t2.2");
+    duration_text(-10_015_000_000, "-10.02s", "t2.2");
+    duration_text(350_125_000, "350.13ms", "t2.2");
+    duration_text(999_999_000, "1s", "t2.2");
+    duration_text(59_999_000_000, "1m", "t2.2");
+    duration_text(3_659_999_000_000, "1h1m", "t2.2");
+    duration_text(7_199_999_000_000, "1h59m", "t2");
+    duration_text(7_199_999_000_000, "2h", "t2.2");
+    duration_text(604_799_999_000_000, "1w", "t2.2");
+    duration_text(999_999, "1ms", "t2.2");
+    duration_text(-1, "-1ns", "t2.0");
+    duration_text(long.max, "15250w1d23h47min16.854775807s");
+    duration_text(long.min, "-15250w1d23h47min16.854775808s");
+    assert(tformat("{0,t2.1}", -62_300.msecs) == "-1m2.3s");
+    foreach (spec; ["t", "t/", "t0", "t10", "x2", "t2.", "t2./", "t2.x", "t2.10", ".2"])
+        assert(duration_to_string(1, null, spec) == -2);
+
+    Duration parsed_duration;
+    ulong sample = 1;
+    foreach (i; 0 .. 256)
+    {
+        sample = sample * 6364136223846793005UL + 1;
+        char[48] buffer;
+        long ns = cast(long)sample >> (i % 64);
+        auto length = duration_to_string(ns, buffer);
+        assert(parsed_duration.fromString(buffer[0 .. length]) == length);
+        assert(parsed_duration.ticks == nsecs_to_ticks(ns));
+    }
+    foreach (text; ["10.1s", "-10.1s", "0.01ms", "350.125ms", "1min10.01s", "0.000000001s", "1.5h"])
+    {
+        assert(parsed_duration.fromString(text) == text.length);
+        long parsed_ticks = parsed_duration.ticks;
+        const(char)[] formatted = tconcat(parsed_duration)[];
+        assert(parsed_duration.fromString(formatted) == formatted.length && parsed_duration.ticks == parsed_ticks);
+    }
+    assert(parsed_duration.fromString("10.1s") == 5 && parsed_duration.as!"msecs" == 10_100);
+    assert(parsed_duration.fromString("0.01ms") == 6 && parsed_duration.as!"usecs" == 10);
+    assert(parsed_duration.fromString("1.000000001s") == 12 && parsed_duration.ticks == nsecs_to_ticks(1_000_000_001));
+    foreach (text; ["1W", "1D", "1H", "1MiN", "1S", "1Ms", "1uS", "1NS"])
+        assert(parsed_duration.fromString(text) == text.length);
+    assert(parsed_duration.fromString("1MIN") == 4 && parsed_duration.as!"minutes" == 1);
+    assert(parsed_duration.fromString("1MS") == 3 && parsed_duration.as!"msecs" == 1);
+    assert(parsed_duration.fromString("9223372036854775807ns") == 21);
+    assert(parsed_duration.ticks == nsecs_to_ticks(long.max));
+    assert(parsed_duration.fromString("-9223372036854775808ns") == 22);
+    assert(parsed_duration.ticks == nsecs_to_ticks(long.min));
+    foreach (text; ["", "10", "10.1", "10m", "10M", "10m2s", "1mi", "1mins", "1min2", "1mm", "1ss", "1usx", "1wx", "1xs", "1u", "1n", "1e", "1z", "1uin", "1nin",
+        "10.s", ".1s", "1.+1s", "1.-1s", "10.1s1ms", "1.1234567890s", "1.0000000000s", "9223372036854775808ns",
+        "-9223372036854775809ns", "184467440737095516160ns", "999999999999999999w"])
+    {
+        long previous = parsed_duration.ticks;
+        assert(parsed_duration.fromString(text) == -1);
+        assert(parsed_duration.ticks == previous);
+    }
 
     assert(scale!(125, 2)(3L) == 187);
     assert(scale!(125, 2)(-3L) == -187);
@@ -1530,9 +1639,9 @@ unittest
         assert(delay > Duration.zero && delay <= 10.msecs);
     }
 
-    assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "3h47m34s123ms");
+    assert(tconcat(msecs(3_600_000*3 + 60_000*47 + 1000*34 + 123))[] == "3h47min34.123s");
     assert(tconcat(msecs(3_600_000*-123))[] == "-5d3h");
-    assert(tconcat(usecs(3_600_000_000*-123 + 1))[] == "-5d2h59m59s999999us");
+    assert(tconcat(usecs(3_600_000_000*-123 + 1))[] == "-5d2h59min59.999999s");
     assert(MonoTime().toString(null, null, null) == 10);
     assert(tconcat(get_time())[0..2] == "T+");
 
@@ -1541,33 +1650,33 @@ unittest
 
     // Simple single units
     assert(d.fromString("5s") == 2 && d.as!"seconds" == 5);
-    assert(d.fromString("10m") == 3 && d.as!"minutes" == 10);
+    assert(d.fromString("10min") == 5 && d.as!"minutes" == 10);
 
     // Compound durations
-    assert(d.fromString("1h30m") == 5 && d.as!"minutes" == 90);
-    assert(d.fromString("5m30s") == 5 && d.as!"seconds" == 330);
+    assert(d.fromString("1h30min") == 7 && d.as!"minutes" == 90);
+    assert(d.fromString("5min30s") == 7 && d.as!"seconds" == 330);
 
     // Duplicate units should fail
-    assert(d.fromString("30m30m") == -1);
+    assert(d.fromString("30min30min") == -1);
     assert(d.fromString("1h2h") == -1);
     assert(d.fromString("5s10s") == -1);
 
     // Out-of-order units should fail
-    assert(d.fromString("30s5m") == -1);  // s before m
-    assert(d.fromString("1m2h") == -1);   // m before h
-    assert(d.fromString("5s10ms5m") == -1);  // m after s
+    assert(d.fromString("30s5min") == -1);
+    assert(d.fromString("1min2h") == -1);
+    assert(d.fromString("5s10ms5min") == -1);
     assert(d.fromString("5s10ms10ns") == -1);  // ms and ns (only one sub-second unit allowed)
 
     // Improper units should fail
     assert(d.fromString("30z") == -1);  // not a time denomination
 
     // Correctly ordered units should work
-    assert(d.fromString("1d2h30m15s") == 10 && d.as!"seconds" == 86_400 + 7_200 + 1_800 + 15);
+    assert(d.fromString("1d2h30min15s") == 12 && d.as!"seconds" == 86_400 + 7_200 + 1_800 + 15);
 
     // A single leading sign negates the whole duration (every component), matching toString
     assert(d.fromString("-5d3h") == 5 && d.as!"hours" == -123);
     assert(d.fromString("-30s") == 4 && d.as!"seconds" == -30);
-    assert(d.fromString("+5m") == 3 && d.as!"minutes" == 5);
+    assert(d.fromString("+5min") == 5 && d.as!"minutes" == 5);
     assert(d.fromString("-") == -1);        // bare sign, no magnitude
     assert(d.fromString("5s-3s") == 2);     // embedded sign terminates the parse after "5s"
 

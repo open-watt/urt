@@ -288,6 +288,13 @@ nothrow @nogc:
         {}
     }
 
+    // Nothing queued and the last character gone; a caller that waits polls this rather than spinning.
+    bool tx_done(uint id)
+    {
+        auto guard = section();
+        return !tx_queued(id) && tx_idle(id);
+    }
+
     // RX, the consumer's side: every page received since the last take, the one still filling included, oldest first.
     // The caller frees them; how full they came back sizes the pages to come.
     Page* rx_take(uint id)
@@ -637,13 +644,15 @@ unittest
     assert(ports.tx_pending(1) == 400 && (!counted || in_use() == baseline + 2), "short writes share pages");
     assert(ports.send(1, make("|lent|")) && ports.write(1, "tail") == 4 && ports.tx_pending(1) == 410);
     Model.busy = true;
+    assert(!ports.tx_done(1), "a stalled line is not done");
     immutable t1 = getTime();
     ports.drain(1);
     assert(getTime() - t1 >= tx_drain_limit && getTime() - t1 < tx_drain_limit + 100.msecs, "a drain against a stalled line is bounded");
     Model.stalled = false;
+    ports.kick(1);
+    assert(ports.tx_pending(1) == 0 && !ports.tx_done(1), "an empty queue is not done while the last character goes out");
     Model.busy = false;
-    ports.drain(1);
-    assert(ports.tx_pending(1) == 0 && in_use() == baseline);
+    assert(ports.tx_done(1) && in_use() == baseline);
     foreach (i; 0 .. 100)
         assert(Model.wire[14 + i * 4 .. 18 + i * 4] == "0123");
     assert(Model.wire[414 .. 424] == "|lent|tail", "what was written goes out before what was sent after it");

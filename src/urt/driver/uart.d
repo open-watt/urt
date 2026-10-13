@@ -339,7 +339,15 @@ Result uart_open(ref Uart uart, ubyte port, ref const UartConfig cfg, UartRxCall
         assert(false, "no UART on this platform");
     else
     {
-        immutable uint slot = uart_slot(port);
+        uint slot = uart_slot(port);
+        static if (__traits(compiles, uart_hw_reclaim()))
+        {
+            if (slot >= num_uarts)
+            {
+                uart_hw_reclaim();
+                slot = uart_slot(port);
+            }
+        }
         if (slot >= num_uarts || cfg.baud_rate == 0)
             return InternalResult.invalid_parameter;
         if (!uart_config_supported(cfg))
@@ -422,13 +430,13 @@ size_t uart_tx_queued(ref const Uart uart)
         return is_open(uart) ? uart_hw_tx_pending(uart.port) : 0;
 }
 
-// Waits, boundedly, for what was sent to leave the line.
-void uart_tx_flush(ref Uart uart)
+// What was sent has left the line; a closed port has nothing left to send.
+bool uart_tx_done(ref const Uart uart)
 {
     static if (num_uarts == 0)
         assert(false, "no UART on this platform");
-    else if (is_open(uart))
-        uart_hw_flush(uart.port);
+    else
+        return !is_open(uart) || uart_hw_tx_done(uart.port);
 }
 
 // RX

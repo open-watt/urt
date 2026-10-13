@@ -188,15 +188,9 @@ int parse_int_fast(ref const(char)[] text, out bool success) pure
     const(char)* s = text.ptr;
     const char* e = s + text.length;
 
-    bool neg = false;
-    if (*s == '-')
+    bool neg = *s == '-';
+    if (neg || *s == '+')
     {
-        neg = true;
-        goto skip;
-    }
-    if (*s == '+')
-    {
-    skip:
         if (text.length == 1)
             return 0;
         ++s;
@@ -205,8 +199,6 @@ int parse_int_fast(ref const(char)[] text, out bool success) pure
     if (i > 9)
         return 0;
 
-    uint max = int.max + neg;
-
     while (true)
     {
         if (++s == e)
@@ -214,11 +206,9 @@ int parse_int_fast(ref const(char)[] text, out bool success) pure
         uint c = *s - '0';
         if (c > 9)
             break;
-        if (i > int.max / 10) // check for overflow
-            return 0; // should we take the number from the text stream though?
+        if (i >= int.max / 10 && (i > int.max / 10 || c > int.max % 10 + neg))
+            return 0;
         i = i*10 + c;
-        if (i > max) // check for overflow
-            return 0; // should we take the number from the text stream though?
     }
     text = s[0 .. e - s];
     success = true;

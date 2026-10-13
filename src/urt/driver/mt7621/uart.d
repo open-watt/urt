@@ -65,7 +65,6 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
 
 void uart_hw_close(uint id)
 {
-    uart_hw_flush(id);
     irq_line_disable(uart_irq(id));
     write_reg(uart_base(id), ier, 0);
     _ports.release(id - first_uart);
@@ -133,10 +132,8 @@ UartError uart_hw_check_errors(uint id)
     return _ports.take_errors(id - first_uart);
 }
 
-void uart_hw_flush(uint id)
-{
-    _ports.drain(id - first_uart);
-}
+bool uart_hw_tx_done(uint id)
+    => _ports.tx_done(id - first_uart);
 
 // Blocking console output for early boot and fault context; queued output goes first.
 void uart0_hw_puts(const(char)[] s)

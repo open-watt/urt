@@ -246,7 +246,6 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
 
 void uart_hw_close(uint id)
 {
-    uart_hw_flush(id);
     immutable uint base = uart_bases[id];
     reg_write(base + REG_INT_ENABLE, 0);
     reg_write(base + REG_CONFIG, reg_read(base + REG_CONFIG) & ~(CFG_TX_ENABLE | CFG_RX_ENABLE));
@@ -291,11 +290,8 @@ UartCounters uart_hw_counters(uint id)
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-void uart_hw_flush(uint id)
-{
-    if (reg_read(uart_bases[id] + REG_CONFIG) & CFG_TX_ENABLE)
-        _ports.drain(id);
-}
+bool uart_hw_tx_done(uint id)
+    => !(reg_read(uart_bases[id] + REG_CONFIG) & CFG_TX_ENABLE) || _ports.tx_done(id);
 
 // Blocking output for early boot and fault context on UART1, the console.
 void uart0_hw_puts(const(char)[] s)

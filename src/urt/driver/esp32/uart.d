@@ -57,7 +57,6 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
 
 void uart_hw_close(uint id)
 {
-    uart_hw_flush(id);
     urt_uart_close(id);
     _ports.release(id);
 }
@@ -97,10 +96,8 @@ UartCounters uart_hw_counters(uint id)
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-void uart_hw_flush(uint id)
-{
-    _ports.drain(id);
-}
+bool uart_hw_tx_done(uint id)
+    => _ports.tx_done(id);
 
 void uart0_hw_puts(const(char)[] s)
 {

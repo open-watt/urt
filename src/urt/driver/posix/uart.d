@@ -36,6 +36,7 @@ enum bool uart_reports_rx_gap = false;
 // adapter plugged back in, is a new port.
 ubyte uart_hw_find(const(char)[] name)
 {
+    uart_hw_reclaim();
     char[256] z = void;
     char[4096] resolved = void;
     if (name.length >= z.length)
@@ -73,16 +74,13 @@ ubyte uart_hw_find(const(char)[] name)
 
 // An open port's place among the core's; a closed one takes a free place when it opens.
 uint uart_hw_slot(ubyte port)
+    => select_slot(_devices[], port);
+
+// lets go the slots of finished closes; only ahead of an open's first lookup, never between two
+void uart_hw_reclaim()
 {
-    uint free = uint.max;
-    foreach (i, ref d; _devices)
-    {
-        if (d.fd >= 0 && d.port == port)
-            return cast(uint)i;
-        if (d.fd < 0 && free == uint.max)
-            free = cast(uint)i;
-    }
-    return port < ubyte.max && _known[port].path_length && !_known[port].dead ? free : uint.max;
+    foreach (ref d; _devices)
+        advance_close(&d);
 }
 
 // The serial ttys sysfs lists, with the USB identity of those behind an adapter; a tty with no node to open is passed over.
@@ -128,7 +126,8 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, Uar
     immutable uint id = uart_hw_slot(cast(ubyte)port);
     Device* d = &_devices[id];
     Known* k = &_known[port];
-    if (d.fd >= 0)
+    advance_close(d);
+    if (d.held)
         return false;
     immutable int fd = open(k.path.ptr, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0)
@@ -145,7 +144,7 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, Uar
         close(fd);
         return false;
     }
-    set_low_latency(fd);
+    tune_driver(fd);
     tcflush(fd, TCIOFLUSH);
     d.port = cast(ubyte)port;
     d.fd = fd;
@@ -162,16 +161,16 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, Uar
     return true;
 }
 
-// Output the peer's flow control will never take is discarded, so a close cannot block on it.
+// close() waits up to closing_wait for output a stalled peer never takes, and tcflush does not reach what a USB adapter
+// holds; a thread of its own takes the descriptor, so the caller never waits.
 void uart_hw_close(uint port)
 {
-    uart_hw_flush(port);
     immutable uint id = uart_hw_slot(cast(ubyte)port);
     Device* d = &_devices[id];
     _service.remove(id);
-    tcflush(d.fd, TCIOFLUSH);
-    close(d.fd);
+    d.closing_fd = d.fd;
     d.fd = -1;
+    advance_close(d);
     atomicStore(d.closing, false);
     _ports.release(id);
 }
@@ -217,10 +216,8 @@ UartError uart_hw_check_errors(uint port)
     return _ports.take_errors(id);
 }
 
-void uart_hw_flush(uint port)
-{
-    _ports.drain(uart_hw_slot(cast(ubyte)port));
-}
+bool uart_hw_tx_done(uint port)
+    => _ports.tx_done(uart_hw_slot(cast(ubyte)port));
 
 // A line flow control owns is refused.
 bool uart_hw_set_line(uint port, UartLine line, bool asserted)
@@ -269,7 +266,9 @@ struct Known
 struct Device
 {
     serial_icounter icount;
+    Thread close_thread;
     int fd = -1;
+    int closing_fd = -1;        // close_thread closes it; the slot stays this port's until that thread is joined
     FlowControl flow;
     ubyte port;
     bool icount_valid;
@@ -277,6 +276,113 @@ struct Device
     shared bool kick;           // TX waits
     shared bool closing;
     shared bool serviced;       // the I/O thread's, from add until it lets go on close
+    shared bool closed;
+
+nothrow @nogc:
+    bool held() const pure
+        => fd >= 0 || closing_fd >= 0;
+
+    // without flow control what the adapter holds drains at line rate, where closing_wait could not be lifted
+    void close_descriptor()
+    {
+        termios tty;
+        if (tcgetattr(closing_fd, &tty) == 0)
+        {
+            tty.c_cflag &= ~CRTSCTS;
+            tty.c_iflag &= ~(IXON | IXOFF);
+            tcsetattr(closing_fd, TCSANOW, &tty);
+        }
+        tcflush(closing_fd, TCIOFLUSH);
+        close(closing_fd);
+        atomicStore(closed, true);
+    }
+}
+
+void advance_close(Device* d)
+{
+    if (d.closing_fd < 0)
+        return;
+    if (!d.close_thread)
+    {
+        atomicStore(d.closed, false);
+        d.close_thread = thread_spawn(&d.close_descriptor);
+        return;
+    }
+    if (!atomicLoad(d.closed))
+        return;
+    thread_join(d.close_thread);
+    d.close_thread = null;
+    d.closing_fd = -1;
+}
+
+// A port keeps its slot until its close is done, open or closing; another port takes the first slot held by none.
+uint select_slot(const(Device)[] devices, ubyte port)
+{
+    uint free = uint.max;
+    foreach (i, ref d; devices)
+    {
+        if (d.held && d.port == port)
+            return cast(uint)i;
+        if (!d.held && free == uint.max)
+            free = cast(uint)i;
+    }
+    return port < ubyte.max && _known[port].path_length && !_known[port].dead ? free : uint.max;
+}
+
+unittest
+{
+    Known[2] saved = _known[2 .. 4];
+    scope (exit) _known[2 .. 4] = saved;
+    foreach (ref k; _known[2 .. 4])
+    {
+        k.path_length = 1;
+        k.dead = false;
+    }
+    Device[3] devices;
+    devices[0].fd = 7;
+    devices[0].port = 1;
+    devices[1].closing_fd = 8;
+    devices[1].port = 2;
+    assert(select_slot(devices[], 2) == 1, "a closing port finds its own slot");
+    assert(select_slot(devices[], 3) == 2, "another port passes a closing slot by");
+    devices[1].closing_fd = -1;
+    assert(select_slot(devices[], 3) == 1, "a slot whose close is done is free again");
+}
+
+unittest
+{
+    import urt.driver.uart : Uart, uart_open;
+
+    Known saved = _known[2];
+    scope (exit) _known[2] = saved;
+    _known[2].path_length = 1;
+    _known[2].path[0] = 0;
+    _known[2].dead = false;
+    foreach (ref d; _devices[0 .. $ - 1])
+        d.fd = 1000;
+    scope (exit) foreach (ref d; _devices[0 .. $ - 1])
+        d.fd = -1;
+    Device* last = &_devices[$ - 1];
+    void finish_a_close()
+    {
+        last.closing_fd = open("/dev/null", O_RDWR);
+        advance_close(last);
+        while (!atomicLoad(last.closed))
+        {
+        }
+        assert(uart_hw_slot(2) == uint.max, "a finished close keeps its slot until it is advanced");
+    }
+
+    finish_a_close();
+    uart_hw_find("");
+    assert(uart_hw_slot(2) == num_uarts - 1, "a find lets a finished close's slot go");
+
+    finish_a_close();
+    Uart u;
+    UartConfig cfg;
+    cfg.baud_rate = 9600;
+    assert(!uart_open(u, 2, cfg), "the device is not there to open");
+    assert(uart_hw_slot(2) == num_uarts - 1, "an open by a saved id lets a finished close's slot go");
 }
 
 struct serial_struct
@@ -326,7 +432,7 @@ bool is_open(ubyte port)
 {
     foreach (ref d; _devices)
     {
-        if (d.fd >= 0 && d.port == port)
+        if (d.held && d.port == port)
             return true;
     }
     return false;
@@ -371,15 +477,23 @@ void count_line_errors(uint id)
     }
 }
 
-// Adapters that batch reads on a timer (FTDI's is 16 ms) shorten it; where a driver has no such setting, nothing
-// changes.
-void set_low_latency(int fd)
+// Adapters that batch reads on a timer (FTDI's is 16 ms) shorten it, and a close never waits on its output; where a
+// driver has no such setting nothing changes, and lifting closing_wait needs CAP_SYS_ADMIN, so it is set apart.
+void tune_driver(int fd)
 {
     serial_struct ss;
-    if (ioctl(fd, TIOCGSERIAL, &ss) != 0 || (ss.flags & ASYNC_LOW_LATENCY))
+    if (ioctl(fd, TIOCGSERIAL, &ss) != 0)
         return;
-    ss.flags |= ASYNC_LOW_LATENCY;
-    ioctl(fd, TIOCSSERIAL, &ss);
+    if (!(ss.flags & ASYNC_LOW_LATENCY))
+    {
+        ss.flags |= ASYNC_LOW_LATENCY;
+        ioctl(fd, TIOCSSERIAL, &ss);
+    }
+    if (ss.closing_wait != ASYNC_CLOSING_WAIT_NONE)
+    {
+        ss.closing_wait = ASYNC_CLOSING_WAIT_NONE;
+        ioctl(fd, TIOCSSERIAL, &ss);
+    }
 }
 
 // RTS idles asserted, "host ready", where flow control leaves it to us: peers that honour RTS stop sending when it
@@ -777,6 +891,7 @@ enum EFD_NONBLOCK = 0x800, EFD_CLOEXEC = 0x80000;
 enum F_OK = 0;
 enum uint TIOCOUTQ = 0x5411, TIOCMGET = 0x5415, TIOCMBIS = 0x5416, TIOCMBIC = 0x5417, TIOCGICOUNT = 0x545D, TIOCGSERIAL = 0x541E, TIOCSSERIAL = 0x541F;
 enum int ASYNC_LOW_LATENCY = 1 << 13;
+enum ushort ASYNC_CLOSING_WAIT_NONE = 65535;
 enum int TIOCM_DTR = 0x002, TIOCM_RTS = 0x004, TIOCM_CTS = 0x020, TIOCM_CAR = 0x040, TIOCM_RNG = 0x080, TIOCM_DSR = 0x100;
 
 version (D_LP64)
@@ -870,6 +985,12 @@ unittest
     UartConfig faster = cfg;
     faster.baud_rate = 115_200;
     assert(uart_reconfigure(u, faster), "an open port takes new settings in place");
+
+    uart_close(u);
+    uint tries;
+    while (!uart_open(u, port, cfg, &on_rx) && ++tries < 200)
+        sleep(msecs(5));
+    assert(tries < 200, "a port opens again by the id it had once its close is done");
 
     uint cursor;
     UartPortInfo info;

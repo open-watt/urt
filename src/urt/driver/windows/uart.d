@@ -148,7 +148,6 @@ bool uart_hw_open(uint port, ref const UartConfig cfg, UartRxCallback rx_cb, Uar
 // Output the peer's flow control will never take is discarded, so a close cannot block on it.
 void uart_hw_close(uint port)
 {
-    uart_hw_flush(port);
     immutable uint id = uart_hw_slot(cast(ubyte)port);
     Device* d = &_devices[id];
     PurgeComm(d.handle, PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR);
@@ -199,10 +198,8 @@ UartError uart_hw_check_errors(uint port)
     return _ports.take_errors(id);
 }
 
-void uart_hw_flush(uint port)
-{
-    _ports.drain(uart_hw_slot(cast(ubyte)port));
-}
+bool uart_hw_tx_done(uint port)
+    => _ports.tx_done(uart_hw_slot(cast(ubyte)port));
 
 // A line flow control owns is refused.
 bool uart_hw_set_line(uint port, UartLine line, bool asserted)

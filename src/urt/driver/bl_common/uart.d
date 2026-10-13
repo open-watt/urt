@@ -168,7 +168,6 @@ bool uart_hw_reconfigure(uint port, ref const UartConfig cfg)
 void uart_hw_close(uint port)
 {
     immutable id = port - first_uart;
-    uart_hw_flush(port);
     immutable base = uart_base[id];
     irq_line_disable(uart_irq[id]);
     reg_write(base, INT_MASK, INT_MASK_ALL);
@@ -193,11 +192,10 @@ UartRxTiming uart_hw_rx_timing(uint port)
 size_t uart_hw_tx_pending(uint port)
     => _ports.tx_pending(port - first_uart);
 
-void uart_hw_flush(uint port)
+bool uart_hw_tx_done(uint port)
 {
     immutable id = port - first_uart;
-    if (reg_read(uart_base[id], UTX_CONFIG) & CR_UTX_EN)
-        _ports.drain(id);
+    return !(reg_read(uart_base[id], UTX_CONFIG) & CR_UTX_EN) || _ports.tx_done(id);
 }
 
 UartCounters uart_hw_counters(uint port)

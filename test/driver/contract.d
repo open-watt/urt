@@ -53,6 +53,18 @@ Duration timed(alias f)()
     return getTime() - t0;
 }
 
+// a port that tells idle from the FIFO alone needs a character time of polls before it reports done
+bool settles(ref Uart u)
+{
+    immutable deadline = getTime() + 50.msecs;
+    while (!uart_tx_done(u))
+    {
+        if (getTime() >= deadline)
+            return false;
+    }
+    return true;
+}
+
 // the bytes as a chain of pages of at most `size`, so a send walks page boundaries
 Page* chain_of(const(void)[] data, size_t size = 100)
 {
@@ -212,8 +224,8 @@ void uart_contract()
 
     tx_calls = 0;
     assert(send(u, "hello"));
-    uart_tx_flush(u);
-    assert(wire() == "hello" && uart_tx_queued(u) == 0, "sent bytes reach the line in order");
+    run_line();
+    assert(wire() == "hello" && uart_tx_queued(u) == 0 && settles(u), "sent bytes reach the line in order");
     assert(tx_calls == 1 && pages_in_use() == pages, "and the page is released, signalling room");
 
     wire_clear();
@@ -226,7 +238,7 @@ void uart_contract()
     immutable stall = timed!(() { sent = send(u, big[]); })();
     assert(sent && stall < 20.msecs, "a stalled line takes the whole chain, and the send does not wait for it");
     assert(uart_tx_queued(u) > 0 && uart_tx_queued(u) <= big.length, "and holds what has not reached the FIFO");
-    assert(timed!(() => uart_tx_flush(u))() < tx_drain_limit + 200.msecs, "a flush against a stalled line is bounded");
+    assert(!uart_tx_done(u), "a stalled line is not done");
     tx_hold(false);
     run_line();
     assert(wire() == big[] && uart_tx_queued(u) == 0, "a released line sends the whole chain, in order, with no further call");
@@ -306,10 +318,11 @@ void uart_contract()
         wire_clear();
         shift_busy(true);
         send(u, "x");
-        assert(timed!(() => uart_tx_flush(u))() >= tx_drain_limit - 50.msecs, "a flush waits for the last character to leave the shifter");
+        run_line();
+        assert(!uart_tx_done(u), "a character still in the shifter is not done");
         shift_busy(false);
-        uart_tx_flush(u);
-        assert(wire() == "x");
+        run_line();
+        assert(settles(u) && wire() == "x");
     }
 
     rx_calls = 0;
@@ -389,14 +402,15 @@ void uart_contract()
 
     wire_clear();
     send(u, "bye");
-    uart_tx_flush(u);
-    assert(wire() == "bye", "a flush returns once the last character is on the line");
+    run_line();
+    assert(settles(u) && wire() == "bye", "the line is done once the last character is on it");
     wire_clear();
+    tx_hold(true);
     send(u, "bye");
     rx('r');
-    immutable uint cut_short = tx_disabled_while_busy();
-    uart_close(u);
-    assert(!u.is_open && wire() == "bye" && tx_disabled_while_busy() == cut_short, "a close sends everything queued before it stops the transmitter");
+    immutable closing = timed!(() => uart_close(u))();
+    tx_hold(false);
+    assert(!u.is_open && closing < 20.msecs && wire().length < 3, "a close drops what is queued and returns at once");
     assert(pages_in_use() == pages, "and releases every page it held");
     assert(uart_rx_timing(u) == UartRxTiming(), "a closed port reports no RX timing");
     assert(uart_reconfigure(u, cfg) == InternalResult.invalid_parameter, "and takes no reconfigure");

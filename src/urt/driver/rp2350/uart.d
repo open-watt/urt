@@ -62,7 +62,9 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
 {
     if (!divider_x64(cfg.baud_rate))
         return false;
-    uart_hw_flush(id);
+    // what the console wrote straight to the FIFO goes out before the reset cuts it
+    if (out_of_reset(id == 0 ? reset_uart0 : reset_uart1) && (uart_read_reg(uart_base(id), uartcr) & cr_uarten))
+        _ports.drain(id);
     reset_pulse(id == 0 ? reset_uart0 : reset_uart1);
     if (!_ports.acquire(id, cfg))
         return false;
@@ -82,7 +84,6 @@ bool uart_hw_open(uint id, ref const UartConfig cfg, UartRxCallback rx_cb, UartT
 
 void uart_hw_close(uint id)
 {
-    uart_hw_flush(id);
     irq_line_disable(uart_irq[id]);
     immutable base = uart_base(id);
     uart_write_reg(base, uartimsc, 0);
@@ -127,11 +128,8 @@ UartCounters uart_hw_counters(uint id)
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-void uart_hw_flush(uint id)
-{
-    if (out_of_reset(id == 0 ? reset_uart0 : reset_uart1) && (uart_read_reg(uart_base(id), uartcr) & cr_uarten))
-        _ports.drain(id);
-}
+bool uart_hw_tx_done(uint id)
+    => !out_of_reset(id == 0 ? reset_uart0 : reset_uart1) || !(uart_read_reg(uart_base(id), uartcr) & cr_uarten) || _ports.tx_done(id);
 
 // Blocking console output for early boot and fault context; queued output goes first. Each
 // byte is its own critical section, so the ISR never shares the ring or the FIFO mid-step.

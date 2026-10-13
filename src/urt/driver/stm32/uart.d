@@ -158,7 +158,6 @@ bool uart_hw_reconfigure(uint id, ref const UartConfig cfg)
 
 void uart_hw_close(uint id)
 {
-    uart_hw_flush(id);
     irq_line_disable(uart_irq[id]);
     reg_write(uart_base[id] + cr1, 0);
     reg_write(uart_base[id] + cr3, 0);
@@ -186,11 +185,8 @@ UartCounters uart_hw_counters(uint id)
 UartError uart_hw_check_errors(uint id)
     => _ports.take_errors(id);
 
-void uart_hw_flush(uint id)
-{
-    if (reg_read(uart_base[id] + cr1) & cr1_ue)
-        _ports.drain(id);
-}
+bool uart_hw_tx_done(uint id)
+    => !(reg_read(uart_base[id] + cr1) & cr1_ue) || _ports.tx_done(id);
 
 // Blocking console output for early boot and fault context; queued output goes first. Each
 // byte is its own critical section, so the ISR never shares the ring or TDR mid-step.

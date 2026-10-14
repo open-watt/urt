@@ -70,9 +70,14 @@ struct PagePoolStats
 
 bool page_pool_init()
 {
+    // a micro's cap is its memory budget; elsewhere a category grows as far as the heap does
+    version (Embedded)
+        enum ushort max_slabs = 8;
+    else
+        enum ushort max_slabs = ushort.max;
     static immutable PageCategoryConfig[2] defaults = [
-        { page_size:  352, pages_per_slab: 8, max_slabs: 8, prealloc_slabs: 1, reserve_pages: 4 },
-        { page_size: 1632, pages_per_slab: 4, max_slabs: 8, prealloc_slabs: 1, reserve_pages: 2 },
+        { page_size:  352, pages_per_slab: 8, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 4 },
+        { page_size: 1632, pages_per_slab: 4, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 2 },
     ];
     return page_pool_init(defaults[]);
 }

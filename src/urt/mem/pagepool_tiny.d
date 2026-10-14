@@ -95,11 +95,10 @@ template PagePool(
         return page;
     }
 
-    // A page starts with one reference; page_free releases it and asserts it was the last.
+    // drops one reference; the last frees the page
     void page_free(Page* page)
     {
-        debug assert(page_unique(page), "page_free on a shared page");
-        page_release(page);
+        release(page, false);
     }
 
     Page* page_share(Page* page)
@@ -109,13 +108,8 @@ template PagePool(
         return page;
     }
 
-    void page_release(Page* page)
-    {
-        release(page, false);
-    }
-
     // Any context, ISRs included; a page from the heap is freed by the next page_pool_wake().
-    void page_release_isr(Page* page)
+    void page_free_isr(Page* page)
     {
         release(page, true);
     }
@@ -360,7 +354,7 @@ template PagePool(
     void release(Page* page, bool defer)
     {
         size_t refs = tag_refcount(atomicFetchSub(tag_of(page), page_tag_one_ref));
-        assert(refs != 0, "page_release on a free page");
+        assert(refs != 0, "page_free on a free page");
         if (refs != 1)
             return;
         AllocationHeader* header = header_of(page);
@@ -601,7 +595,7 @@ void page_pool_tiny_test()()
     Page* late = TestPool.page_alloc(1000);
     page_pool_wake();
     signals = 0;
-    TestPool.page_release_isr(late);
+    TestPool.page_free_isr(late);
     assert(signals == 1 && TestPool._deferred.length == 1);
     page_pool_wake();
     assert(TestPool._deferred.length == 0);
@@ -617,9 +611,9 @@ void page_pool_tiny_test()()
         assert(TestPool.page_unique(shared_page));
         assert(TestPool.page_share(shared_page) is shared_page);
         assert(!TestPool.page_unique(shared_page));
-        TestPool.page_release(shared_page);
+        TestPool.page_free(shared_page);
         assert(TestPool.page_unique(shared_page) && TestPool.page_category(shared_page) == category);
-        TestPool.page_release(shared_page);
+        TestPool.page_free(shared_page);
     }
     assert(TestPool._free[0].length == TestPool._allocated_pages[0]);
 

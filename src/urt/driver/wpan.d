@@ -52,7 +52,7 @@ struct WpanRxInfo
     bool ack_pending;   // our ack carried the frame-pending bit
 }
 
-// Transfers one page reference to the callback; release it with page_release().
+// Transfers one page reference to the callback; release it with page_free().
 // Page data is the MAC frame without FCS. Metadata is borrowed until callback return.
 alias WpanRxCallback = void function(Wpan wpan, Page* frame, ref const WpanRxInfo info) nothrow @nogc;
 

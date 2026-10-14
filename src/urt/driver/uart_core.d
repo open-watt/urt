@@ -143,7 +143,7 @@ nothrow @nogc:
             {
                 Page* next = chain.next;
                 chain.next = null;
-                page_release(chain);
+                page_free(chain);
                 chain = next;
             }
         }
@@ -231,7 +231,7 @@ nothrow @nogc:
         size_t bytes = p.tx_fill ? p.tx_fill.length : 0;
         for (Page* page = p.tx_queue; page; page = page.next)
             bytes += page.length;
-        return bytes;
+        return bytes - p.tx_sent;
     }
 
     bool tx_queued(uint id)
@@ -242,7 +242,7 @@ nothrow @nogc:
     const(ubyte)[] tx_bytes(uint id)
     {
         Port* p = &_port[id];
-        while (p.tx_queue && !p.tx_queue.length)
+        while (p.tx_queue && p.tx_sent == p.tx_queue.length)
             dequeue_sent(p);
         if (!p.tx_queue && p.tx_fill)
         {
@@ -254,18 +254,16 @@ nothrow @nogc:
             p.tx_starved = true;
             return null;
         }
-        return cast(const(ubyte)[])p.tx_queue.data;
+        return (cast(const(ubyte)[])p.tx_queue.data)[p.tx_sent .. $];
     }
 
     // In the ISR or with interrupts off: the FIFO took n of tx_bytes; a finished page is released, and its room signalled.
     bool tx_advance(uint id, size_t n)
     {
         Port* p = &_port[id];
-        Page* head = p.tx_queue;
-        head.offset += cast(ushort)n;
-        head.length -= cast(ushort)n;
+        p.tx_sent += cast(ushort)n;
         p.counters.tx_bytes += n;
-        if (head.length)
+        if (p.tx_sent < p.tx_queue.length)
             return false;
         dequeue_sent(p);
         if (!p.tx_queue && !p.tx_fill)
@@ -403,6 +401,7 @@ private:
         uint char_ticks;
         uint gap_ticks;
         uint latency_us;
+        ushort tx_sent;             // into tx_queue's head, which may be shared and is never written
         ubyte gap;
         ubyte port;
         UartError errors;
@@ -444,7 +443,8 @@ private:
         if (!p.tx_queue)
             p.tx_tail = null;
         head.next = null;
-        page_release_isr(head);
+        p.tx_sent = 0;
+        page_free_isr(head);
     }
 
     static void record(Port* p, UartError errors)
@@ -635,6 +635,12 @@ unittest
     chain.next = make("world");
     assert(ports.send(1, chain) && Model.wire[0 .. 11] == "hello world" && Model.tx_calls == 2, "a running line takes the chain");
     assert(in_use() == baseline, "sent pages are released");
+    Page* kept = page_share(make("a frame its sender keeps"));
+    immutable size_t from = Model.sent;
+    assert(ports.send(1, kept) && Model.wire[from .. from + 24] == "a frame its sender keeps");
+    assert(page_unique(kept) && cast(const(char)[])kept.data == "a frame its sender keeps", "a shared page goes out in pieces and comes back untouched");
+    page_free(kept);
+    Model.sent = from;
 
     // written bytes go out at once on an idle line, and gather in one page behind a busy one
     assert(ports.write(1, "abc") == 3 && Model.wire[11 .. 14] == "abc" && in_use() == baseline);

@@ -17,8 +17,7 @@ version (Tiny)
     alias page_adopt         = Pool.page_adopt;
     alias page_free          = Pool.page_free;
     alias page_share         = Pool.page_share;
-    alias page_release       = Pool.page_release;
-    alias page_release_isr   = Pool.page_release_isr;
+    alias page_free_isr      = Pool.page_free_isr;
     alias page_unique        = Pool.page_unique;
     alias page_category      = Pool.page_category;
     alias page_payload_size  = Pool.page_payload_size;
@@ -150,11 +149,10 @@ Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignmen
     return page;
 }
 
-// A page starts with one reference; page_free releases it and asserts it was the last.
+// drops one reference; the last frees the page
 void page_free(Page* page)
 {
-    debug assert(page_unique(page), "page_free on a shared page");
-    page_release(page);
+    release(page, false);
 }
 
 Page* page_share(Page* page)
@@ -164,13 +162,8 @@ Page* page_share(Page* page)
     return page;
 }
 
-void page_release(Page* page)
-{
-    release(page, false);
-}
-
 // Any context, ISRs included; a page from the heap is freed by the next page_pool_wake().
-void page_release_isr(Page* page)
+void page_free_isr(Page* page)
 {
     release(page, true);
 }
@@ -470,7 +463,7 @@ void[] take_page(Category* c, bool grow)
 void release(Page* page, bool defer)
 {
     immutable ushort refs = atomicFetchSub(refcount_of(page), cast(ushort)1);
-    assert(refs != 0, "page_release on a free page");
+    assert(refs != 0, "page_free on a free page");
     if (refs != 1)
         return;
     AllocationHeader* h = header_of(page);
@@ -848,8 +841,8 @@ unittest
     Page* pooled = page_alloc(8);
     uint pooled_in_use = page_pool_stats(0).pages_in_use;
     signals = 0;
-    page_release_isr(pooled);
-    page_release_isr(late);
+    page_free_isr(pooled);
+    page_free_isr(late);
     assert(page_pool_stats(0).pages_in_use == pooled_in_use - 1);
     assert(page_pool_stats(page_category_heap).pages_in_use == 1 && signals == 1);
     page_pool_wake();
@@ -880,9 +873,9 @@ unittest
         assert(page_unique(shared_page));
         assert(page_share(shared_page) is shared_page);
         assert(!page_unique(shared_page));
-        page_release(shared_page);
+        page_free(shared_page);
         assert(page_unique(shared_page) && page_pool_stats(category).pages_in_use == in_use);
-        page_release(shared_page);
+        page_free(shared_page);
         assert(page_pool_stats(category).pages_in_use == in_use - 1);
     }
 
@@ -941,7 +934,7 @@ unittest
                     if (!p)
                         continue;
                     if (round & 2)
-                        page_release_isr(p);
+                        page_free_isr(p);
                     else
                         page_free(p);
                 }

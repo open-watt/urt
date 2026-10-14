@@ -3,7 +3,7 @@ module urt.driver.esp32.wpan;
 
 import urt.atomic : MemoryOrder, atomicExchange, atomicFetchAdd, atomicLoad, atomicStore, cas;
 import urt.driver.wpan;
-import urt.mem.pagepool : Page, page_alloc, page_release;
+import urt.mem.pagepool : Page, page_alloc, page_free;
 
 nothrow @nogc:
 
@@ -252,7 +252,7 @@ void reset_queues()
     foreach (ref slot; _rx_queue)
     {
         if (slot.page !is null)
-            page_release(slot.page);
+            page_free(slot.page);
         slot.page = null;
     }
     _rx_next = false;

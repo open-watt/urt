@@ -127,7 +127,18 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
 
 // Thread context; grows the pool, and falls back to the heap past the largest category.
 Page* page_alloc(size_t bytes, size_t alignment = default_alignment, size_t headroom = 0, size_t tailroom = 0)
-    => new_page(true, bytes, alignment, headroom, tailroom);
+{
+    version (MemStats)
+    {
+        import urt.mem.pagetrace : page_trace_alloc;
+        pragma(inline, false);
+        Page* page = new_page(true, bytes, alignment, headroom, tailroom);
+        page_trace_alloc(page, page ? page.capacity : 0, cast(const(void)*)&page_alloc);
+        return page;
+    }
+    else
+        return new_page(true, bytes, alignment, headroom, tailroom);
+}
 
 // Any context, ISRs included; takes a free page or fails, and a pool running low grows on the next page_pool_wake().
 Page* page_alloc_isr(size_t bytes, size_t alignment = default_alignment, size_t headroom = 0, size_t tailroom = 0)
@@ -471,6 +482,11 @@ void release(Page* page, bool defer)
     assert(refs != 0, "page_free on a free page");
     if (refs != 1)
         return;
+    version (MemStats)
+    {
+        import urt.mem.pagetrace : page_trace_free;
+        page_trace_free(page);
+    }
     AllocationHeader* h = header_of(page);
     if (defer && is_heap(h))
     {

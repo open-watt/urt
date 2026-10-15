@@ -15,7 +15,7 @@ module urt.driver.posix.exception;
 // so allocation-site tracking works in release builds.
 version (Windows) {} else version (BareMetal) {} else:
 
-import urt.internal.exception : Resolved, StackTraceData, _d_createTrace, _d_isbaseof, terminate;
+import urt.internal.exception : Resolved, _d_createTrace, _d_isbaseof, terminate;
 
 import urt.mem : strlen, memcpy;
 
@@ -41,23 +41,17 @@ version (D_InlineAsm_X86_64) {} else version (D_InlineAsm_X86) {} else
     extern(C) private int _Unwind_Backtrace(_Unwind_Trace_Fn, void*) nothrow @nogc;
     extern(C) private size_t _Unwind_GetIP(void*) nothrow @nogc;
 
-    private struct UnwindState { StackTraceData* trace; ubyte skip; }
+    private struct UnwindState { void*[] addrs; size_t length; ubyte skip; }
 
     extern(C) private int unwind_trace_callback(void* ctx, void* data) nothrow @nogc
     {
         auto s = cast(UnwindState*) data;
         if (s.skip > 0) { s.skip--; return 0; }
-        if (s.trace.length >= 32) return 1;
+        if (s.length >= s.addrs.length) return 1;
         auto ip = _Unwind_GetIP(ctx);
         if (!ip) return 1;
-        s.trace.addrs[s.trace.length++] = cast(void*) ip;
+        s.addrs[s.length++] = cast(void*) ip;
         return 0;
-    }
-
-    private void unwind_backtrace(ref StackTraceData trace) nothrow @nogc @trusted
-    {
-        UnwindState state = UnwindState(&trace, 2);
-        _Unwind_Backtrace(&unwind_trace_callback, &state);
     }
 }
 
@@ -892,6 +886,7 @@ private void dw_resolve_addresses(
 
 /// Capture the caller's call stack. First entry = return address of
 /// the function that called the public `capture_trace` wrapper.
+pragma(inline, false)
 size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
 {
     if (addrs.length == 0)
@@ -947,11 +942,10 @@ size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
     }
     else
     {
-        StackTraceData tmp;
-        unwind_backtrace(tmp);  // skips its own frames internally
-        auto n = tmp.length < addrs.length ? tmp.length : addrs.length;
-        addrs[0 .. n] = tmp.addrs[0 .. n];
-        return n;
+        // the first frame reported is ours, the second our caller's
+        UnwindState state = UnwindState(addrs, 0, 2);
+        _Unwind_Backtrace(&unwind_trace_callback, &state);
+        return state.length;
     }
 }
 

@@ -15,7 +15,7 @@ module urt.driver.posix.exception;
 // so allocation-site tracking works in release builds.
 version (Windows) {} else version (BareMetal) {} else:
 
-import urt.internal.exception : Resolved, StackTraceData, _d_createTrace, _d_isbaseof, terminate;
+import urt.internal.exception : Resolved, _d_createTrace, _d_isbaseof, terminate;
 
 import urt.mem : strlen, memcpy;
 
@@ -41,23 +41,17 @@ version (D_InlineAsm_X86_64) {} else version (D_InlineAsm_X86) {} else
     extern(C) private int _Unwind_Backtrace(_Unwind_Trace_Fn, void*) nothrow @nogc;
     extern(C) private size_t _Unwind_GetIP(void*) nothrow @nogc;
 
-    private struct UnwindState { StackTraceData* trace; ubyte skip; }
+    private struct UnwindState { void*[] addrs; size_t length; ubyte skip; }
 
     extern(C) private int unwind_trace_callback(void* ctx, void* data) nothrow @nogc
     {
         auto s = cast(UnwindState*) data;
         if (s.skip > 0) { s.skip--; return 0; }
-        if (s.trace.length >= 32) return 1;
+        if (s.length >= s.addrs.length) return 1;
         auto ip = _Unwind_GetIP(ctx);
         if (!ip) return 1;
-        s.trace.addrs[s.trace.length++] = cast(void*) ip;
+        s.addrs[s.length++] = cast(void*) ip;
         return 0;
-    }
-
-    private void unwind_backtrace(ref StackTraceData trace) nothrow @nogc @trusted
-    {
-        UnwindState state = UnwindState(&trace, 2);
-        _Unwind_Backtrace(&unwind_trace_callback, &state);
     }
 }
 
@@ -108,6 +102,16 @@ version (D_LP64)
         ulong  p_memsz;
         ulong  p_align;
     }
+
+    private struct Elf_Sym
+    {
+        uint   st_name;
+        ubyte  st_info;
+        ubyte  st_other;
+        ushort st_shndx;
+        ulong  st_value;
+        ulong  st_size;
+    }
 }
 else
 {
@@ -154,6 +158,16 @@ else
         uint p_flags;
         uint p_align;
     }
+
+    private struct Elf_Sym
+    {
+        uint   st_name;
+        uint   st_value;
+        uint   st_size;
+        ubyte  st_info;
+        ubyte  st_other;
+        ushort st_shndx;
+    }
 }
 
 private enum EI_MAG0   = 0;
@@ -162,6 +176,7 @@ private enum EI_DATA   = 5;
 private enum ELFMAG    = "\x7fELF";
 private enum ET_DYN    = 3;
 private enum SHF_COMPRESSED = 0x800;
+private enum STT_FUNC  = 2;
 
 version (D_LP64)
     private enum ELFCLASS_NATIVE = 2; // ELFCLASS64
@@ -892,6 +907,7 @@ private void dw_resolve_addresses(
 
 /// Capture the caller's call stack. First entry = return address of
 /// the function that called the public `capture_trace` wrapper.
+pragma(inline, false)
 size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
 {
     if (addrs.length == 0)
@@ -947,11 +963,10 @@ size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
     }
     else
     {
-        StackTraceData tmp;
-        unwind_backtrace(tmp);  // skips its own frames internally
-        auto n = tmp.length < addrs.length ? tmp.length : addrs.length;
-        addrs[0 .. n] = tmp.addrs[0 .. n];
-        return n;
+        // the first frame reported is ours, the second our caller's
+        UnwindState state = UnwindState(addrs, 0, 2);
+        _Unwind_Backtrace(&unwind_trace_callback, &state);
+        return state.length;
     }
 }
 
@@ -980,11 +995,30 @@ void* _caller_address(uint skip) nothrow @nogc @trusted
 bool _resolve_address(void* addr, out Resolved r) nothrow @nogc @trusted
 {
     Dl_info info = void;
-    if (!dladdr(addr, &info) || info.dli_sname is null)
-        return false;
-    r.name = info.dli_sname[0 .. strlen(info.dli_sname)];
-    r.offset = cast(size_t) addr - cast(size_t) info.dli_saddr;
-    return true;
+    if (dladdr(addr, &info) && info.dli_sname !is null)
+    {
+        r.name = info.dli_sname[0 .. strlen(info.dli_sname)];
+        r.offset = cast(size_t) addr - cast(size_t) info.dli_saddr;
+        return true;
+    }
+    return resolve_from_symtab(addr, r);
+}
+
+// dladdr sees only exported symbols, which LDC does not emit without --export-dynamic
+private bool resolve_from_symtab(void* addr, out Resolved r) nothrow @nogc @trusted
+{
+    ensure_elf_mapped();
+    const vaddr = cast(size_t) addr - _persistent_base_addr;
+    foreach (ref sym; _persistent_symtab)
+    {
+        if ((sym.st_info & 0xF) != STT_FUNC || vaddr < sym.st_value || vaddr - sym.st_value >= sym.st_size || sym.st_name >= _persistent_strtab.length)
+            continue;
+        const(char)* name = _persistent_strtab.ptr + sym.st_name;
+        r.name = name[0 .. strlen(name)];
+        r.offset = vaddr - cast(size_t) sym.st_value;
+        return true;
+    }
+    return false;
 }
 
 // Persistent .debug_line mapping. The first _resolve_batch call opens
@@ -996,9 +1030,11 @@ bool _resolve_address(void* addr, out Resolved r) nothrow @nogc @trusted
 // (a few MB of read-only file pages the OS can demand-page).
 private __gshared bool _elf_init_attempted;
 private __gshared const(ubyte)[] _persistent_debug_line;
+private __gshared const(Elf_Sym)[] _persistent_symtab;
+private __gshared const(char)[] _persistent_strtab;
 private __gshared size_t _persistent_base_addr;
 
-private void ensure_debug_line_mapped() nothrow @nogc @trusted
+private void ensure_elf_mapped() nothrow @nogc @trusted
 {
     if (_elf_init_attempted)
         return;
@@ -1009,18 +1045,21 @@ private void ensure_debug_line_mapped() nothrow @nogc @trusted
     if (!elf.valid())
         return;
 
-    size_t dbg_offset, dbg_size;
-    if (!elf.find_section(".debug_line", dbg_offset, dbg_size))
-        return;
+    // never unmapped: resolved names and file paths point into these
+    static const(ubyte)[] map_section(ref ElfSelf elf, const(char)[] name)
+    {
+        size_t offset, size;
+        if (!elf.find_section(name, offset, size))
+            return null;
+        auto region = MappedRegion.map(elf.fd, offset, size);
+        return region.data ? region.data[0 .. size] : null;
+    }
 
-    auto region = MappedRegion.map(elf.fd, dbg_offset, dbg_size);
-    if (region.data is null)
-        return;
-    // Intentionally not unmapped - kept for process lifetime.
-
-    _persistent_debug_line = region.data[0 .. dbg_size];
-    _persistent_base_addr  = (elf.ehdr.e_type == ET_DYN)
-        ? get_executable_base_address() : cast(size_t) 0;
+    _persistent_base_addr  = elf.ehdr.e_type == ET_DYN ? get_executable_base_address() : 0;
+    _persistent_debug_line = map_section(elf, ".debug_line");
+    auto symtab = map_section(elf, ".symtab");
+    _persistent_symtab = (cast(const(Elf_Sym)*) symtab.ptr)[0 .. symtab.length / Elf_Sym.sizeof];
+    _persistent_strtab = cast(const(char)[]) map_section(elf, ".strtab");
 }
 
 /// Resolve many addresses in one pass: dladdr per address for symbol
@@ -1050,7 +1089,7 @@ bool _resolve_batch(const(void*)[] addrs, Resolved[] results) nothrow @nogc @tru
 
     // File / line via one DWARF .debug_line scan covering all addrs.
     // Failures here still leave dladdr-populated name/offset intact.
-    ensure_debug_line_mapped();
+    ensure_elf_mapped();
     if (_persistent_debug_line.length == 0)
         return any_resolved;
 

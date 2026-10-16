@@ -1,7 +1,7 @@
 module urt.crypto.pbkdf2;
 
 import urt.digest.hmac : HMACContext, hmac_init, hmac_update, hmac_finalise;
-import urt.digest.sha : SHA1Context;
+import urt.digest.sha : SHA1Context, SHA256Context;
 import urt.result : Result, InternalResult;
 
 nothrow @nogc:
@@ -10,12 +10,9 @@ nothrow @nogc:
 // PBKDF2-HMAC-SHA1 as used by WPA/WPA2-PSK to derive the 32-byte PMK from
 // passphrase + SSID. The interface is generic over output length so callers can
 // also use the standard test vectors without heap allocation.
-Result pbkdf2_hmac_sha1(const(ubyte)[] passphrase,
-                        const(ubyte)[] salt,
-                        uint iterations,
-                        ubyte[] output)
+Result pbkdf2(Context)(const(ubyte)[] passphrase, const(ubyte)[] salt, uint iterations, ubyte[] output)
 {
-    Pbkdf2Sha1 kdf;
+    Pbkdf2!Context kdf;
     Result r = kdf.begin(passphrase, salt, iterations, output);
     if (r.failed)
         return r;
@@ -23,10 +20,13 @@ Result pbkdf2_hmac_sha1(const(ubyte)[] passphrase,
     return Result.success;
 }
 
+alias pbkdf2_hmac_sha1 = pbkdf2!SHA1Context;
+alias pbkdf2_hmac_sha256 = pbkdf2!SHA256Context;
+
 // Resumable PBKDF2-HMAC-SHA1: the 4096 WPA2 iterations are ~1.7s on a 120MHz ARM9, so
 // callers that cannot stall slice it with step(). passphrase, salt and output must stay
 // valid until done.
-struct Pbkdf2Sha1
+struct Pbkdf2(Context)
 {
 nothrow @nogc:
     Result begin(const(ubyte)[] passphrase, const(ubyte)[] salt, uint iterations, ubyte[] output)
@@ -76,7 +76,7 @@ nothrow @nogc:
                 counter_be[2] = cast(ubyte)(_counter >> 8);
                 counter_be[3] = cast(ubyte)_counter;
 
-                HMACContext!SHA1Context h;
+                HMACContext!Context h;
                 hmac_init(h, _passphrase);
                 hmac_update(h, _salt);
                 hmac_update(h, counter_be[]);
@@ -87,7 +87,7 @@ nothrow @nogc:
                 continue;
             }
 
-            HMACContext!SHA1Context h;
+            HMACContext!Context h;
             hmac_init(h, _passphrase);
             hmac_update(h, _u[]);
             _u = hmac_finalise(h);
@@ -108,9 +108,12 @@ private:
     uint _iter;
     size_t _pos;
     bool _done;
-    ubyte[SHA1Context.DigestLen] _u = void;
-    ubyte[SHA1Context.DigestLen] _block = void;
+    ubyte[Context.DigestLen] _u = void;
+    ubyte[Context.DigestLen] _block = void;
 }
+
+alias Pbkdf2Sha1 = Pbkdf2!SHA1Context;
+alias Pbkdf2Sha256 = Pbkdf2!SHA256Context;
 
 Result wpa2_psk_to_pmk(const(char)[] passphrase,
                        const(char)[] ssid,
@@ -167,4 +170,20 @@ unittest
         0xd9, 0x2a, 0xce, 0x1d, 0x41, 0xf0, 0xd8, 0xde, 0x89, 0x57,
     ];
     assert(out2 == expected2);
+
+    ubyte[32] out3;
+    assert(pbkdf2_hmac_sha256(cast(const(ubyte)[])"password", cast(const(ubyte)[])"salt", 1, out3[]));
+    static immutable ubyte[32] expected3 = [
+        0x12, 0x0f, 0xb6, 0xcf, 0xfc, 0xf8, 0xb3, 0x2c, 0x43, 0xe7, 0x22, 0x52, 0x56, 0xc4, 0xf8, 0x37,
+        0xa8, 0x65, 0x48, 0xc9, 0x2c, 0xcc, 0x35, 0x48, 0x08, 0x05, 0x98, 0x7c, 0xb7, 0x0b, 0xe1, 0x7b,
+    ];
+    assert(out3 == expected3);
+
+    ubyte[32] out4;
+    assert(pbkdf2_hmac_sha256(cast(const(ubyte)[])"password", cast(const(ubyte)[])"salt", 2, out4[]));
+    static immutable ubyte[32] expected4 = [
+        0xae, 0x4d, 0x0c, 0x95, 0xaf, 0x6b, 0x46, 0xd3, 0x2d, 0x0a, 0xdf, 0xf9, 0x28, 0xf0, 0x6d, 0xd0,
+        0x2a, 0x30, 0x3f, 0x8e, 0xf3, 0xc2, 0x51, 0xdf, 0xd6, 0xe2, 0xd8, 0x5a, 0x95, 0x47, 0x4c, 0x43,
+    ];
+    assert(out4 == expected4);
 }

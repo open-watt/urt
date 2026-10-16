@@ -2,7 +2,7 @@ module urt.mem.pagepool;
 
 public import urt.mem.page;
 
-version (Tiny) {} else
+version (unittest)
     version = PagePoolDiagnostics;
 
 version (Tiny)
@@ -55,7 +55,7 @@ struct PageCategoryConfig
     ushort reserve_pages;   // free pages an ISR can count on; allocating below it asks the main thread to grow
 }
 
-struct PagePoolStats
+version (PagePoolDiagnostics) struct PagePoolStats
 {
     uint pages_in_use;
     uint pages_free;
@@ -63,7 +63,6 @@ struct PagePoolStats
     uint high_water;        // peak pages_in_use
     uint alloc_count;
     uint fail_count;
-    uint[8] size_histogram;
 }
 
 
@@ -149,7 +148,6 @@ Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignmen
     h.refcount = 1;
     h.next = cast(AllocationHeader*)page_flag_heap;
 
-    atomicFetchAdd(_jumbo.size_histogram[histogram_bucket(bytes)], 1);
     count_alloc(_jumbo);
     return page;
 }
@@ -285,7 +283,7 @@ ReclaimResult page_pool_trim(size_t bytes_needed = size_t.max)
     return ReclaimResult.exhausted;
 }
 
-PagePoolStats page_pool_stats(ubyte category)
+version (PagePoolDiagnostics) PagePoolStats page_pool_stats(ubyte category)
 {
     PagePoolStats s;
     Counters* k;
@@ -303,8 +301,6 @@ PagePoolStats page_pool_stats(ubyte category)
     s.high_water = atomicLoad(k.high_water);
     s.alloc_count = atomicLoad(k.alloc_count);
     s.fail_count = atomicLoad(k.fail_count);
-    foreach (i, ref bucket; s.size_histogram)
-        bucket = atomicLoad(k.size_histogram[i]);
     return s;
 }
 
@@ -321,7 +317,8 @@ void page_pool_deinit()
     foreach (i; 0 .. _num_categories)
     {
         Category* c = &_categories[i];
-        assert(atomicLoad(c.counters.in_use) == 0, "Page pool deinit with pages in use!");
+        version (PagePoolDiagnostics)
+            assert(atomicLoad(c.counters.in_use) == 0, "Page pool deinit with pages in use!");
         c.free.take_all();
         SlabHeader* s = c.slabs;
         while (s)
@@ -365,11 +362,13 @@ static assert(link_offset + (void*).sizeof == allocation_header_size);
 
 struct Counters
 {
-    shared uint in_use;
-    shared uint high_water;
-    shared uint alloc_count;
-    shared uint fail_count;
-    shared uint[8] size_histogram;
+    version (PagePoolDiagnostics)
+    {
+        shared uint in_use;
+        shared uint high_water;
+        shared uint alloc_count;
+        shared uint fail_count;
+    }
 }
 
 struct Category
@@ -415,7 +414,6 @@ void[] alloc_payload(size_t bytes, bool grow)
     {
         if (bytes > _categories[i].cfg.page_size - allocation_header_size)
             continue;
-        atomicFetchAdd(_categories[i].counters.size_histogram[histogram_bucket(bytes)], 1);
         foreach (j; i .. _num_categories)
         {
             void[] r = take_page(&_categories[j], grow);
@@ -431,7 +429,7 @@ void[] alloc_payload(size_t bytes, bool grow)
     void[] mem = alloc(block_size, 16, MemFlags.dma);
     if (!mem.ptr)
     {
-        atomicFetchAdd(_jumbo.fail_count, 1);
+        count_fail(_jumbo);
         return null;
     }
     AllocationHeader* h = cast(AllocationHeader*)mem.ptr;
@@ -441,7 +439,6 @@ void[] alloc_payload(size_t bytes, bool grow)
     h.refcount = 1;
     h.next = cast(AllocationHeader*)page_flag_heap;
 
-    atomicFetchAdd(_jumbo.size_histogram[histogram_bucket(bytes)], 1);
     count_alloc(_jumbo);
     return (mem.ptr + allocation_header_size)[0 .. bytes];
 }
@@ -455,7 +452,7 @@ void[] take_page(Category* c, bool grow)
         request_refill(c);
     if (!link)
     {
-        atomicFetchAdd(c.counters.fail_count, 1);
+        count_fail(c.counters);
         return null;
     }
     AllocationHeader* h = header_of_link(link);
@@ -493,7 +490,7 @@ void free_payload(void* payload)
 
     Category* c = &_categories[allocation_category(h)];
     h.refcount = 0;
-    atomicFetchSub(c.counters.in_use, 1);
+    count_free(c.counters);
     c.free.push(link_of(h));
 }
 
@@ -503,7 +500,7 @@ void free_heap(AllocationHeader* h)
         size_t block_size = h.slab_offset;
     else
         size_t block_size = allocation_header_size + h.allocation;
-    atomicFetchSub(_jumbo.in_use, 1);
+    count_free(_jumbo);
     free((cast(void*)h)[0 .. block_size]);
 }
 
@@ -523,11 +520,26 @@ void free_deferred()
 
 void count_alloc(ref Counters k)
 {
-    atomicFetchAdd(k.alloc_count, 1);
-    immutable uint in_use = atomicFetchAdd(k.in_use, 1) + 1;
-    uint seen = atomicLoad(k.high_water);
-    while (in_use > seen && !cas(&k.high_water, seen, in_use))
-        seen = atomicLoad(k.high_water);
+    version (PagePoolDiagnostics)
+    {
+        atomicFetchAdd(k.alloc_count, 1);
+        immutable uint in_use = atomicFetchAdd(k.in_use, 1) + 1;
+        uint seen = atomicLoad(k.high_water);
+        while (in_use > seen && !cas(&k.high_water, seen, in_use))
+            seen = atomicLoad(k.high_water);
+    }
+}
+
+void count_fail(ref Counters k)
+{
+    version (PagePoolDiagnostics)
+        atomicFetchAdd(k.fail_count, 1);
+}
+
+void count_free(ref Counters k)
+{
+    version (PagePoolDiagnostics)
+        atomicFetchSub(k.in_use, 1);
 }
 
 void request_refill(Category* c)
@@ -663,18 +675,6 @@ SlabHeader* slab_for(AllocationHeader* h)
 
 void[] payload_of(AllocationHeader* h, uint page_size)
     => (cast(void*)h + allocation_header_size)[0 .. page_size - allocation_header_size];
-
-size_t histogram_bucket(size_t bytes)
-{
-    size_t bucket = 0;
-    size_t threshold = 64;
-    while (bytes > threshold && bucket < 7)
-    {
-        threshold <<= 1;
-        ++bucket;
-    }
-    return bucket;
-}
 
 ReclaimResult trim_handler(size_t bytes_needed)
     => page_pool_trim(bytes_needed);

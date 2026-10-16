@@ -41,6 +41,6 @@ driver-contract:
 	        mt7621)   flags='$(driver_mt7621)' ;; \
 	        bk7231)   flags='$(driver_bk7231)' ;; \
 	    esac; \
-	    "$(DC)" $(filter-out -unittest,$(DFLAGS)) -i $$flags $(DRIVER_COMMON) -of$(TARGETDIR)/contract-$$b$(if $(filter windows,$(OS)),.exe) -od$(OBJDIR)/contract-$$b; \
+	    "$(DC)" $(filter-out -unittest,$(DFLAGS)) $(VERSION_FLAG)PagePoolDiagnostics -i $$flags $(DRIVER_COMMON) -of$(TARGETDIR)/contract-$$b$(if $(filter windows,$(OS)),.exe) -od$(OBJDIR)/contract-$$b; \
 	    ./$(TARGETDIR)/contract-$$b$(if $(filter windows,$(OS)),.exe); \
 	done

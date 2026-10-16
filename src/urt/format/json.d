@@ -15,10 +15,288 @@ nothrow @nogc:
 
 enum max_json_depth = 64;
 
+enum JsonEvent : ubyte
+{
+    none,
+    begin_object,
+    end_object,
+    begin_array,
+    end_array,
+    key,
+    text,
+    number,
+    boolean,
+    null_,
+    eof,
+    error,
+}
+
+// Pull tokenizer over a complete document. Keys, strings and numbers are slices of the input;
+// strings are raw (still escaped) and decode with decode_json_string.
+struct JsonReader
+{
+nothrow @nogc:
+
+    this(const(char)[] text) pure
+    {
+        _text = text;
+    }
+
+    JsonEvent event() const pure
+        => _event;
+    const(char)[] text() const pure
+        => _token;
+    bool escaped() const pure
+        => _escaped;
+    bool boolean() const pure
+        => _token.length == 4;
+    int depth() const pure
+        => _depth;
+
+    JsonEvent next() pure
+    {
+        if (_event == JsonEvent.eof || _event == JsonEvent.error)
+            return _event;
+        _text = _text.trimFront;
+
+        final switch (_expect)
+        {
+            case Expect.done:
+                return _text.empty ? set(JsonEvent.eof) : fail();
+
+            case Expect.key_or_end:
+                if (!_text.empty && _text[0] == '}')
+                    return close('}');
+                goto case Expect.key;
+
+            case Expect.key:
+                if (_text.empty || _text[0] != '"' || !take_string())
+                    return fail();
+                _text = _text.trimFront;
+                if (_text.empty || _text[0] != ':')
+                    return fail();
+                _text = _text[1 .. $];
+                _expect = Expect.value;
+                return set(JsonEvent.key);
+
+            case Expect.value_or_end:
+                if (!_text.empty && _text[0] == ']')
+                    return close(']');
+                goto case Expect.value;
+
+            case Expect.value:
+                return take_value();
+
+            case Expect.comma_or_end:
+                if (_text.empty)
+                    return fail();
+                if (_text[0] == '}' || _text[0] == ']')
+                    return close(_text[0]);
+                if (_text[0] != ',')
+                    return fail();
+                _text = _text[1 .. $].trimFront;
+                if (in_object)
+                {
+                    _expect = Expect.key;
+                    return next();
+                }
+                return take_value();
+        }
+    }
+
+    // from a begin event, consumes through the matching end; any other event is already whole
+    JsonEvent skip() pure
+    {
+        if (_event != JsonEvent.begin_object && _event != JsonEvent.begin_array)
+            return _event;
+        int target = _depth - 1;
+        while (true)
+        {
+            JsonEvent e = next();
+            if (e == JsonEvent.error || ((e == JsonEvent.end_object || e == JsonEvent.end_array) && _depth == target))
+                return e;
+        }
+    }
+
+private:
+    enum Expect : ubyte
+    {
+        value,
+        key,
+        key_or_end,
+        value_or_end,
+        comma_or_end,
+        done,
+    }
+
+    const(char)[] _text;
+    const(char)[] _token;
+    ulong _objects;     // bit n: the container at depth n + 1 is an object
+    int _depth;
+    JsonEvent _event;
+    Expect _expect;
+    bool _escaped;
+
+    bool in_object() const pure
+        => (_objects >> (_depth - 1)) & 1;
+
+    JsonEvent set(JsonEvent e) pure
+    {
+        _event = e;
+        return e;
+    }
+
+    JsonEvent fail() pure
+    {
+        _token = null;
+        return set(JsonEvent.error);
+    }
+
+    JsonEvent after_value(JsonEvent e) pure
+    {
+        _expect = _depth == 0 ? Expect.done : Expect.comma_or_end;
+        return set(e);
+    }
+
+    JsonEvent close(char c) pure
+    {
+        if (c != (in_object ? '}' : ']'))
+            return fail();
+        _text = _text[1 .. $];
+        --_depth;
+        return after_value(c == '}' ? JsonEvent.end_object : JsonEvent.end_array);
+    }
+
+    JsonEvent take_value() pure
+    {
+        if (_text.empty)
+            return fail();
+        char c = _text[0];
+        if (c == '{' || c == '[')
+        {
+            if (_depth == max_json_depth)
+                return fail();
+            _text = _text[1 .. $];
+            if (c == '{')
+                _objects |= ulong(1) << _depth;
+            else
+                _objects &= ~(ulong(1) << _depth);
+            ++_depth;
+            _expect = c == '{' ? Expect.key_or_end : Expect.value_or_end;
+            return set(c == '{' ? JsonEvent.begin_object : JsonEvent.begin_array);
+        }
+        if (c == '"')
+            return take_string() ? after_value(JsonEvent.text) : fail();
+        if (_text.startsWith("true"))
+            return take_literal(4, JsonEvent.boolean);
+        if (_text.startsWith("false"))
+            return take_literal(5, JsonEvent.boolean);
+        if (_text.startsWith("null"))
+            return take_literal(4, JsonEvent.null_);
+        if (c.is_numeric || (c == '-' && _text.length > 1 && _text[1].is_numeric))
+        {
+            size_t taken;
+            int e;
+            parse_int_with_exponent(_text, e, &taken, 10);
+            if (taken == 0)
+                return fail();
+            _token = _text.takeFront(taken);
+            return after_value(JsonEvent.number);
+        }
+        return fail();
+    }
+
+    JsonEvent take_literal(size_t length, JsonEvent e) pure
+    {
+        _token = _text.takeFront(length);
+        return after_value(e);
+    }
+
+    bool take_string() pure
+    {
+        _escaped = false;
+        size_t i = 1;
+        while (i < _text.length && _text[i] != '"')
+        {
+            if (_text[i] == '\\')
+            {
+                _escaped = true;
+                ++i;
+            }
+            ++i;
+        }
+        if (i >= _text.length)
+            return false;
+        _token = _text[1 .. i];
+        _text = _text[i + 1 .. $];
+        return true;
+    }
+}
+
+// a decoded string is never longer than its escaped form; -1 for a malformed escape
+ptrdiff_t decode_json_string(const(char)[] raw, char[] buffer) pure
+{
+    size_t length;
+    for (size_t i = 0; i < raw.length; )
+    {
+        char c = raw[i++];
+        if (c != '\\')
+        {
+            buffer[length++] = c;
+            continue;
+        }
+        if (i == raw.length)
+            return -1;
+        c = raw[i++];
+        switch (c)
+        {
+            case '"', '\\', '/':
+                break;
+            case 'b':
+                c = '\b';
+                break;
+            case 'f':
+                c = '\f';
+                break;
+            case 'n':
+                c = '\n';
+                break;
+            case 'r':
+                c = '\r';
+                break;
+            case 't':
+                c = '\t';
+                break;
+            case 'u':
+                dchar code;
+                if (!take_hex4(raw, i, code))
+                    return -1;
+                if ((code >> 11) == 0x1B)
+                {
+                    // a high surrogate needs its low half to follow
+                    dchar low;
+                    if (code >= 0xDC00 || i + 2 > raw.length || raw[i] != '\\' || raw[i + 1] != 'u')
+                        return -1;
+                    i += 2;
+                    if (!take_hex4(raw, i, low) || (low >> 10) != 0x37)
+                        return -1;
+                    code = 0x10000 + ((code & 0x3FF) << 10 | (low & 0x3FF));
+                }
+                length += encode_utf8(code, buffer[length .. $]);
+                continue;
+            default:
+                return -1;
+        }
+        buffer[length++] = c;
+    }
+    return length;
+}
+
 Variant parse_json(const(char)[] text)
 {
-    Variant node;
-    return parse_node(text, node, 0) ? node.move : Variant();
+    JsonReader reader = JsonReader(text);
+    Variant root;
+    return read_value(reader, reader.next(), root) ? root.move : Variant();
 }
 
 ptrdiff_t write_json(ref const Variant val, char[] buffer, bool dense = false, uint level = 0, uint indent = 2)
@@ -342,164 +620,124 @@ ptrdiff_t newline(char[] buffer, ref ptrdiff_t offset, int level)
 }
 
 // malformed input fails the parse; it is never a crash, and never goes deeper than max_json_depth
-bool parse_node(ref const(char)[] text, out Variant node, int depth)
+bool read_value(ref JsonReader reader, JsonEvent event, out Variant node)
 {
-    text = text.trimFront();
-
-    if (text.empty)
-        return false;
-    if (text.startsWith("null"))
+    switch (event)
     {
-        text = text[4 .. $];
-        return true;
-    }
-    if (text.startsWith("true"))
-    {
-        text = text[4 .. $];
-        node = Variant(true);
-        return true;
-    }
-    if (text.startsWith("false"))
-    {
-        text = text[5 .. $];
-        node = Variant(false);
-        return true;
-    }
-    if (text[0] == '"')
-    {
-        size_t i = 1;
-        Array!(char, 0) tmp; // TODO: needs a generous stack buffer!
-        while (i < text.length && text[i] != '"')
-        {
-            if (text[i] == '\\')
+        case JsonEvent.begin_object:
+        case JsonEvent.begin_array:
+            bool object = event == JsonEvent.begin_object;
+            Array!Variant items;
+            while (true)
             {
-                if (tmp.empty)
-                {
-                    tmp.reserve(256);
-                    tmp = text[1 .. i];
-                }
-                if (++i == text.length)
+                JsonEvent e = reader.next();
+                if (e == JsonEvent.end_object || e == JsonEvent.end_array)
                     break;
-                if (text[i] == 'u')
+                if (object)
                 {
-                    import urt.conv : parse_uint;
-                    if (++i + 4 >= text.length)
-                        break;
-                    size_t taken;
-                    ulong code = text[i .. i + 4].parse_uint(&taken, 16);
-                    if (taken != 4)
-                        break;
-                    i += 4;
-                    dchar c = cast(dchar)code;
-                    if ((c >> 11) == 0x1B)
-                    {
-                        if (code >= 0xDC00)
-                            break; // low surrogate without preceding high surrogate
-                        if (i + 6 >= text.length || text[i] != '\\' || text[i+1] != 'u')
-                            break;
-                        code = text[i + 2 .. i + 6].parse_uint(&taken, 16);
-                        if (taken != 4 || (code >> 10) != 0x37)
-                            break;
-                        c = 0x10000 + ((c & 0x3FF) << 10 | (cast(uint)code & 0x3FF));
-                        i += 6;
-                    }
-                    tmp ~= c;
+                    if (e != JsonEvent.key)
+                        return false;
+                    Variant key;
+                    if (!read_string(reader, key) || !key.isString())
+                        return false;
+                    items ~= key.move;
+                    e = reader.next();
                 }
-                else
-                    goto do_concat;
+                Variant item;
+                if (!read_value(reader, e, item))
+                    return false;
+                items ~= item.move;
             }
-            else if (!tmp.empty)
+            node = Variant(items.move);
+            if (object)
+                node.flags = Variant.Flags.Map;
+            return true;
+
+        case JsonEvent.text:
+            return read_string(reader, node);
+
+        case JsonEvent.number:
+            int e = void;
+            long value = reader.text.parse_int_with_exponent(e, null, 10);
+
+            // let's work out if value*10^^e is an integer?
+            bool is_integer = e >= 0;
+            for (; e > 0; --e)
             {
-            do_concat:
-                tmp ~= text[i++];
+                if (value < 0 ? (value < long.min / 10) : (value > long.max / 10))
+                {
+                    is_integer = false;
+                    break;
+                }
+                value *= 10;
             }
-            else
-                ++i;
-        }
-        if (i >= text.length)
+            node = is_integer ? Variant(value) : Variant(value * 10.0^^e);
+            return true;
+
+        case JsonEvent.boolean:
+            node = Variant(reader.boolean);
+            return true;
+
+        case JsonEvent.null_:
+            return true;
+
+        default:
             return false;
-        node = Variant(tmp.empty ? text[1 .. i] : tmp[]);
-        text = text[i + 1 .. $];
-        return true;
     }
-    if (text[0] == '{' || text[0] == '[')
-    {
-        if (depth >= max_json_depth)
-            return false;
-
-        Array!Variant tmp;
-        bool isArray = text[0] == '[';
-        text = text[1 .. $];
-
-        bool expectComma = false;
-        while (true)
-        {
-            text = text.trimFront;
-            if (text.length == 0)
-                return false;
-            if (text[0] == (isArray ? ']' : '}'))
-                break;
-            if (expectComma)
-            {
-                if (text[0] != ',')
-                    return false;
-                text = text[1 .. $].trimFront;
-            }
-            else
-                expectComma = true;
-
-            Variant item;
-            if (!parse_node(text, item, depth + 1))
-                return false;
-            tmp ~= item.move;
-            if (!isArray)
-            {
-                if (!tmp.back().isString())
-                    return false;
-                text = text.trimFront;
-                if (text.length == 0 || text[0] != ':')
-                    return false;
-                text = text[1 .. $].trimFront;
-                Variant value;
-                if (!parse_node(text, value, depth + 1))
-                    return false;
-                tmp ~= value.move;
-            }
-        }
-        text = text[1 .. $];
-
-        node = Variant(tmp.move);
-        if (!isArray)
-            node.flags = Variant.Flags.Map;
-        return true;
-    }
-    if (text[0].is_numeric || (text[0] == '-' && text.length > 1 && text[1].is_numeric))
-    {
-        size_t taken = void;
-        int e = void;
-        long value = text.parse_int_with_exponent(e, &taken, 10);
-        if (taken == 0)
-            return false;
-        text = text[taken .. $];
-
-        // let's work out if value*10^^e is an integer?
-        bool is_integer = e >= 0;
-        for (; e > 0; --e)
-        {
-            if (value < 0 ? (value < long.min / 10) : (value > long.max / 10))
-            {
-                is_integer = false;
-                break;
-            }
-            value *= 10;
-        }
-
-        node = is_integer ? Variant(value) : Variant(value * 10.0^^e);
-        return true;
-    }
-    return false;
 }
 
+bool read_string(ref JsonReader reader, out Variant node)
+{
+    if (!reader.escaped)
+    {
+        node = Variant(reader.text);
+        return true;
+    }
+    Array!char decoded;
+    decoded.resize(reader.text.length);
+    ptrdiff_t length = decode_json_string(reader.text, decoded[]);
+    if (length < 0)
+        return false;
+    node = Variant(decoded[0 .. length]);
+    return true;
+}
+
+bool take_hex4(const(char)[] raw, ref size_t i, out dchar code) pure
+{
+    if (i + 4 > raw.length)
+        return false;
+    size_t taken;
+    code = cast(dchar)raw[i .. i + 4].parse_uint(&taken, 16);
+    i += 4;
+    return taken == 4;
+}
+
+size_t encode_utf8(dchar c, char[] buffer) pure
+{
+    if (c < 0x80)
+    {
+        buffer[0] = cast(char)c;
+        return 1;
+    }
+    if (c < 0x800)
+    {
+        buffer[0] = cast(char)(0xC0 | c >> 6);
+        buffer[1] = cast(char)(0x80 | (c & 0x3F));
+        return 2;
+    }
+    if (c < 0x10000)
+    {
+        buffer[0] = cast(char)(0xE0 | c >> 12);
+        buffer[1] = cast(char)(0x80 | (c >> 6 & 0x3F));
+        buffer[2] = cast(char)(0x80 | (c & 0x3F));
+        return 3;
+    }
+    buffer[0] = cast(char)(0xF0 | c >> 18);
+    buffer[1] = cast(char)(0x80 | (c >> 12 & 0x3F));
+    buffer[2] = cast(char)(0x80 | (c >> 6 & 0x3F));
+    buffer[3] = cast(char)(0x80 | (c & 0x3F));
+    return 4;
+}
 
 unittest
 {
@@ -665,4 +903,67 @@ unittest
     check!(double, Inch ^^ 2)(1, `{"q":6.4516e-4,"u":"m²"}`);
     check!double(1.2345678901234567, "1.2345678901234567");
     check!ulong(ulong.max, "18446744073709551615");
+
+    // the reader walks a document as events; strings stay escaped until decoded
+    {
+        JsonReader r = JsonReader(`{"a": [1, -2.5e1, "x\ny"], "b": {"c": true, "d": null}, "e": false}`);
+        assert(r.next() == JsonEvent.begin_object && r.depth == 1);
+        assert(r.next() == JsonEvent.key && r.text == "a");
+        assert(r.next() == JsonEvent.begin_array && r.depth == 2);
+        assert(r.next() == JsonEvent.number && r.text == "1");
+        assert(r.next() == JsonEvent.number && r.text == "-2.5e1");
+        assert(r.next() == JsonEvent.text && r.text == `x\ny` && r.escaped);
+        assert(r.next() == JsonEvent.end_array && r.depth == 1);
+        assert(r.next() == JsonEvent.key && r.text == "b" && !r.escaped);
+        assert(r.next() == JsonEvent.begin_object);
+        assert(r.skip() == JsonEvent.end_object && r.depth == 1);
+        assert(r.next() == JsonEvent.key && r.text == "e");
+        assert(r.next() == JsonEvent.boolean && !r.boolean);
+        assert(r.next() == JsonEvent.end_object && r.depth == 0);
+        assert(r.next() == JsonEvent.eof && r.next() == JsonEvent.eof);
+    }
+
+    // malformed documents end in error, never a crash; trailing text fails the reader but not parse_json
+    static JsonEvent last(const(char)[] doc)
+    {
+        JsonReader r = JsonReader(doc);
+        JsonEvent e;
+        do
+            e = r.next();
+        while (e != JsonEvent.eof && e != JsonEvent.error);
+        return e;
+    }
+    foreach (bad_doc; [`{"a" 1}`, `[1,]`, `{"a":1,}`, `[1}`, `{"a":1]`, `"open`, `[1] x`, `{1:2}`, `[tru]`, ``, `-`])
+        assert(last(bad_doc) == JsonEvent.error, bad_doc);
+    assert(last(`  [1, {"k": []}]  `) == JsonEvent.eof);
+    assert(parse_json(`[1] x`).length == 1);
+
+    // nesting stops at max_json_depth
+    {
+        char[max_json_depth * 2 + 2] deep = void;
+        deep[0 .. max_json_depth] = '[';
+        deep[max_json_depth .. max_json_depth * 2] = ']';
+        assert(last(deep[0 .. max_json_depth * 2]) == JsonEvent.eof);
+        deep[0 .. max_json_depth + 1] = '[';
+        deep[max_json_depth + 1 .. max_json_depth * 2 + 2] = ']';
+        assert(last(deep[]) == JsonEvent.error && parse_json(deep[]).isNull);
+    }
+
+    // escapes decode to their characters, \u to UTF-8, and a surrogate pair to one code point
+    {
+        char[64] out_;
+        ptrdiff_t n = decode_json_string(`a\nb\t\"\\\/\u00e9\ud83d\ude00`, out_[]);
+        assert(n >= 0 && out_[0 .. n] == "a\nb\t\"\\/\xC3\xA9\xF0\x9F\x98\x80");
+        foreach (bad; [`\x`, `\`, `\u12`, `\u12g4`, `\udc00`, `\ud83d`, `\ud83dx`, `\ud83d\u0041`])
+            assert(decode_json_string(bad, out_[]) < 0, bad);
+        assert(parse_json(`"\u00e9"`).asString == "\xC3\xA9");
+        assert(parse_json(`["\q"]`).isNull);
+    }
+
+    // a string written with escapes reads back unchanged
+    {
+        Variant text = Variant("line\nbreak\t\"quoted\" back\\slash");
+        ptrdiff_t n = text.write_json(buffer);
+        assert(n > 0 && parse_json(buffer[0 .. n]).asString == text.asString);
+    }
 }

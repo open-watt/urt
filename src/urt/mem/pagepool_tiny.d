@@ -32,13 +32,13 @@ nothrow @nogc:
     {
         assert(bytes <= N);
         _page = Page.init;
-        page_initialise(&_page, Page.sizeof + N, bytes, 8, 0, 0);
+        page_initialise(&_page, Page.sizeof + _storage.length, bytes, N ? 8 : 1, 0, 0);
         return &_page;
     }
 
 private:
-    align(8) Page _page;
-    ubyte[N] _storage;
+    Page _page;
+    ubyte[N ? N + 8 - Page.alignof : 0] _storage;   // DMD on Win32 places stack locals 4-aligned whatever their align()
 }
 
 version (PagePoolDiagnostics)

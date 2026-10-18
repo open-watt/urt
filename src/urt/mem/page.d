@@ -6,9 +6,11 @@ import urt.sync.critical;
 nothrow @nogc:
 
 
+// widest first, so the tail padding holds the back-offset of a packet laid behind the page
 struct Page
 {
 nothrow @nogc:
+    @disable this(this);
 
     inout(void)[] data() inout @property
         => (cast(inout(void)*)&this + offset)[0 .. length];
@@ -20,20 +22,32 @@ nothrow @nogc:
         => capacity - offset - length;
 
     Page* next() @property
-        => cast(Page*)(cast(size_t)(cast(Page**)&this)[-1] & ~page_next_flags);
+        => cast(Page*)(cast(size_t)link & ~page_next_flags);
 
     void next(Page* value) @property
     {
-        Page** link = (cast(Page**)&this) - 1;
-        *link = cast(Page*)(cast(size_t)value | (cast(size_t)*link & page_next_flags));
+        link = cast(Page*)(cast(size_t)value | (cast(size_t)link & page_next_flags));
     }
 
+package:
+    Page* link;                 // a chain's next page, or a free page's stack link; low bits are pool flags
+    version (Tiny)
+        size_t tag;
+    else
+    {
+        static if (size_t.sizeof == 8)
+            uint slab_offset;
+        ushort refcount;
+        ushort allocation;
+    }
+
+public:
     ushort offset;
     ushort length;
     ushort capacity;
 }
 
-static assert(Page.sizeof == 6);
+static assert(Page.sizeof == (size_t.sizeof == 8 ? 24 : 16) && Page.sizeof - Page.capacity.offsetof - ushort.sizeof >= ushort.sizeof);
 
 // Waits for a page to be freed after an allocation failed. wake runs from page_pool_wake().
 struct PageWaiter

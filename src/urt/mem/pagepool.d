@@ -121,8 +121,7 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
 
         foreach (i, ref cfg; categories)
         {
-            assert(cfg.page_size % 16 == 0 && cfg.page_size > allocation_header_size + Page.sizeof);
-            assert(cfg.page_size - allocation_header_size <= ushort.max);
+            assert(cfg.page_size % 16 == 0 && cfg.page_size > Page.sizeof && cfg.page_size <= ushort.max);
             assert(cfg.pages_per_slab > 0 && cfg.pages_per_slab <= ubyte.max + 1 && cfg.max_slabs > 0);
             assert(cfg.prealloc_slabs <= cfg.max_slabs);
             assert(i == 0 || cfg.page_size > categories[i - 1].page_size);
@@ -164,19 +163,16 @@ Page* page_alloc_isr(size_t bytes, size_t alignment = default_alignment, size_t 
 
 Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignment, size_t headroom = 0, size_t tailroom = 0)
 {
-    if (block.length <= allocation_header_size || (cast(size_t)block.ptr & 15) != 0)
+    if (block.length <= Page.sizeof || (cast(size_t)block.ptr & 15) != 0)
         return null;
-    size_t storage_capacity = block.length - allocation_header_size;
-    Page* page = cast(Page*)(block.ptr + allocation_header_size);
-    if (!page_initialise(page, storage_capacity, bytes, alignment, headroom, tailroom))
+    Page* page = cast(Page*)block.ptr;
+    if (!page_initialise(page, block.length, bytes, alignment, headroom, tailroom))
         return null;
-
-    AllocationHeader* h = cast(AllocationHeader*)block.ptr;
     static if (size_t.sizeof == 8)
-        h.slab_offset = cast(uint)block.length;
-    h.allocation = cast(ushort)storage_capacity;
-    h.refcount = 1;
-    h.next = cast(AllocationHeader*)page_flag_heap;
+        page.slab_offset = cast(uint)block.length;
+    page.allocation = cast(ushort)block.length;
+    page.refcount = 1;
+    page.link = cast(Page*)page_flag_heap;
 
     atomicFetchAdd(_jumbo.size_histogram[histogram_bucket(bytes)], 1);
     count_alloc(_jumbo);
@@ -216,27 +212,25 @@ nothrow @nogc:
     Page* page(size_t bytes = N)
     {
         assert(bytes <= N);
-        *cast(AllocationHeader*)_header.ptr = AllocationHeader.init;
-        page_initialise(&_page, Page.sizeof + _storage.length, bytes, 8, 0, 0);
+        _page = Page.init;
+        page_initialise(&_page, Page.sizeof + N, bytes, 8, 0, 0);
         return &_page;
     }
 
 private:
-    align(16) ubyte[allocation_header_size] _header;
-    Page _page;
-    ubyte[2 + N] _storage;      // the data starts 8-aligned behind the 6-byte page
+    align(8) Page _page;
+    ubyte[N] _storage;
 }
 
 ubyte page_category(const Page* page)
 {
-    AllocationHeader* h = header_of(page);
-    return is_heap(h) ? page_category_heap : allocation_category(h);
+    return is_heap(page) ? page_category_heap : allocation_category(page);
 }
 
 size_t page_payload_size(ubyte category)
 {
     assert(category < _num_categories);
-    return _categories[category].cfg.page_size - allocation_header_size;
+    return _categories[category].cfg.page_size - Page.sizeof;
 }
 
 // Raises or lowers the free pages kept for ISRs, as a user that allocates from one comes and goes; raising it tops the
@@ -390,15 +384,6 @@ void page_pool_deinit()
 
 private:
 
-struct AllocationHeader
-{
-    ushort refcount;
-    ushort allocation;
-    static if (size_t.sizeof == 8)
-        uint slab_offset;
-    AllocationHeader* next;     // a free page links its category's stack through this word
-}
-
 struct SlabHeader
 {
     SlabHeader* next;
@@ -408,11 +393,8 @@ struct SlabHeader
     ushort cut_count;
 }
 enum slab_header_size = (SlabHeader.sizeof + 15) & ~15;
-enum allocation_header_size = AllocationHeader.sizeof;
-enum link_offset = AllocationHeader.next.offsetof;
 enum size_t page_flag_heap = page_next_flags;
-static assert(allocation_header_size == (size_t.sizeof == 4 ? 8 : 16));
-static assert(link_offset + (void*).sizeof == allocation_header_size);
+static assert(Page.link.offsetof == 0, "a free page stacks through its first word");
 
 struct Counters
 {
@@ -464,7 +446,7 @@ void[] alloc_payload(size_t bytes, bool grow)
 {
     foreach (i; 0 .. _num_categories)
     {
-        if (bytes > _categories[i].cfg.page_size - allocation_header_size)
+        if (bytes > _categories[i].cfg.page_size)
             continue;
         atomicFetchAdd(_categories[i].counters.size_histogram[histogram_bucket(bytes)], 1);
         foreach (j; i .. _num_categories)
@@ -478,23 +460,22 @@ void[] alloc_payload(size_t bytes, bool grow)
     if (!grow)
         return null;
 
-    size_t block_size = allocation_header_size + bytes;
-    void[] mem = alloc(block_size, 16, MemFlags.dma);
+    void[] mem = alloc(bytes, 16, MemFlags.dma);
     if (!mem.ptr)
     {
         atomicFetchAdd(_jumbo.fail_count, 1);
         return null;
     }
-    AllocationHeader* h = cast(AllocationHeader*)mem.ptr;
+    Page* page = cast(Page*)mem.ptr;
     static if (size_t.sizeof == 8)
-        h.slab_offset = cast(uint)block_size;
-    h.allocation = cast(ushort)bytes;
-    h.refcount = 1;
-    h.next = cast(AllocationHeader*)page_flag_heap;
+        page.slab_offset = cast(uint)bytes;
+    page.allocation = cast(ushort)bytes;
+    page.refcount = 1;
+    page.link = cast(Page*)page_flag_heap;
 
     atomicFetchAdd(_jumbo.size_histogram[histogram_bucket(bytes)], 1);
     count_alloc(_jumbo);
-    return (mem.ptr + allocation_header_size)[0 .. bytes];
+    return mem;
 }
 
 void[] take_page(Category* c, bool grow)
@@ -509,11 +490,11 @@ void[] take_page(Category* c, bool grow)
         atomicFetchAdd(c.counters.fail_count, 1);
         return null;
     }
-    AllocationHeader* h = header_of_link(link);
-    h.refcount = 1;
-    h.next = null;
+    Page* page = cast(Page*)link;
+    page.refcount = 1;
+    page.link = null;
     count_alloc(c.counters);
-    return payload_of(h, c.cfg.page_size);
+    return link[0 .. c.cfg.page_size];
 }
 
 void release(Page* page, bool defer)
@@ -524,10 +505,9 @@ void release(Page* page, bool defer)
     assert(refs != 0, "page_free on a free page");
     if (refs != 1)
         return;
-    AllocationHeader* h = header_of(page);
-    if (defer && is_heap(h))
+    if (defer && is_heap(page))
     {
-        _deferred.push(link_of(h));
+        _deferred.push(page);
         page_pool_signal();
         return;
     }
@@ -537,27 +517,27 @@ void release(Page* page, bool defer)
 
 void free_payload(void* payload)
 {
-    AllocationHeader* h = header_of(payload);
-    if (is_heap(h))
+    Page* page = cast(Page*)payload;
+    if (is_heap(page))
     {
-        free_heap(h);
+        free_heap(page);
         return;
     }
 
-    Category* c = &_categories[allocation_category(h)];
-    h.refcount = 0;
+    Category* c = &_categories[allocation_category(page)];
+    page.refcount = 0;
     atomicFetchSub(c.counters.in_use, 1);
-    c.free.push(link_of(h));
+    c.free.push(page);
 }
 
-void free_heap(AllocationHeader* h)
+void free_heap(Page* page)
 {
     static if (size_t.sizeof == 8)
-        size_t block_size = h.slab_offset;
+        size_t block_size = page.slab_offset;
     else
-        size_t block_size = allocation_header_size + h.allocation;
+        size_t block_size = page.allocation;
     atomicFetchSub(_jumbo.in_use, 1);
-    free((cast(void*)h)[0 .. block_size]);
+    free((cast(void*)page)[0 .. block_size]);
 }
 
 void free_deferred()
@@ -568,7 +548,7 @@ void free_deferred()
     while (link)
     {
         void* next = *cast(void**)link;
-        free_heap(header_of_link(link));
+        free_heap(cast(Page*)link);
         link = next;
     }
     page_freed();
@@ -645,13 +625,13 @@ bool add_slab(Category* c)
     foreach_reverse (i; 0 .. c.cfg.pages_per_slab)
     {
         size_t offset = slab_header_size + i * c.cfg.page_size;
-        AllocationHeader* p = cast(AllocationHeader*)(mem.ptr + offset);
+        Page* p = cast(Page*)(mem.ptr + offset);
         static if (size_t.sizeof == 8)
             p.slab_offset = cast(uint)offset;
         p.allocation = cast(ushort)(category | i << 8);
         p.refcount = 0;
-        p.next = cast(AllocationHeader*)first;
-        first = link_of(p);
+        p.link = cast(Page*)first;
+        first = p;
         if (!last)
             last = first;
     }
@@ -681,41 +661,29 @@ bool add_slab(Category* c)
 size_t slab_bytes(ref const PageCategoryConfig cfg)
     => slab_header_size + cfg.page_size * cfg.pages_per_slab;
 
-AllocationHeader* header_of(const(void)* payload)
-    => cast(AllocationHeader*)(payload - allocation_header_size);
-
 ref shared(ushort) refcount_of(Page* page)
-    => *cast(shared(ushort)*)&header_of(page).refcount;
-
-void* link_of(AllocationHeader* h)
-    => cast(void*)h + link_offset;
-
-AllocationHeader* header_of_link(void* link)
-    => cast(AllocationHeader*)(link - link_offset);
+    => *cast(shared(ushort)*)&page.refcount;
 
 SlabHeader* slab_of(void* link)
-    => slab_for(header_of_link(link));
+    => slab_for(cast(Page*)link);
 
-bool is_heap(const AllocationHeader* h)
-    => (cast(size_t)h.next & page_flag_heap) != 0;
+bool is_heap(const Page* page)
+    => (cast(size_t)page.link & page_flag_heap) != 0;
 
-ubyte allocation_category(const AllocationHeader* h)
-    => cast(ubyte)h.allocation;
+ubyte allocation_category(const Page* page)
+    => cast(ubyte)page.allocation;
 
-ubyte allocation_page_index(const AllocationHeader* h)
-    => h.allocation >> 8;
+ubyte allocation_page_index(const Page* page)
+    => page.allocation >> 8;
 
-SlabHeader* slab_for(AllocationHeader* h)
+SlabHeader* slab_for(Page* page)
 {
     static if (size_t.sizeof == 8)
-        return cast(SlabHeader*)(cast(void*)h - h.slab_offset);
+        return cast(SlabHeader*)(cast(void*)page - page.slab_offset);
     else
-        return cast(SlabHeader*)(cast(void*)h - slab_header_size
-            - allocation_page_index(h) * _categories[allocation_category(h)].cfg.page_size);
+        return cast(SlabHeader*)(cast(void*)page - slab_header_size
+            - allocation_page_index(page) * _categories[allocation_category(page)].cfg.page_size);
 }
-
-void[] payload_of(AllocationHeader* h, uint page_size)
-    => (cast(void*)h + allocation_header_size)[0 .. page_size - allocation_header_size];
 
 size_t histogram_bucket(size_t bytes)
 {
@@ -751,14 +719,14 @@ unittest
     assert(page_pool_init(test_cfg));
     assert(!page_pool_init(test_cfg));
     assert(page_pool_num_categories() == 2);
-    assert(page_payload_size(0) == 64 - allocation_header_size);
+    assert(page_payload_size(0) == 64 - Page.sizeof);
 
     PagePoolStats s = page_pool_stats(0);
     assert(s.slab_count == 1 && s.pages_free == 4 && s.pages_in_use == 0);
 
     void[] a = take_page(small, true);
-    assert(a.length == 64 - allocation_header_size);
-    assert(allocation_category(header_of(a.ptr)) == 0);
+    assert(a.length == 64);
+    assert(allocation_category(cast(Page*)a.ptr) == 0);
     s = page_pool_stats(0);
     assert(s.pages_in_use == 1 && s.alloc_count == 1 && s.high_water == 1);
     free_payload(a.ptr);
@@ -786,13 +754,13 @@ unittest
     // a slab with a page in use drains: its free pages are held back, and it goes once the last returns
     foreach (ref p; pages)
         p = take_page(small, true);
-    SlabHeader* x = slab_for(header_of(pages[0].ptr));
+    SlabHeader* x = slab_for(cast(Page*)pages[0].ptr);
     SlabHeader* y;
     void* keep_x = pages[0].ptr;
     void* keep_y;
     foreach (p; pages[1 .. $])
     {
-        SlabHeader* ps = slab_for(header_of(p.ptr));
+        SlabHeader* ps = slab_for(cast(Page*)p.ptr);
         if (ps !is x && !y)
         {
             y = ps;
@@ -814,11 +782,11 @@ unittest
     // a drain gives its pages back before the pool grows
     foreach (ref p; pages[0 .. 8])
         p = take_page(small, true);
-    x = slab_for(header_of(pages[0].ptr));
+    x = slab_for(cast(Page*)pages[0].ptr);
     uint freed_x;
     foreach (p; pages[0 .. 8])
     {
-        if (slab_for(header_of(p.ptr)) is x && freed_x < 3)
+        if (slab_for(cast(Page*)p.ptr) is x && freed_x < 3)
         {
             free_payload(p.ptr);
             ++freed_x;
@@ -827,7 +795,7 @@ unittest
     page_pool_trim();
     assert(small.draining is x && atomicLoad(small.held) == 3 && small.free.length == 0);
     void[] back = take_page(small, true);
-    assert(slab_for(header_of(back.ptr)) is x && small.slab_count == 2 && !small.draining);
+    assert(slab_for(cast(Page*)back.ptr) is x && small.slab_count == 2 && !small.draining);
     assert(atomicLoad(small.held) == 0 && small.free.length == 2);
     free_payload(back.ptr);
     foreach (p; pages[0 .. 8])
@@ -938,6 +906,10 @@ unittest
     }
 
     {
+        static struct Holder { uint before; StackPage!16 lent; }
+        Holder holder;
+        assert(holder.lent.page().length == 16, "a full stack page fits behind a 32-bit field");
+
         StackPage!16 lent;
         Page* borrowed = lent.page(5);
         (cast(char[])borrowed.data)[] = "lent!";

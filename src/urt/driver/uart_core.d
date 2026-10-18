@@ -635,7 +635,7 @@ unittest
     chain.next = make("world");
     assert(ports.send(1, chain) && Model.wire[0 .. 11] == "hello world" && Model.tx_calls == 2, "a running line takes the chain");
     assert(in_use() == baseline, "sent pages are released");
-    Page* kept = page_share(make("a frame its sender keeps"));
+    Page* kept = page_retain(make("a frame its sender keeps"));
     immutable size_t from = Model.sent;
     assert(ports.send(1, kept) && Model.wire[from .. from + 24] == "a frame its sender keeps");
     assert(page_unique(kept) && cast(const(char)[])kept.data == "a frame its sender keeps", "a shared page goes out in pieces and comes back untouched");

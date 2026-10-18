@@ -23,6 +23,25 @@ enum size_t page_tag_refcount_mask = 0xFF;
 enum size_t page_tag_size_shift = 16;
 enum size_t page_tag_one_ref = size_t(1) << page_tag_refcount_shift;
 
+struct StackPage(size_t N)
+{
+nothrow @nogc:
+    @disable this(this);
+
+    Page* page(size_t bytes = N)
+    {
+        assert(bytes <= N);
+        _header[] = 0;
+        page_initialise(&_page, Page.sizeof + _storage.length, bytes, 8, 0, 0);
+        return &_page;
+    }
+
+private:
+    align(8) size_t[2] _header;     // the pool's tag and link words
+    Page _page;
+    ubyte[2 + N] _storage;          // the data starts 8-aligned behind the 6-byte page
+}
+
 version (PagePoolDiagnostics)
 {
     struct PagePoolStats
@@ -116,6 +135,9 @@ template PagePool(
 
     bool page_unique(const Page* page)
         => tag_refcount(atomicLoad(tag_of(cast(Page*)page))) == 1;
+
+    bool page_foreign(const Page* page)
+        => tag_refcount(atomicLoad(tag_of(cast(Page*)page))) == 0;
 
     ubyte page_category(const Page* page)
     {
@@ -353,6 +375,8 @@ template PagePool(
 
     void release(Page* page, bool defer)
     {
+        if (page_foreign(page))
+            return;
         size_t refs = tag_refcount(atomicFetchSub(tag_of(page), page_tag_one_ref));
         assert(refs != 0, "page_free on a free page");
         if (refs != 1)
@@ -614,6 +638,17 @@ void page_pool_tiny_test()()
         TestPool.page_free(shared_page);
         assert(TestPool.page_unique(shared_page) && TestPool.page_category(shared_page) == category);
         TestPool.page_free(shared_page);
+    }
+
+    {
+        StackPage!16 lent;
+        Page* borrowed = lent.page(5);
+        assert(TestPool.page_foreign(borrowed) && !TestPool.page_unique(borrowed));
+        TestPool.page_free(borrowed);
+        assert(TestPool.page_foreign(borrowed) && borrowed.length == 5);
+        Page* pooled = TestPool.page_alloc(8);
+        assert(!TestPool.page_foreign(pooled));
+        TestPool.page_free(pooled);
     }
     assert(TestPool._free[0].length == TestPool._allocated_pages[0]);
 

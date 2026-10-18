@@ -31,15 +31,14 @@ nothrow @nogc:
     Page* page(size_t bytes = N)
     {
         assert(bytes <= N);
-        _header[] = 0;
-        page_initialise(&_page, Page.sizeof + _storage.length, bytes, 8, 0, 0);
+        _page = Page.init;
+        page_initialise(&_page, Page.sizeof + N, bytes, 8, 0, 0);
         return &_page;
     }
 
 private:
-    align(8) size_t[2] _header;     // the pool's tag and link words
-    Page _page;
-    ubyte[2 + N] _storage;          // the data starts 8-aligned behind the 6-byte page
+    align(8) Page _page;
+    ubyte[N] _storage;
 }
 
 version (PagePoolDiagnostics)
@@ -97,19 +96,15 @@ template PagePool(
     Page* page_adopt(void[] block, size_t bytes, size_t alignment = default_alignment, size_t headroom = 0, size_t tailroom = 0)
     {
         assert(_initialised, "Page pool not initialised!");
-        if (block.length <= allocation_header_size || (cast(size_t)block.ptr & 7) != 0)
+        if (block.length <= Page.sizeof || (cast(size_t)block.ptr & 7) != 0)
             return null;
         if ((block.length & 7) != 0 || block.length > max_heap_block)
             return null;
 
-        size_t storage_capacity = block.length - allocation_header_size;
-        Page* page = cast(Page*)(block.ptr + allocation_header_size);
-        if (!page_initialise(page, storage_capacity, bytes, alignment, headroom, tailroom))
+        Page* page = cast(Page*)block.ptr;
+        if (!page_initialise(page, block.length, bytes, alignment, headroom, tailroom))
             return null;
-
-        AllocationHeader* header = cast(AllocationHeader*)block.ptr;
-        header.tag = heap_tag(block.length);
-        header.next = null;
+        page.tag = heap_tag(block.length);
         record_jumbo_alloc();
         return page;
     }
@@ -141,7 +136,7 @@ template PagePool(
 
     ubyte page_category(const Page* page)
     {
-        size_t tag = header_of(page).tag;
+        size_t tag = page.tag;
         if (tag & page_tag_heap)
             return page_category_heap;
         return tag_category(tag);
@@ -150,7 +145,7 @@ template PagePool(
     size_t page_payload_size(ubyte category)
     {
         assert(category < 2);
-        return category == 0 ? small_capacity : large_capacity;
+        return page_size(category) - Page.sizeof;
     }
 
     uint page_pool_num_categories()
@@ -184,7 +179,7 @@ template PagePool(
             {
                 void* link = cut;
                 cut = *cast(void**)link;
-                urt.mem.alloc.free((cast(void*)header_of_link(link))[0 .. size]);
+                urt.mem.alloc.free(link[0 .. size]);
             }
             return ReclaimResult.more;
         }
@@ -207,7 +202,7 @@ template PagePool(
             while (link)
             {
                 void* next = *cast(void**)link;
-                urt.mem.alloc.free((cast(void*)header_of_link(link))[0 .. size]);
+                urt.mem.alloc.free(link[0 .. size]);
                 link = next;
             }
             _allocated_pages[category] = 0;
@@ -250,14 +245,7 @@ template PagePool(
 
     private:
 
-    struct AllocationHeader
-    {
-        size_t tag;
-        AllocationHeader* next;     // a free page links its category's stack through this word
-    }
-    enum allocation_header_size = (AllocationHeader.sizeof + 7) & ~cast(size_t)7;
-    enum link_offset = AllocationHeader.next.offsetof;
-    static assert(link_offset + (void*).sizeof == allocation_header_size);
+    static assert(Page.link.offsetof == 0, "a free page stacks through its first word");
     enum size_t max_heap_block = (size_t.max >> page_tag_size_shift) << 3;
 
     size_t heap_tag(size_t block_size)
@@ -301,8 +289,9 @@ template PagePool(
     __gshared shared(uint)[2] _reserve;
     __gshared bool _initialised;
 
+    // the capacity counts the page's own cursors; the pool's words come on top
     size_t page_size(ubyte category)
-        => allocation_header_size + ((page_payload_size(category) + 7) & ~cast(size_t)7);
+        => Page.offset.offsetof + (((category == 0 ? small_capacity : large_capacity) + 7) & ~cast(size_t)7);
 
     ushort max_pages(ubyte category)
         => category == 0 ? small_max_pages : large_max_pages;
@@ -313,17 +302,8 @@ template PagePool(
     uint reserve(ubyte category)
         => prealloc_pages(category) + atomicLoad(_reserve[category]);
 
-    AllocationHeader* header_of(const(void)* payload)
-        => cast(AllocationHeader*)(payload - allocation_header_size);
-
     ref shared(size_t) tag_of(Page* page)
-        => *cast(shared(size_t)*)&header_of(page).tag;
-
-    void* link_of(AllocationHeader* header)
-        => cast(void*)header + link_offset;
-
-    AllocationHeader* header_of_link(void* link)
-        => cast(AllocationHeader*)(link - link_offset);
+        => *cast(shared(size_t)*)&page.tag;
 
     Page* new_page(bool grow, size_t bytes, size_t alignment, size_t headroom, size_t tailroom)
     {
@@ -333,9 +313,9 @@ template PagePool(
             return null;
 
         void[] storage;
-        if (required <= small_capacity)
+        if (required <= page_size(0))
             storage = alloc_pooled(0, required, grow);
-        else if (required <= large_capacity)
+        else if (required <= page_size(1))
             storage = alloc_pooled(1, required, grow);
         else if (grow)
             storage = alloc_heap_page(required);
@@ -353,12 +333,12 @@ template PagePool(
 
     void[] alloc_heap_page(size_t bytes)
     {
-        if (bytes > max_heap_block - allocation_header_size - 7)
+        if (bytes > max_heap_block - 7)
         {
             record_jumbo_failure();
             return null;
         }
-        size_t block_size = (allocation_header_size + bytes + 7) & ~cast(size_t)7;
+        size_t block_size = (bytes + 7) & ~cast(size_t)7;
         void[] mem = alloc(block_size, 8, MemFlags.dma);
         if (!mem.ptr)
         {
@@ -366,11 +346,11 @@ template PagePool(
             return null;
         }
 
-        AllocationHeader* header = cast(AllocationHeader*)mem.ptr;
-        header.tag = heap_tag(block_size);
-        header.next = null;
+        Page* page = cast(Page*)mem.ptr;
+        page.tag = heap_tag(block_size);
+        page.link = null;
         record_jumbo_alloc();
-        return (mem.ptr + allocation_header_size)[0 .. bytes];
+        return mem[0 .. bytes];
     }
 
     void release(Page* page, bool defer)
@@ -381,10 +361,9 @@ template PagePool(
         assert(refs != 0, "page_free on a free page");
         if (refs != 1)
             return;
-        AllocationHeader* header = header_of(page);
-        if (defer && (header.tag & page_tag_heap))
+        if (defer && (page.tag & page_tag_heap))
         {
-            _deferred.push(link_of(header));
+            _deferred.push(page);
             page_pool_signal();
             return;
         }
@@ -394,24 +373,24 @@ template PagePool(
 
     void free_payload(void* payload)
     {
-        AllocationHeader* header = header_of(payload);
-        size_t tag = header.tag;
+        Page* page = cast(Page*)payload;
+        size_t tag = page.tag;
         if (tag & page_tag_heap)
         {
-            free_heap(header);
+            free_heap(page);
             return;
         }
 
         ubyte category = tag_category(tag);
         assert(category < 2);
-        header.tag = 0;
-        _free[category].push(link_of(header));
+        page.tag = 0;
+        _free[category].push(page);
     }
 
-    void free_heap(AllocationHeader* header)
+    void free_heap(Page* page)
     {
         record_jumbo_free();
-        urt.mem.alloc.free((cast(void*)header)[0 .. heap_block_size(header.tag)]);
+        urt.mem.alloc.free((cast(void*)page)[0 .. heap_block_size(page.tag)]);
     }
 
     void free_deferred()
@@ -422,7 +401,7 @@ template PagePool(
         while (link)
         {
             void* next = *cast(void**)link;
-            free_heap(header_of_link(link));
+            free_heap(cast(Page*)link);
             link = next;
         }
         page_freed();
@@ -432,14 +411,14 @@ template PagePool(
     {
         foreach (_; 0 .. count)
         {
-            AllocationHeader* page = allocate_page(category);
+            Page* page = allocate_page(category);
             if (!page)
                 break;
-            _free[category].push(link_of(page));
+            _free[category].push(page);
         }
     }
 
-    AllocationHeader* allocate_page(ubyte category)
+    Page* allocate_page(ubyte category)
     {
         {
             auto guard = _lock.acquire();
@@ -450,7 +429,7 @@ template PagePool(
 
         void[] mem = alloc(page_size(category), 8, MemFlags.dma);
         if (mem.ptr)
-            return cast(AllocationHeader*)mem.ptr;
+            return cast(Page*)mem.ptr;
 
         auto guard = _lock.acquire();
         --_allocated_pages[category];
@@ -459,9 +438,9 @@ template PagePool(
 
     void[] alloc_pooled(ubyte category, size_t required, bool grow)
     {
-        AllocationHeader* page;
+        Page* page;
         if (void* link = _free[category].pop())
-            page = header_of_link(link);
+            page = cast(Page*)link;
         else if (grow)
             page = allocate_page(category);
         if (page ? _free[category].length < reserve(category) : !grow)
@@ -473,9 +452,9 @@ template PagePool(
         }
 
         page.tag = cast(size_t)category << page_tag_category_shift | page_tag_one_ref;
-        page.next = null;
+        page.link = null;
         record_alloc(category);
-        return (cast(void*)page + allocation_header_size)[0 .. page_payload_size(category)];
+        return (cast(void*)page)[0 .. page_size(category)];
     }
 
     void request_refill(ubyte category)
@@ -495,10 +474,10 @@ template PagePool(
             immutable uint want = reserve(category) ? reserve(category) : 1;
             while (_free[category].length < want)
             {
-                AllocationHeader* page = allocate_page(category);
+                Page* page = allocate_page(category);
                 if (!page)
                     break;
-                _free[category].push(link_of(page));
+                _free[category].push(page);
             }
         }
     }
@@ -560,8 +539,8 @@ void page_pool_tiny_test()()
     TestPool.page_pool_deinit();
     assert(TestPool.page_pool_init());
     assert(!TestPool.page_pool_init());
-    assert(TestPool.page_payload_size(0) == 56);
-    assert(TestPool.page_payload_size(1) == 248);
+    assert(TestPool.page_payload_size(0) == 48);
+    assert(TestPool.page_payload_size(1) == 240);
 
     Page* page = TestPool.page_alloc(32);
     assert(page.length == 32 && (cast(size_t)page.data.ptr & 7) == 0);
@@ -641,6 +620,10 @@ void page_pool_tiny_test()()
     }
 
     {
+        static struct Holder { uint before; StackPage!16 lent; }
+        Holder holder;
+        assert(holder.lent.page().length == 16, "a full stack page fits behind a 32-bit field");
+
         StackPage!16 lent;
         Page* borrowed = lent.page(5);
         assert(TestPool.page_foreign(borrowed) && !TestPool.page_unique(borrowed));

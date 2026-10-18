@@ -201,7 +201,7 @@ nothrow @nogc:
                         full = page;
                     full_last = page;
                 }
-                page = page_alloc(0, 1, 0, page_payload_size(0) - Page.sizeof);
+                page = page_alloc(0, 1, 0, page_payload_size(0));
                 if (!page)
                     break;
             }
@@ -425,7 +425,7 @@ private:
 
     // the tailroom that fills a page of category
     static size_t rx_room(ubyte category)
-        => page_payload_size(category) - page_required_capacity(0, 1, 0, 0);
+        => page_payload_size(category);
 
     static void enqueue(Port* p, Page* chain, Page* last)
     {
@@ -536,11 +536,14 @@ private:
 
 private:
 
+size_t rx_capacity(const(Page)* page)
+    => Page.sizeof + page_payload_size(page_category(page));
+
 uint rx_tags(const(Page)* page)
-    => cast(uint)(page_payload_size(page_category(page)) - page.capacity) / rx_tag_size;
+    => cast(uint)(rx_capacity(page) - page.capacity) / rx_tag_size;
 
 ulong rx_tag(const(Page)* page, uint index)
-    => (cast(const(ulong)*)(cast(const(ubyte)*)page + page_payload_size(page_category(page))))[-1 - cast(int)index];
+    => (cast(const(ulong)*)(cast(const(ubyte)*)page + rx_capacity(page)))[-1 - cast(int)index];
 
 MonoTime rx_rebuild(ulong tag48)
 {

@@ -200,8 +200,8 @@ private Page* take_pages(Pbuf* p)
 }
 
 private:
-enum ushort pbuf_offset = 8;
-enum size_t pbuf_headroom = ushort.sizeof + Pbuf.sizeof;
+enum ushort pbuf_offset = Page.sizeof;
+enum size_t pbuf_headroom = Pbuf.sizeof;
 enum ubyte[5] protocol_headrooms = [74, 54, 14, 0, 0];
 
 enum PbufLayer
@@ -234,7 +234,6 @@ struct Pbuf
 
 static assert(Pbuf.sizeof == 16);
 static assert(Pbuf.alignof == uint.alignof && pbuf_offset % Pbuf.alignof == 0);
-static assert(pbuf_offset == Page.sizeof + ushort.sizeof);
 
 __gshared BekenEthernetInputHandler _input_handler;
 __gshared Critical _lock;

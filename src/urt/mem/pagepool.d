@@ -2,6 +2,8 @@ module urt.mem.pagepool;
 
 public import urt.mem.page;
 
+import urt.mem.alloc : default_alignment;
+
 version (Tiny) {} else
     version = PagePoolDiagnostics;
 
@@ -17,6 +19,8 @@ version (Tiny)
     alias page_adopt         = Pool.page_adopt;
     alias page_free          = Pool.page_free;
     alias page_share         = Pool.page_share;
+    alias page_foreign       = Pool.page_foreign;
+    alias StackPage          = urt.mem.pagepool_tiny.StackPage;
     alias page_free_isr      = Pool.page_free_isr;
     alias page_unique        = Pool.page_unique;
     alias page_category      = Pool.page_category;
@@ -31,7 +35,32 @@ version (Tiny)
         page_pool_tiny_test!()();
     }
 }
-else
+
+nothrow @nogc:
+
+// refcount 0 is lent for the call (copy to keep or edit), 1 is the holder's, above 1 is shared (share to keep)
+Page* page_retain(Page* page)
+    => page_foreign(page) ? page_copy(page, page.headroom, page.tailroom) : page_share(page);
+
+Page* page_mutable(Page* page, size_t headroom, size_t tailroom)
+{
+    if (page_unique(page) && page.headroom >= headroom && page.tailroom >= tailroom)
+        return page;
+    Page* copy = page_copy(page, headroom, tailroom);
+    if (copy)
+        page_free(page);
+    return copy;
+}
+
+private Page* page_copy(const(Page)* page, size_t headroom, size_t tailroom)
+{
+    Page* copy = page_alloc(page.length, default_alignment, headroom, tailroom);
+    if (copy)
+        copy.data[] = page.data[];
+    return copy;
+}
+
+version (Tiny) {} else
 {
 
 import urt.atomic;
@@ -175,6 +204,28 @@ void page_free_isr(Page* page)
 
 bool page_unique(const Page* page)
     => atomicLoad(refcount_of(cast(Page*)page)) == 1;
+
+bool page_foreign(const Page* page)
+    => atomicLoad(refcount_of(cast(Page*)page)) == 0;
+
+struct StackPage(size_t N)
+{
+nothrow @nogc:
+    @disable this(this);
+
+    Page* page(size_t bytes = N)
+    {
+        assert(bytes <= N);
+        *cast(AllocationHeader*)_header.ptr = AllocationHeader.init;
+        page_initialise(&_page, Page.sizeof + _storage.length, bytes, 8, 0, 0);
+        return &_page;
+    }
+
+private:
+    align(16) ubyte[allocation_header_size] _header;
+    Page _page;
+    ubyte[2 + N] _storage;      // the data starts 8-aligned behind the 6-byte page
+}
 
 ubyte page_category(const Page* page)
 {
@@ -467,6 +518,8 @@ void[] take_page(Category* c, bool grow)
 
 void release(Page* page, bool defer)
 {
+    if (page_foreign(page))
+        return;
     immutable ushort refs = atomicFetchSub(refcount_of(page), cast(ushort)1);
     assert(refs != 0, "page_free on a free page");
     if (refs != 1)
@@ -882,6 +935,36 @@ unittest
         assert(page_unique(shared_page) && page_pool_stats(category).pages_in_use == in_use);
         page_free(shared_page);
         assert(page_pool_stats(category).pages_in_use == in_use - 1);
+    }
+
+    {
+        StackPage!16 lent;
+        Page* borrowed = lent.page(5);
+        (cast(char[])borrowed.data)[] = "lent!";
+        assert(page_foreign(borrowed) && !page_unique(borrowed));
+        page_free(borrowed);
+        assert(page_foreign(borrowed) && cast(const(char)[])borrowed.data == "lent!", "freeing a lent page leaves it alone");
+
+        Page* kept = page_retain(borrowed);
+        assert(kept !is borrowed && page_unique(kept) && kept.data == borrowed.data, "a lent page is copied to keep");
+        Page* edited = page_mutable(borrowed, 4, 2);
+        assert(edited !is borrowed && page_unique(edited) && edited.headroom >= 4 && edited.tailroom >= 2 && edited.data == borrowed.data, "and to edit");
+        page_free(edited);
+
+        assert(page_retain(kept) is kept && !page_unique(kept), "a pool page is shared to keep");
+        Page* copy = page_mutable(kept, 0, 0);
+        assert(copy !is kept && page_unique(kept) && copy.data == kept.data, "a shared page is copied to edit, dropping a reference");
+        page_free(copy);
+        assert(page_mutable(kept, 0, 0) is kept, "a unique page with the room is edited in place");
+        size_t more = kept.headroom + 1;
+        Page* grown = page_mutable(kept, more, 0);
+        assert(grown !is kept && grown.headroom >= more && cast(const(char)[])grown.data == "lent!", "one without the room is copied, and freed");
+        page_free(grown);
+
+        StackPage!0 header;
+        Page* empty = header.page();
+        assert(page_foreign(empty) && empty.length == 0 && !empty.tailroom, "a header lends no storage of its own");
+        page_free(empty);
     }
 
     import urt.mem.reclaim : reclaim_memory;

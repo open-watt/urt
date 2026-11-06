@@ -331,7 +331,7 @@ bool configure(HANDLE handle, ref const UartConfig cfg)
     enum uint out_x = 1 << 8, in_x = 1 << 9;
     enum uint dtr_enable = 1 << 4, dtr_handshake = 2 << 4, rts_enable = 1 << 12, rts_handshake = 2 << 12;
     static immutable uint[FlowControl.max + 1] flow_flags = [
-        rts_enable,
+        rts_enable | dtr_enable,
         cts_flow | rts_handshake | dtr_enable,
         out_x | in_x | rts_enable | dtr_enable,
         dsr_flow | dsr_sensitive | dtr_handshake,

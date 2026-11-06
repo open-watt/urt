@@ -533,7 +533,7 @@ bool configure(int fd, ref const UartConfig cfg)
     int dtr = TIOCM_DTR, rts = TIOCM_RTS;
     if (cfg.flow_control != FlowControl.hardware)
         ioctl(fd, TIOCMBIS, &rts);
-    ioctl(fd, cfg.flow_control == FlowControl.none ? TIOCMBIC : TIOCMBIS, &dtr);
+    ioctl(fd, TIOCMBIS, &dtr);
     return true;
 }
 

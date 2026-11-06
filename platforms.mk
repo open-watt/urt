@@ -971,6 +971,15 @@ ifeq ($(NOEXCEPTIONS),1)
     endif
 endif
 
+# TRANSITIONAL, delete ASAP with object.d's ClassInfoNoVtbl: dmd#24027 dropped ClassInfo/Interface.vtbl, and __VERSION__ cannot
+# tell old from new layouts, so ask the compiler's own druntime. Remove once DMD 2.115 and an LDC on its frontend are the minimum.
+CLASSINFO_VTBL := $(shell printf 'pragma(msg, __traits(hasMember, TypeInfo_Class, "vtbl"));' | "$(DC)" -o- - 2>&1)
+ifeq ($(CLASSINFO_VTBL),false)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)ClassInfoNoVtbl
+else ifneq ($(CLASSINFO_VTBL),true)
+    $(warning could not probe the ClassInfo layout of $(DC); assuming it has vtbl)
+endif
+
 # User-specified D version idents, comma-separated (e.g. VERSIONS=Foo,Bar)
 ifdef VERSIONS
     comma := ,

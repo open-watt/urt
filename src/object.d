@@ -236,7 +236,7 @@ class TypeInfo
 struct Interface
 {
     TypeInfo_Class classinfo;
-    void*[] vtbl;
+    version (ClassInfoNoVtbl) {} else void*[] vtbl; // TRANSITIONAL: delete with the platforms.mk probe (dmd#24027)
     size_t offset;
 }
 
@@ -251,7 +251,7 @@ class TypeInfo_Class : TypeInfo
 @nogc:
     byte[]      m_init;
     string      name;
-    void*[]     vtbl;
+    version (ClassInfoNoVtbl) {} else void*[] vtbl; // TRANSITIONAL: delete with the platforms.mk probe (dmd#24027)
     Interface[] interfaces;
     TypeInfo_Class base;
     void*       destructor;

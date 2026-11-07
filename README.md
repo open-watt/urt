@@ -20,6 +20,9 @@ To use `urt` in your D project, simply add it as a dependency in your `dub.json`
 }
 ```
 
+Targets that link against uRT in place of druntime must disable class invariants.
+Use -check=invariant=off with DMD or --enable-invariants=false with LDC in the consuming target.
+
 ## Durations
 
 `Duration` prints signed, nonzero unit terms from weeks down to seconds. Seconds

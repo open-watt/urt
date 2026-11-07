@@ -918,6 +918,7 @@ ifeq ($(COMPILER),ldc)
         # other arches use _Unwind_Backtrace and don't care.
         DFLAGS := $(DFLAGS) -g -d-debug -frame-pointer=all
     endif
+    DFLAGS := $(DFLAGS) --enable-invariants=false
 
 else ifeq ($(COMPILER),dmd)
     DC ?= dmd
@@ -940,6 +941,7 @@ else ifeq ($(COMPILER),dmd)
     else
         DFLAGS := $(DFLAGS) -g -debug
     endif
+    DFLAGS := $(DFLAGS) -check=invariant=off
 else
     $(error "Unknown D compiler: $(COMPILER)")
 endif

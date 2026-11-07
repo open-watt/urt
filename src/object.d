@@ -1677,27 +1677,6 @@ class TypeInfo_Axa : TypeInfo_Array {}  // const(char)[]
 class TypeInfo_Aya : TypeInfo_Array {}  // immutable(char)[] = string
 
 // ----------------------------------------------------------------------
-// _d_invariant - contract invariant hook (matches rt.invariant_ mangling)
-// ----------------------------------------------------------------------
-
-pragma(mangle, "_D2rt10invariant_12_d_invariantFC6ObjectZv")
-void _d_invariant_impl(Object o) nothrow @nogc
-{
-    assert(o !is null);
-    version (D_TypeInfo)
-    {
-        auto c = typeid(o);
-        do
-        {
-            if (c.classInvariant)
-                c.classInvariant(o);
-            c = c.base;
-        }
-        while (c);
-    }
-}
-
-// ----------------------------------------------------------------------
 // Compiler-generated memset intrinsics (struct initialization)
 // ----------------------------------------------------------------------
 

@@ -11,7 +11,7 @@ version (Tiny)
 {
     import urt.mem.pagepool_tiny;
 
-    alias Pool = PagePool!(336, 64, 4, 1616, 32, 2);
+    alias Pool = PagePool!(392, 64, 4, 1640, 32, 2);
 
     alias page_pool_init     = Pool.page_pool_init;
     alias page_alloc         = Pool.page_alloc;
@@ -103,9 +103,12 @@ bool page_pool_init()
         enum ushort max_slabs = 8;
     else
         enum ushort max_slabs = ushort.max;
+    // a page and an OpenWatt packet header with 80 bytes of headroom, around 255 or 1500 bytes of payload
+    enum ushort small_page = size_t.sizeof == 8 ? 416 : 400;
+    enum ushort large_page = size_t.sizeof == 8 ? 1664 : 1648;
     static immutable PageCategoryConfig[2] defaults = [
-        { page_size:  352, pages_per_slab: 8, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 4 },
-        { page_size: 1632, pages_per_slab: 4, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 2 },
+        { page_size: small_page, pages_per_slab: 8, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 4 },
+        { page_size: large_page, pages_per_slab: 4, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 2 },
     ];
     return page_pool_init(defaults[]);
 }

@@ -254,6 +254,7 @@ private size_t stack_walk64_capture(ref void*[32] addrs) @trusted
 
 /// Capture the caller's call stack. First entry = return address of the
 /// function that called the public `capture_trace` wrapper.
+pragma(inline, false)
 size_t _capture_trace(void*[] addrs) @trusted
 {
     if (addrs.length == 0)
@@ -280,6 +281,7 @@ size_t _capture_trace(void*[] addrs) @trusted
 /// `caller_address` wrapper's caller. `skip=0` is the call site of
 /// that caller - useful from inside an allocator to find the alloc
 /// site.
+pragma(inline, false)
 void* _caller_address(uint skip) @trusted
 {
     void* addr;

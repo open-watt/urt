@@ -8,6 +8,8 @@
   "targetType": "staticLibrary",
   "targetName": "urt",
   "targetPath": "bin",
+  "dflags-dmd": ["-check=invariant=off"],
+  "dflags-ldc": ["--enable-invariants=false"],
   "configurations": [
     {
       "name": "debug",

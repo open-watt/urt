@@ -17,6 +17,7 @@ enum AddressFamily : byte
     ipv4,
     ipv6,
     ether,
+    link,       // point-to-point: a port on the interface scope_id names
 }
 
 enum WellKnownPort : ushort
@@ -697,11 +698,17 @@ nothrow @nogc:
         ushort port;
         uint scope_id;
     }
+    struct Link
+    {
+        ushort port;
+        uint scope_id;
+    }
     union Addr
     {
         IPv4 ipv4;
         IPv6 ipv6;
         Ether ether;
+        Link link;
     }
 
     AddressFamily family;
@@ -731,6 +738,15 @@ nothrow @nogc:
         this._a.ether.scope_id = scope_id;
     }
 
+    static InetAddress link(uint scope_id, ushort port) pure
+    {
+        InetAddress a;
+        a.family = AddressFamily.link;
+        a._a.link.port = port;
+        a._a.link.scope_id = scope_id;
+        return a;
+    }
+
     inout(IPv4)* as_ipv4() inout pure
         => family == AddressFamily.ipv4 ? &_a.ipv4 : null;
 
@@ -740,6 +756,9 @@ nothrow @nogc:
     inout(Ether)* as_ether() inout pure
         => family == AddressFamily.ether ? &_a.ether : null;
 
+    inout(Link)* as_link() inout pure
+        => family == AddressFamily.link ? &_a.link : null;
+
     ushort port() const pure
     {
         switch (family)
@@ -747,6 +766,7 @@ nothrow @nogc:
             case AddressFamily.ipv4:  return _a.ipv4.port;
             case AddressFamily.ipv6:  return _a.ipv6.port;
             case AddressFamily.ether: return _a.ether.port;
+            case AddressFamily.link:  return _a.link.port;
             default:                  return 0;
         }
     }
@@ -758,6 +778,7 @@ nothrow @nogc:
             case AddressFamily.ipv4:  _a.ipv4.port = value;  break;
             case AddressFamily.ipv6:  _a.ipv6.port = value;  break;
             case AddressFamily.ether: _a.ether.port = value; break;
+            case AddressFamily.link:  _a.link.port = value;  break;
             default:                  break;
         }
     }
@@ -775,6 +796,8 @@ nothrow @nogc:
                         return false;
                 }
                 return true;
+            case AddressFamily.link:
+                return _a.link.scope_id == 0;
             default:
                 return true;
         }
@@ -789,6 +812,7 @@ nothrow @nogc:
             case AddressFamily.ipv4:  return _a.ipv4.addr == rhs._a.ipv4.addr;
             case AddressFamily.ipv6:  return _a.ipv6.addr == rhs._a.ipv6.addr;
             case AddressFamily.ether: return _a.ether.addr == rhs._a.ether.addr;
+            case AddressFamily.link:  return _a.link.scope_id == rhs._a.link.scope_id;
             default:                  return true;
         }
     }
@@ -808,6 +832,8 @@ nothrow @nogc:
                 return _a.ipv6 == rhs._a.ipv6;
             case AddressFamily.ether:
                 return _a.ether == rhs._a.ether;
+            case AddressFamily.link:
+                return _a.link == rhs._a.link;
             default:
                 return true;
         }
@@ -843,6 +869,10 @@ nothrow @nogc:
                 if (_a.ether.port == rhs._a.ether.port)
                     return (_a.ether.scope_id > rhs._a.ether.scope_id) - (_a.ether.scope_id < rhs._a.ether.scope_id);
                 return _a.ether.port - rhs._a.ether.port;
+            case AddressFamily.link:
+                if (_a.link.scope_id == rhs._a.link.scope_id)
+                    return _a.link.port - rhs._a.link.port;
+                return _a.link.scope_id > rhs._a.link.scope_id ? 1 : -1;
             default:
                 return 0;
         }
@@ -860,6 +890,8 @@ nothrow @nogc:
                 a |= ulong(x) << (i * 8);
             return cast(size_t)(a * 0x9E3779B97F4A7C15) ^ _a.ether.port ^ (size_t(_a.ether.scope_id) << 16);
         }
+        if (family == AddressFamily.link)
+            return _a.link.port ^ (size_t(_a.link.scope_id) << 16);
         return _a.ipv6.addr.toHash() ^ _a.ipv6.port ^ (size_t(_a.ipv6.scope_id) << 16);
     }
 
@@ -890,6 +922,16 @@ nothrow @nogc:
             tmp[offset++] = ']';
             tmp[offset++] = ':';
             offset += _a.ether.port.format_uint(tmp[offset..$]);
+        }
+        else if (family == AddressFamily.link)
+        {
+            tmp[0] = '%';
+            ptrdiff_t zone = inet_scope_name(_a.link.scope_id, tmp[1 .. $ - 6]);
+            if (zone < 0)
+                return -1;
+            offset = 1 + zone;
+            tmp[offset++] = ':';
+            offset += _a.link.port.format_uint(tmp[offset..$]);
         }
         else
         {
@@ -1273,6 +1315,13 @@ unittest
         assert(inet_scope_parse(zone, scope_id) == -1);
     }
     assert(a.fromString("[fe80::1%18446744073709551617]:80") == -1);
+
+    InetAddress link = InetAddress.link(3, 4827);
+    InetAddress link_low = InetAddress.link(3, 4826);
+    assert(link.family == AddressFamily.link && link.port == 4827 && !link.addr_any);
+    assert(buf[0 .. link.toString(buf, null, null)] == "%3:4827");
+    assert(link != link_low && link.same_addr(link_low) && link_low < link && link.toHash != link_low.toHash);
+    assert(InetAddress.link(0, 1).addr_any);
 
     register_inet_scope_provider(&test_provider);
     assert(a.fromString("fe80::1%18446744073709551617") == -1);

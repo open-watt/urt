@@ -22,7 +22,7 @@ int main()
 {
     auto value = alloc!Derived();
     base_calls = derived_calls = 0;
-    _d_invariant_impl(value);
+    assert(value);
     version (D_TypeInfo)
         assert(base_calls == 1 && derived_calls == 1);
     else

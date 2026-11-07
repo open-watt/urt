@@ -1680,22 +1680,30 @@ class TypeInfo_Aya : TypeInfo_Array {}  // immutable(char)[] = string
 // _d_invariant - contract invariant hook (matches rt.invariant_ mangling)
 // ----------------------------------------------------------------------
 
-pragma(mangle, "_D2rt10invariant_12_d_invariantFC6ObjectZv")
-void _d_invariant_impl(Object o) nothrow @nogc
+mixin template invariant_hook(string symbol_prefix = "")
 {
-    assert(o !is null);
-    version (D_TypeInfo)
+    pragma(mangle, symbol_prefix ~ "_D2rt10invariant_12_d_invariantFC6ObjectZv")
+    void _d_invariant_impl(Object o) nothrow @nogc
     {
-        auto c = typeid(o);
-        do
+        assert(o !is null);
+        version (D_TypeInfo)
         {
-            if (c.classInvariant)
-                c.classInvariant(o);
-            c = c.base;
+            auto c = typeid(o);
+            do
+            {
+                if (c.classInvariant)
+                    c.classInvariant(o);
+                c = c.base;
+            }
+            while (c);
         }
-        while (c);
     }
 }
+
+// Match LDC's implicit Win64 invariant call ABI and exact LLVM symbol.
+version (LDC) version (Windows) version (X86_64) version = CInvariantHook;
+version (CInvariantHook) extern(C) mixin invariant_hook!"\x01";
+else mixin invariant_hook;
 
 // ----------------------------------------------------------------------
 // Compiler-generated memset intrinsics (struct initialization)

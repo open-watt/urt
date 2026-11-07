@@ -64,10 +64,12 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     {
         import urt.internal.stdc.stdlib : exit;
 
+        const test_module = d_args.length == 3 && d_args[1] == "--test-module" ? d_args[2] : null;
         size_t executed, passed;
         foreach (m; modules)
         {
-            if (m is null) continue;
+            if (m is null || (test_module !is null && m.name != test_module))
+                continue;
             if (auto fp = cast(void function() nothrow @nogc) m.unitTest)
             {
                 write_err("  running: ", m.name, " ... ");

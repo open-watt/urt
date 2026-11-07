@@ -63,6 +63,13 @@ jobs:
         if: matrix.compiler == 'ldc'
         run: make check-no-rtti ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=ldc
 
+      - name: Test optimized trace frames
+        if: matrix.os == 'windows' && matrix.arch == 'x86_64' && matrix.compiler == 'ldc'
+        shell: bash
+        run: |
+          make ARCH=x86_64 OS=windows CONFIG=unittest COMPILER=ldc OBJDIR=obj/trace_unittest TARGETDIR=bin/trace_unittest BUILD_CMD_FLAGS='-main -O3 -enable-inlining'
+          ./bin/trace_unittest/urt_test.exe --test-module urt.internal.exception
+
       - name: Test Tiny float conversion without strtod
         if: matrix.os == 'ubuntu' && matrix.arch == 'x86_64' && matrix.compiler == 'ldc'
         run: |

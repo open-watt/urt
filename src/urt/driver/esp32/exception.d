@@ -109,6 +109,7 @@ size_t _capture_trace(void*[] addrs) @trusted
 
 // Return the return address of the `skip`-th frame above the public
 // `caller_address` wrapper's caller.
+pragma(inline, false)
 void* _caller_address(uint skip) @trusted
 {
     void*[32] buf = void;

@@ -53,12 +53,6 @@ version (D_InlineAsm_X86_64) {} else version (D_InlineAsm_X86) {} else
         s.trace.addrs[s.trace.length++] = cast(void*) ip;
         return 0;
     }
-
-    private void unwind_backtrace(ref StackTraceData trace) nothrow @nogc @trusted
-    {
-        UnwindState state = UnwindState(&trace, 2);
-        _Unwind_Backtrace(&unwind_trace_callback, &state);
-    }
 }
 
 // --- Minimal ELF types --------------------------------------------
@@ -892,6 +886,7 @@ private void dw_resolve_addresses(
 
 /// Capture the caller's call stack. First entry = return address of
 /// the function that called the public `capture_trace` wrapper.
+pragma(inline, false)
 size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
 {
     if (addrs.length == 0)
@@ -948,7 +943,8 @@ size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
     else
     {
         StackTraceData tmp;
-        unwind_backtrace(tmp);  // skips its own frames internally
+        UnwindState state = UnwindState(&tmp, 2);
+        _Unwind_Backtrace(&unwind_trace_callback, &state);
         auto n = tmp.length < addrs.length ? tmp.length : addrs.length;
         addrs[0 .. n] = tmp.addrs[0 .. n];
         return n;
@@ -957,6 +953,7 @@ size_t _capture_trace(void*[] addrs) nothrow @nogc @trusted
 
 /// Return the return address of the `skip`-th frame above the public
 /// `caller_address` wrapper's caller.
+pragma(inline, false)
 void* _caller_address(uint skip) nothrow @nogc @trusted
 {
     void*[32] buf = void;

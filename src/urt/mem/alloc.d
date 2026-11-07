@@ -3,9 +3,6 @@ module urt.mem.alloc;
 import urt.mem;
 import urt.util : is_aligned, is_power_of_2;
 
-version (Tiny) {} else
-    version = MemoryThreats;
-
 nothrow @nogc:
 
 
@@ -54,7 +51,7 @@ void[] alloc(size_t size, size_t alignment, MemFlags flags = MemFlags.none) pure
     }
     else static if (needs_accounting)
     {
-        account(accounted_size(mem.ptr, mem.length), false);
+        account(mem.length, false);
     }
     version (AllocTracking)
     {
@@ -101,8 +98,6 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = default_alignment
     {
         void* old_ptr = mem.ptr;
         size_t old_size = mem.length;
-        static if (needs_accounting)
-            size_t old_accounted_size = accounted_size(mem.ptr, mem.length);
         void[] new_mem = _realloc(mem, new_size, alignment, flags);
         if (new_mem.ptr is null)
         {
@@ -120,7 +115,7 @@ void[] realloc(void[] mem, size_t new_size, size_t alignment = default_alignment
         static if (needs_accounting)
         {
             if (new_mem.ptr !is null)
-                reaccount(old_accounted_size, accounted_size(new_mem.ptr, new_mem.length));
+                reaccount(old_size, new_mem.length);
         }
         version (AllocTracking)
         {
@@ -196,7 +191,7 @@ void free(T)(T[] mem) pure
         return;
     static if (needs_accounting)
     {
-        account(accounted_size(cast(void*)mem.ptr, mem.length), true);
+        account(mem.length, true);
     }
     version (AllocTracking)
     {
@@ -348,8 +343,6 @@ void[] expand(void[] mem, size_t new_size) pure
 {
     if (mem.ptr is null)
         return null;
-    static if (needs_accounting)
-        size_t old_accounted_size = accounted_size(mem.ptr, mem.length);
     static if (has_expand)
         void[] new_mem = _expand(mem, new_size);
     else static if (has_memsize)
@@ -366,7 +359,7 @@ void[] expand(void[] mem, size_t new_size) pure
     static if (needs_accounting)
     {
         if (new_mem.ptr !is null)
-            reaccount(old_accounted_size, accounted_size(new_mem.ptr, new_mem.length));
+            reaccount(mem.length, new_mem.length);
     }
     version (AllocProfile)
     {
@@ -390,22 +383,7 @@ size_t memsize(void* ptr) pure
         assert(false, "unsupported");
 }
 
-version (MemoryThreats) private enum memory_threats = true;
-else private enum memory_threats = false;
-private enum needs_accounting = !has_pool_usage || memory_threats;
-
-private size_t accounted_size(void* ptr, size_t requested) pure
-{
-    static if (__traits(compiles, account_usable_size))
-    {
-        static if (account_usable_size)
-            return _memsize(ptr);
-        else
-            return requested;
-    }
-    else
-        return requested;
-}
+private enum needs_accounting = !has_pool_usage;
 
 void[] alloc_exec(size_t size) pure
 {
@@ -454,19 +432,8 @@ private void account(size_t bytes, bool freed) pure
 {
     static void impl(size_t bytes, bool freed) nothrow @nogc
     {
-        static if (!has_pool_usage)
-        {
-            import urt.mem.pressure : account_pool_usage;
-            account_pool_usage(bytes, freed);
-        }
-        version (MemoryThreats)
-        {
-            import urt.mem.reclaim : account_alloc, account_free;
-            if (freed)
-                account_free(bytes);
-            else
-                account_alloc(bytes);
-        }
+        import urt.mem.pressure : account_pool_usage;
+        account_pool_usage(bytes, freed);
     }
     alias Fn = void function(size_t, bool) pure nothrow @nogc;
     (cast(Fn) &impl)(bytes, freed);

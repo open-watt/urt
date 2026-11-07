@@ -168,6 +168,18 @@ else
 	$(error check-invariants requires COMPILER=ldc)
 endif
 
+.PHONY: check-dmd-bounds
+check-dmd-bounds: BOUNDS_TEST := $(TARGETDIR)/dmd-bounds-test$(if $(filter windows,$(OS)),.exe)
+check-dmd-bounds:
+ifeq ($(COMPILER),dmd)
+	mkdir -p $(OBJDIR) $(TARGETDIR)
+	"$(DC)" $(filter-out -unittest -release,$(DFLAGS)) -of$(BOUNDS_TEST) -od$(OBJDIR) $(URT_SOURCES) tools/test_dmd_bounds.d
+	./$(BOUNDS_TEST) index
+	./$(BOUNDS_TEST) slice
+else
+	$(error check-dmd-bounds requires COMPILER=dmd)
+endif
+
 .PHONY: check-no-rtti
 check-no-rtti:
 ifeq ($(COMPILER),ldc)

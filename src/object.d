@@ -896,22 +896,38 @@ extern(C) void _d_assert(string file, uint line) nothrow @nogc
     assert_handler()(file, line, null);
 }
 
-extern(C) void _d_arraybounds_indexp(string file, uint line, size_t index, size_t length) nothrow @nogc
+version (DigitalMars)
+    private alias BoundsDiagnosticFile = immutable(char)*;
+else
+    private alias BoundsDiagnosticFile = string;
+
+pragma(inline, false)
+private void report_bounds_error(BoundsDiagnosticFile file, uint line, string message) nothrow @nogc
 {
     import urt.exception : assert_handler;
-    assert_handler()(file, line, "array index out of bounds");
+    static if (is(BoundsDiagnosticFile == string))
+        alias filename = file;
+    else
+    {
+        import urt.mem : strlen;
+        auto filename = file[0 .. file ? strlen(file) : 0];
+    }
+    assert_handler()(filename, line, message);
 }
 
-extern(C) void _d_arraybounds_slicep(string file, uint line, size_t lower, size_t upper, size_t length) nothrow @nogc
+extern(C) void _d_arraybounds_indexp(BoundsDiagnosticFile file, uint line, size_t index, size_t length) nothrow @nogc
 {
-    import urt.exception : assert_handler;
-    assert_handler()(file, line, "array slice out of bounds");
+    report_bounds_error(file, line, "array index out of bounds");
 }
 
-extern(C) void _d_arrayboundsp(string file, uint line) nothrow @nogc
+extern(C) void _d_arraybounds_slicep(BoundsDiagnosticFile file, uint line, size_t lower, size_t upper, size_t length) nothrow @nogc
 {
-    import urt.exception : assert_handler;
-    assert_handler()(file, line, "array index out of bounds");
+    report_bounds_error(file, line, "array slice out of bounds");
+}
+
+extern(C) void _d_arrayboundsp(BoundsDiagnosticFile file, uint line) nothrow @nogc
+{
+    report_bounds_error(file, line, "array index out of bounds");
 }
 
 extern(C) void _d_arraybounds(string file, uint line) nothrow @nogc

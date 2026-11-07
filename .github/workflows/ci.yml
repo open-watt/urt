@@ -59,6 +59,10 @@ jobs:
       - name: Run unittest
         run: ./bin/${{ matrix.arch }}_${{ env.MAKE_OS }}_unittest/urt_test${{ matrix.os == 'windows' && '.exe' || '' }}
 
+      - name: Check DMD bounds diagnostics
+        if: matrix.arch == 'x86_64' && matrix.compiler == 'dmd'
+        run: make check-dmd-bounds ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=dmd
+
       - name: Compile tests without RTTI
         if: matrix.compiler == 'ldc'
         run: make check-no-rtti ARCH=${{ matrix.arch }} OS=${{ env.MAKE_OS }} CONFIG=unittest COMPILER=ldc

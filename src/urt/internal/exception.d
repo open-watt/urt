@@ -436,6 +436,7 @@ version (unittest)
     // caller in the capture_trace and skip-count tests below. defeat_tco
     // keeps eh_capture_here as a real frame so the walker captures
     // capture_trace's saved ra (= a PC inside eh_capture_here) as buf[0].
+    pragma(inline, false)
     private size_t eh_capture_here(void*[] buf) @trusted nothrow @nogc
     {
         auto n = capture_trace(buf);

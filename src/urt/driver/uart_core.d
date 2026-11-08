@@ -556,6 +556,24 @@ MonoTime rx_rebuild(ulong tag48)
 
 unittest
 {
+    uart_ports_test();
+    version (Tiny) {} else
+    {
+        static void with_classes(const(PageCategoryConfig)[] classes)
+        {
+            assert(page_pool_init(classes));
+            uart_ports_test();
+            page_pool_deinit();
+        }
+        static immutable PageCategoryConfig[1] one = [PageCategoryConfig(1648, 4, 8, 1, 2)];
+        static immutable PageCategoryConfig[3] three = [PageCategoryConfig(352, 8, 8, 1, 4), PageCategoryConfig(800, 4, 8, 1, 2), PageCategoryConfig(1648, 4, 8, 1, 2)];
+        with_classes(one[]);
+        with_classes(three[]);
+    }
+}
+
+version (unittest) private void uart_ports_test()
+{
     static struct Model
     {
         static __gshared bool stalled, busy;
@@ -601,6 +619,7 @@ unittest
     }
     alias ports = Model.ports;
     alias rx_room_of = UartPorts!(2, 1, Model.idle, Model.fill).rx_room;
+    Model.sent = Model.rx_calls = Model.tx_calls = 0;
 
     bool owns_pool = page_pool_init();
     scope (exit) if (owns_pool) page_pool_deinit();
@@ -608,10 +627,13 @@ unittest
     enum bool counted = __traits(compiles, page_pool_stats(0));
     uint in_use()
     {
+        uint pages;
         static if (counted)
-            return page_pool_stats(0).pages_in_use + page_pool_stats(large).pages_in_use;
-        else
-            return 0;
+        {
+            foreach (category; 0 .. large + 1)
+                pages += page_pool_stats(cast(ubyte)category).pages_in_use;
+        }
+        return pages;
     }
     immutable uint baseline = in_use();
 
@@ -650,7 +672,7 @@ unittest
     Model.stalled = true;
     foreach (i; 0 .. 100)
         assert(ports.write(1, "0123") == 4);
-    assert(ports.tx_pending(1) == 400 && (!counted || in_use() == baseline + 2), "short writes share pages");
+    assert(ports.tx_pending(1) == 400 && (!counted || in_use() == baseline + (400 + page_payload_size(0) - 1) / page_payload_size(0)), "short writes share pages");
     assert(ports.send(1, make("|lent|")) && ports.write(1, "tail") == 4 && ports.tx_pending(1) == 410);
     Model.busy = true;
     assert(!ports.tx_done(1), "a stalled line is not done");

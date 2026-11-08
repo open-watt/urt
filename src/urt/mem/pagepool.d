@@ -4,6 +4,12 @@ public import urt.mem.page;
 
 import urt.mem.alloc : default_alignment;
 
+import urt_config : page_classes;
+
+static assert(page_classes.length > 0, "urt_config declares at least one page class");
+static foreach (i; 0 .. page_classes.length)
+    static assert(page_classes[i].pages_per_slab > 0 && page_classes[i].pages_per_slab <= 256 && page_classes[i].reserve_pages <= 8 * page_classes[i].pages_per_slab, "a page class grows by 1 to 256 pages and reserves no more than eight slabs of them");
+
 version (Tiny) {} else
     version = PagePoolDiagnostics;
 
@@ -11,7 +17,14 @@ version (Tiny)
 {
     import urt.mem.pagepool_tiny;
 
-    alias Pool = PagePool!(336, 64, 4, 1616, 32, 2);
+    // a Tiny pool keeps its reserve resident and grows to the eight slabs a micro's regular pool may
+    static immutable TinyPageClass[page_classes.length] tiny_classes = () {
+        TinyPageClass[page_classes.length] r;
+        foreach (i, c; page_classes)
+            r[i] = TinyPageClass(c.capacity - Page.offset.offsetof, cast(ushort)(8 * c.pages_per_slab), c.reserve_pages);
+        return r;
+    }();
+    alias Pool = PagePool!tiny_classes;
 
     alias page_pool_init     = Pool.page_pool_init;
     alias page_alloc         = Pool.page_alloc;
@@ -103,10 +116,15 @@ bool page_pool_init()
         enum ushort max_slabs = 8;
     else
         enum ushort max_slabs = ushort.max;
-    static immutable PageCategoryConfig[2] defaults = [
-        { page_size:  352, pages_per_slab: 8, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 4 },
-        { page_size: 1632, pages_per_slab: 4, max_slabs: max_slabs, prealloc_slabs: 1, reserve_pages: 2 },
-    ];
+    static assert(page_classes.length <= max_page_categories);
+    static immutable PageCategoryConfig[page_classes.length] defaults = () {
+        PageCategoryConfig[page_classes.length] r;
+        foreach (i, c; page_classes)
+            r[i] = PageCategoryConfig((c.capacity + 15) & ~15, c.pages_per_slab, max_slabs, 1, c.reserve_pages);
+        return r;
+    }();
+    static foreach (i; 0 .. defaults.length)
+        static assert(defaults[i].page_size > Page.sizeof && defaults[i].page_size <= ushort.max && (i == 0 || defaults[i - 1].page_size < defaults[i].page_size), "page classes round to ordered, distinct pages that each hold a payload");
     return page_pool_init(defaults[]);
 }
 

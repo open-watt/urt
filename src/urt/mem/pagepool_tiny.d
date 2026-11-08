@@ -53,15 +53,12 @@ version (PagePoolDiagnostics)
     }
 }
 
-// The prealloc counts are the floor of the reserve an ISR can count on.
-template PagePool(
-    size_t small_capacity, ushort small_max_pages, ushort small_prealloc_pages,
-    size_t large_capacity, ushort large_max_pages, ushort large_prealloc_pages)
+template PagePool(alias classes)
 {
-    static assert(small_capacity > 0 && small_capacity < large_capacity);
-    static assert(large_capacity <= ushort.max);
-    static assert(small_max_pages > 0 && small_prealloc_pages <= small_max_pages);
-    static assert(large_max_pages > 0 && large_prealloc_pages <= large_max_pages);
+    enum ubyte num_classes = classes.length;
+    static foreach (ubyte i; 0 .. num_classes)
+        static assert(page_size(i) <= ushort.max && (i == 0 || page_size(i - 1) < page_size(i)),
+                      "page classes round to distinct pages within 16 bits");
 
     bool page_pool_init()
     {
@@ -80,8 +77,8 @@ template PagePool(
         }
         page_pool_maintenance(&maintain);
 
-        preallocate(0, small_prealloc_pages);
-        preallocate(1, large_prealloc_pages);
+        foreach (ubyte category; 0 .. num_classes)
+            preallocate(category, classes[category].reserve_pages);
         return true;
     }
 
@@ -144,18 +141,18 @@ template PagePool(
 
     size_t page_payload_size(ubyte category)
     {
-        assert(category < 2);
+        assert(category < num_classes);
         return page_size(category) - Page.sizeof;
     }
 
     uint page_pool_num_categories()
-        => 2;
+        => num_classes;
 
     // Raises or lowers the free pages kept for ISRs, as a user that allocates from one comes and goes; raising it tops
     // the category up on the next page_pool_wake().
     void page_pool_reserve(ubyte category, int pages)
     {
-        assert(category < 2);
+        assert(category < num_classes);
         atomicFetchAdd(_reserve[category], cast(uint)pages);
         if (pages > 0)
             request_refill(category);
@@ -164,7 +161,7 @@ template PagePool(
     // Frees the free pages below each category's prealloc floor.
     ReclaimResult page_pool_trim(size_t bytes_needed = size_t.max)
     {
-        foreach (ubyte category; 0 .. 2)
+        foreach (ubyte category; 0 .. num_classes)
         {
             uint taken;
             void* cut = _free[category].take_beyond(reserve(category), taken);
@@ -194,7 +191,7 @@ template PagePool(
         page_pool_maintenance(null);
         free_deferred();
 
-        foreach (ubyte category; 0 .. 2)
+        foreach (ubyte category; 0 .. num_classes)
         {
             assert(_allocated_pages[category] == _free[category].length, "Page pool deinit with pages in use!");
             immutable size_t size = page_size(category);
@@ -232,7 +229,7 @@ template PagePool(
                 return result;
             }
 
-            assert(category < 2);
+            assert(category < num_classes);
             result.pages_free = _free[category].length;
             result.pages_in_use = _allocated_pages[category] - result.pages_free;
             result.high_water = atomicLoad(_category_diagnostics[category].high_water);
@@ -277,30 +274,23 @@ template PagePool(
             shared uint fail_count;
         }
 
-        __gshared CategoryDiagnostics[2] _category_diagnostics;
+        __gshared CategoryDiagnostics[num_classes] _category_diagnostics;
         __gshared JumboDiagnostics _jumbo_diagnostics;
     }
 
     __gshared Critical _lock;       // page counts
-    __gshared FreeStack!true[2] _free;
+    __gshared FreeStack!true[num_classes] _free;
     __gshared FreeStack!true _deferred;     // heap pages released in an ISR
-    __gshared ushort[2] _allocated_pages;
-    __gshared shared(bool)[2] _refill;
-    __gshared shared(uint)[2] _reserve;
+    __gshared ushort[num_classes] _allocated_pages;
+    __gshared shared(bool)[num_classes] _refill;
+    __gshared shared(uint)[num_classes] _reserve;
     __gshared bool _initialised;
 
-    // the capacity counts the page's own cursors; the pool's words come on top
     size_t page_size(ubyte category)
-        => Page.offset.offsetof + (((category == 0 ? small_capacity : large_capacity) + 7) & ~cast(size_t)7);
-
-    ushort max_pages(ubyte category)
-        => category == 0 ? small_max_pages : large_max_pages;
-
-    ushort prealloc_pages(ubyte category)
-        => category == 0 ? small_prealloc_pages : large_prealloc_pages;
+        => (classes[category].capacity + 7) & ~cast(size_t)7;
 
     uint reserve(ubyte category)
-        => prealloc_pages(category) + atomicLoad(_reserve[category]);
+        => classes[category].reserve_pages + atomicLoad(_reserve[category]);
 
     ref shared(size_t) tag_of(Page* page)
         => *cast(shared(size_t)*)&page.tag;
@@ -312,11 +302,19 @@ template PagePool(
         if (required > ushort.max)
             return null;
 
+        ubyte category = num_classes;
+        static foreach (ubyte i; 0 .. num_classes)
+        {
+            if (required <= page_size(i))
+            {
+                category = i;
+                goto selected;
+            }
+        }
+    selected:
         void[] storage;
-        if (required <= page_size(0))
-            storage = alloc_pooled(0, required, grow);
-        else if (required <= page_size(1))
-            storage = alloc_pooled(1, required, grow);
+        if (category < num_classes)
+            storage = alloc_pooled(category, required, grow);
         else if (grow)
             storage = alloc_heap_page(required);
         if (!storage.ptr)
@@ -382,7 +380,7 @@ template PagePool(
         }
 
         ubyte category = tag_category(tag);
-        assert(category < 2);
+        assert(category < num_classes);
         page.tag = 0;
         _free[category].push(page);
     }
@@ -422,7 +420,7 @@ template PagePool(
     {
         {
             auto guard = _lock.acquire();
-            if (_allocated_pages[category] >= max_pages(category))
+            if (_allocated_pages[category] >= 8 * classes[category].pages_per_slab)
                 return null;
             ++_allocated_pages[category];
         }
@@ -467,7 +465,7 @@ template PagePool(
     void maintain()
     {
         free_deferred();
-        foreach (ubyte category; 0 .. 2)
+        foreach (ubyte category; 0 .. num_classes)
         {
             if (!atomicExchange(&_refill[category], false))
                 continue;
@@ -527,9 +525,33 @@ template PagePool(
 }
 
 
+private static immutable PageClass[2] test_classes = [PageClass(Page.offset.offsetof + 56, 1, 4), PageClass(Page.offset.offsetof + 248, 1, 0)];
+private static immutable PageClass[1] one_class = [PageClass(Page.offset.offsetof + 248, 1, 1)];
+private static immutable PageClass[3] three_classes = [PageClass(Page.offset.offsetof + 56, 1, 1), PageClass(Page.offset.offsetof + 120, 1, 1), PageClass(Page.offset.offsetof + 248, 1, 1)];
+
+// a request takes the smallest class it fits, and one past the largest goes to the heap
+void page_pool_classes_test(alias classes)()
+{
+    alias Pool = PagePool!classes;
+    assert(Pool.page_pool_init() && Pool.page_pool_num_categories() == classes.length);
+    foreach (ubyte category; 0 .. classes.length)
+    {
+        Page* page = Pool.page_alloc(Pool.page_payload_size(category), 1);
+        assert(page && Pool.page_category(page) == category);
+        Pool.page_free(page);
+    }
+    Page* page = Pool.page_alloc(Pool.page_payload_size(cast(ubyte)(classes.length - 1)) + 1, 1);
+    assert(page && Pool.page_category(page) == page_category_heap);
+    Pool.page_free(page);
+    Pool.page_pool_deinit();
+}
+
 void page_pool_tiny_test()()
 {
-    alias TestPool = PagePool!(56, 8, 4, 248, 4, 0);
+    page_pool_classes_test!one_class();
+    page_pool_classes_test!three_classes();
+
+    alias TestPool = PagePool!test_classes;
 
     __gshared uint signals;
     static void hook() nothrow @nogc { ++signals; }

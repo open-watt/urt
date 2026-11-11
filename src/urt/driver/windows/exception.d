@@ -138,6 +138,7 @@ private __gshared SymGetLineFromAddr64Fn _sym_get_line;
 private __gshared StackWalk64Fn _stack_walk64;
 private __gshared FuncTableAccessFn _func_table_access64;
 private __gshared GetModuleBaseFn _get_module_base64;
+private __gshared char[32 * 1024] _batch_strings;
 
 // --- Initialization --------------------------------------------------
 
@@ -332,13 +333,33 @@ bool _resolve_address(void* addr, out Resolved r) @trusted
 /// Resolve many addresses. DbgHelp has no batch primitive - loop.
 /// Returns false if DbgHelp is unavailable; otherwise true (individual
 /// failed entries stay `Resolved.init` thanks to `out` auto-zeroing).
+/// Each lookup reuses the symbol buffer and DbgHelp's file name storage,
+/// so names and files are copied into storage that lasts until the next
+/// batch; entries past its capacity lose the strings that do not fit.
 bool _resolve_batch(const(void*)[] addrs, Resolved[] results) @trusted
 {
     dbghelp_init();
     if (!_dbg_available)
         return false;
+
+    size_t used = 0;
+    const(char)[] keep(const(char)[] s)
+    {
+        if (s.length > _batch_strings.length - used)
+            return null;
+        char[] copy = _batch_strings[used .. used + s.length];
+        copy[] = s[];
+        used += s.length;
+        return copy;
+    }
+
     foreach (i, a; addrs)
-        _resolve_address(cast(void*) a, results[i]);
+    {
+        if (!_resolve_address(cast(void*) a, results[i]))
+            continue;
+        results[i].name = keep(results[i].name);
+        results[i].file = keep(results[i].file);
+    }
     return true;
 }
 

@@ -851,17 +851,49 @@ void _d_arraysetctor(Tarr : T[], T)(scope Tarr p, scope ref T value, char* make_
 
 Tarr _d_arrayassign_l(Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
 {
-    assert(false, "Array assign requires druntime");
+    assert(to.length == from.length, "Array assign length mismatch");
+    if (from.ptr < to.ptr && to.ptr < from.ptr + from.length)
+    {
+        foreach_reverse (i, ref dst; to)
+            reassign!true(dst, from[i]);
+    }
+    else
+    {
+        foreach (i, ref dst; to)
+            reassign!true(dst, from[i]);
+    }
+    return to;
 }
 
 Tarr _d_arrayassign_r(Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
 {
-    assert(false, "Array assign requires druntime");
+    assert(to.length == from.length, "Array assign length mismatch");
+    assert(to.ptr + to.length <= from.ptr || from.ptr + from.length <= to.ptr, "Array assign overlap");
+    foreach (i, ref dst; to)
+        reassign!false(dst, from[i]);
+    return to;
 }
 
-void _d_arraysetassign(Tarr : T[], T)(return scope Tarr to, scope ref T value) @trusted
+Tarr _d_arraysetassign(Tarr : T[], T)(return scope Tarr to, scope ref T value) @trusted
 {
-    assert(false, "Array set-assign requires druntime");
+    foreach (ref dst; to)
+        reassign!(__traits(isCopyable, T))(dst, value);
+    return to;
+}
+
+private void reassign(bool copy, T)(ref T dst, ref T src) @trusted
+{
+    import urt.lifetime : emplace;
+    import urt.mem : memcpy;
+    import urt.traits : Unqual;
+
+    void[T.sizeof] old = void;
+    memcpy(old.ptr, &dst, T.sizeof);
+    static if (copy)
+        emplace!(Unqual!T)(cast(Unqual!T*)&dst, src);
+    else
+        memcpy(cast(void*)&dst, &src, T.sizeof);
+    destruct_recurse(*cast(Unqual!T*)old.ptr);
 }
 
 size_t _d_arraysetlengthT(Tarr : T[], T)(return ref scope Tarr arr, size_t newlength) @trusted
@@ -1818,4 +1850,76 @@ unittest
     Counted[3] filled = c;
     foreach (ref e; filled)
         assert(e.value == 107);
+
+    static struct Tracked
+    {
+        static int copies, destroyed;
+        int value;
+        this(int value) nothrow @nogc { this.value = value; }
+        this(ref const Tracked rh) nothrow @nogc { value = rh.value; ++copies; }
+        ~this() nothrow @nogc { destroyed += value; }
+    }
+    static Tracked[3] make_tracked(int base) nothrow @nogc
+    {
+        Tracked[3] r;
+        foreach (ref e; r)
+            e.value = base++;
+        return r;
+    }
+
+    Tracked[3] lhs = make_tracked(1);
+    Tracked[3] rhs = make_tracked(10);
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = rhs;
+    assert(Tracked.copies == 3 && Tracked.destroyed == 1 + 2 + 3);
+    assert(lhs[0].value == 10 && lhs[1].value == 11 && lhs[2].value == 12);
+
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs[1 .. 3] = lhs[0 .. 2];
+    assert(Tracked.copies == 2 && Tracked.destroyed == 11 + 12);
+    assert(lhs[0].value == 10 && lhs[1].value == 10 && lhs[2].value == 11);
+
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = make_tracked(20);
+    assert(Tracked.copies == 0 && Tracked.destroyed == 10 + 10 + 11);
+    assert(lhs[0].value == 20 && lhs[1].value == 21 && lhs[2].value == 22);
+
+    Tracked one = Tracked(5);
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = one;
+    assert(Tracked.copies == 3 && Tracked.destroyed == 20 + 21 + 22);
+    foreach (ref e; lhs)
+        assert(e.value == 5);
+
+    Tracked[2][2] grid, cells;
+    grid[0][0].value = 3;
+    cells[1][1].value = 7;
+    Tracked.copies = Tracked.destroyed = 0;
+    grid = cells;
+    assert(Tracked.copies == 4 && Tracked.destroyed == 3);
+    assert(grid[0][0].value == 0 && grid[1][1].value == 7);
+
+    static struct Blitted
+    {
+        static int blits;
+        int value;
+        this(this) nothrow @nogc { ++blits; }
+    }
+    Blitted[2] blit_lhs, blit_rhs;
+    blit_rhs[0].value = 1;
+    blit_rhs[1].value = 2;
+    blit_lhs = blit_rhs;
+    assert(Blitted.blits == 2 && blit_lhs[0].value == 1 && blit_lhs[1].value == 2);
+
+    static struct PureBlit
+    {
+        int value;
+        this(this) pure nothrow @nogc { value += 100; }
+    }
+    PureBlit[3] shifted;
+    shifted[0].value = 1;
+    shifted[1].value = 2;
+    shifted[2].value = 3;
+    shifted[1 .. 3] = shifted[0 .. 2];
+    assert(shifted[0].value == 1 && shifted[1].value == 101 && shifted[2].value == 102);
 }

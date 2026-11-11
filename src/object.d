@@ -827,14 +827,26 @@ TTo[] __ArrayCast(TFrom, TTo)(return scope TFrom[] from) @nogc pure @trusted
     return (cast(TTo*) from.ptr)[0 .. fromSize / TTo.sizeof];
 }
 
-Tarr _d_arrayctor(Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
+// `make_weakly_pure` is never passed: with `inout` arrays the hook would otherwise be strongly pure, and DMD drops a
+// strongly pure call whose result is unused, silently leaving the elements unconstructed.
+Tarr _d_arrayctor(Tarr : T[], T)(return scope Tarr to, scope Tarr from, char* make_weakly_pure = null) @trusted
 {
-    assert(false, "Array ctor requires druntime");
+    import urt.lifetime : emplace;
+    import urt.traits : Unqual;
+
+    assert(to.length == from.length, "Array ctor length mismatch");
+    foreach (i; 0 .. to.length)
+        emplace!(Unqual!T)(cast(Unqual!T*)&to[i], from[i]);
+    return to;
 }
 
-void _d_arraysetctor(Tarr : T[], T)(scope Tarr p, scope ref T value) @trusted
+void _d_arraysetctor(Tarr : T[], T)(scope Tarr p, scope ref T value, char* make_weakly_pure = null) @trusted
 {
-    assert(false, "Array set-ctor requires druntime");
+    import urt.lifetime : emplace;
+    import urt.traits : Unqual;
+
+    foreach (i; 0 .. p.length)
+        emplace!(Unqual!T)(cast(Unqual!T*)&p[i], value);
 }
 
 Tarr _d_arrayassign_l(Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
@@ -1777,4 +1789,33 @@ private ptrdiff_t try_copy_string(char[] buffer, const(char)[] src) pure nothrow
         buffer[0 .. src.length] = src[];
     }
     return src.length;
+}
+
+unittest
+{
+    static struct Counted
+    {
+        int value;
+        this(int value) pure nothrow @nogc { this.value = value; }
+        this(ref inout Counted rh) inout pure nothrow @nogc { value = rh.value + 100; }
+    }
+    static struct Elem { Counted c; int x; }
+    static struct Holder { Elem[2] elems; Counted tail; }
+
+    Holder a;
+    a.elems[0].c.value = 1;
+    a.elems[0].x = 11;
+    a.elems[1].c.value = 2;
+    a.elems[1].x = 22;
+    a.tail.value = 3;
+
+    Holder b = a;
+    assert(b.elems[0].c.value == 101 && b.elems[0].x == 11);
+    assert(b.elems[1].c.value == 102 && b.elems[1].x == 22);
+    assert(b.tail.value == 103);
+
+    Counted c = Counted(7);
+    Counted[3] filled = c;
+    foreach (ref e; filled)
+        assert(e.value == 107);
 }

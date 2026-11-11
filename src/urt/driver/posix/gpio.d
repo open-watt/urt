@@ -655,6 +655,7 @@ bool read_uint_file(const(char)[] path, out uint value)
 }
 
 
+version (UseInternalIPStack) {} else
 unittest
 {
     enum AF_UNIX = 1;

@@ -1562,11 +1562,22 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
     {
         import urt.mem : wcslen;
 
+        wchar[MAX_PATH] dir = void;
+        const(wchar)* dir_z;
+        if (dstDir.length == 0)
+        {
+            DWORD dir_len = GetTempPathW(MAX_PATH, dir.ptr);
+            if (dir_len == 0 || dir_len > MAX_PATH)
+                return getlasterror_result();
+            dir_z = dir.ptr;
+        }
+        else
+            dir_z = dstDir.twstringz;
+
         wchar[MAX_PATH] tmp = void;
-        if (!GetTempFileNameW(dstDir.twstringz, prefix.twstringz, 0, tmp.ptr))
+        if (!GetTempFileNameW(dir_z, prefix.twstringz, 0, tmp.ptr))
             return getlasterror_result();
-        size_t resLen = wcslen(tmp.ptr);
-        resLen = tmp[((dstDir.length == 0 && tmp[0] == '\\') ? 1 : 0)..resLen].uni_convert(buffer);
+        size_t resLen = tmp[0 .. wcslen(tmp.ptr)].uni_convert(buffer);
         if (resLen == 0)
         {
             DeleteFileW(tmp.ptr);
@@ -1576,8 +1587,10 @@ Result get_temp_filename(ref char[] buffer, const(char)[] dstDir, const(char)[] 
     }
     else version (Posix)
     {
+        if (dstDir.length == 0)
+            dstDir = "/tmp";
         // Construct a format string which will be the supplied dir with prefix and 8 generated random characters
-        char[] fn = cast(char[])tconcat(dstDir, (dstDir.length && dstDir[$-1] != '/') ? "/" : "", prefix, "XXXXXX\0");
+        char[] fn = cast(char[])tconcat(dstDir, dstDir[$-1] != '/' ? "/" : "", prefix, "XXXXXX\0");
         File file;
         file.fd = mkstemp(fn.ptr);
         if (file.fd == -1)
@@ -1651,12 +1664,10 @@ else unittest
     import urt.string;
 
     // A temp *file* name is the only unique name on offer, so borrow one and
-    // hang a directory off it. "." rather than "" because with no directory
-    // Windows creates the file at the drive root and hands back a relative
-    // path, which then names nothing.
+    // hang a directory off it.
     char[320] buffer = void;
     char[] temp_name = buffer[];
-    assert(get_temp_filename(temp_name, ".", "dirtest"));
+    assert(get_temp_filename(temp_name, "", "dirtest"));
     const(char)[] dir_path = tconcat(temp_name, ".dir");
     assert(create_directory(dir_path));
 

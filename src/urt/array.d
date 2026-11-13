@@ -231,17 +231,28 @@ U[] copy_to(T, U)(T[] arr, U[] dest)
     return prefix;
 }
 
-pragma(inline, true)
 U[] move_to(T, U)(T[] arr, U[] dest)
 {
     static assert(!is(T == shared) && !is(U == shared), "shared memory cannot be moved");
     static if (!is(T == U) && ((is_trivial!T && is(Unqual!T == U)) || byte_copy_compatible!(T, U)))
+    {
+        pragma(inline, true);
         return copy_to(arr, dest);
+    }
     else
     {
         static assert(is(T == U) && !is(T == const) && !is(T == immutable), "move requires a mutable source of the destination's element type");
         assert(dest.length >= arr.length);
-        return _d_arraymove!true(dest.ptr[0 .. arr.length], arr);
+        U[] prefix = dest.ptr[0 .. arr.length];
+        static if (is_trivial!T)
+            pragma(inline, true);
+        else if (arr.ptr < prefix.ptr && prefix.ptr < arr.ptr + arr.length)
+        {
+            foreach_reverse (i; 0 .. arr.length)
+                move(arr.ptr[i], prefix.ptr[i]);
+            return prefix;
+        }
+        return _d_arraymove!true(prefix, arr);
     }
 }
 
@@ -1156,6 +1167,17 @@ unittest
     int[4] overlapping = [1, 2, 3, 4];
     move_to(overlapping[0 .. 3], overlapping[1 .. 4]);
     assert(overlapping == [1, 1, 2, 3]);
+
+    static struct Owned
+    {
+        int value;
+        ~this() nothrow @nogc {}
+    }
+    Owned[4] owned = [Owned(1), Owned(2), Owned(3), Owned(4)];
+    move_to(owned[0 .. 3], owned[1 .. 4]);
+    assert(owned[1].value == 1 && owned[2].value == 2 && owned[3].value == 3);
+    move_to(owned[1 .. 4], owned[0 .. 3]);
+    assert(owned[0].value == 1 && owned[1].value == 2 && owned[2].value == 3);
 
     char[3] text = ['a', 'b', 'c'];
     ubyte[3] bytes;

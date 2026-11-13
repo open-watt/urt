@@ -502,6 +502,29 @@ unittest
         assert(eh_contains(mangle, "eh_ca_layer_2"), mangle);
     }
 
+    // Each batch entry keeps its own strings until the next call, not just the last one resolved.
+    import urt.mem.pressure : account_pool_usage;
+    const(void*)[3] batch_pcs = [pc0, pc1, cast(void*) &account_pool_usage];
+    Resolved[3] batch;
+    if (resolve_batch(batch_pcs[], batch[]))
+    {
+        if (batch[0].name.length)
+        {
+            auto mangle = demangle_symbol(batch[0].name, name);
+            assert(eh_contains(mangle, "eh_ca_layer_1"), mangle);
+        }
+        if (batch[1].name.length)
+        {
+            auto mangle = demangle_symbol(batch[1].name, name);
+            assert(eh_contains(mangle, "eh_ca_layer_2"), mangle);
+        }
+        if (batch[0].file.length && batch[2].file.length)
+        {
+            assert(eh_contains(batch[0].file, "exception.d"), batch[0].file);
+            assert(eh_contains(batch[2].file, "pressure.d"), batch[2].file);
+        }
+    }
+
     // demangler
 
     // Non-D / degenerate inputs pass through unchanged. This holds for both

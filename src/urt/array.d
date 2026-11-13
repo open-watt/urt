@@ -204,129 +204,74 @@ inout(T)* search(T)(inout(T)[] arr, bool delegate(ref const T) nothrow @nogc pre
     return null;
 }
 
-// TODO: use is_trivially_copy_constructible!
-private enum copy_use_memcpy(T, U) = is_trivial!T && is(Unqual!T == U);
-private enum copy_use_memcpy(T) = copy_use_memcpy!(T, T);
-// TODO: use is_trivially_move_constructible!
-private enum move_use_memcpy(T, U) = is_trivial!T && is(Unqual!T == U);
-private enum move_use_memcpy(T) = move_use_memcpy!(T, T);
 private enum is_byte_copy_type(T) = is(T == ubyte) || is(T == byte) || is(T == char) || is(T == void);
 private enum byte_copy_compatible(T, U) = is_byte_copy_type!(Unqual!T) && is_byte_copy_type!U;
 
 pragma(inline, true)
-U[] copy_to(bool overlapping = false, T, U)(T[] arr, U[] dest)
-    if (copy_use_memcpy!(T, U) || byte_copy_compatible!(T, U))
+U[] copy_to(T, U)(T[] arr, U[] dest)
 {
-    alias UT = Unqual!T;
-    enum same_type = is(UT == U);
-
-    static assert (!overlapping || same_type, "overlapping copy must be same type");
+    static assert(!is(T == shared) && !is(U == shared), "shared memory cannot be copied");
     assert(dest.length >= arr.length);
-
-    if (__ctfe)
-    {
-        static if (same_type)
-        {
-            if (arr.ptr < dest.ptr)
-            {
-                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-                    dest[i] = arr[i];
-                return dest[0 .. arr.length];
-            }
-        }
-        for (size_t i = 0; i < arr.length; ++i)
-            dest[i] = arr[i];
-    }
-    else
-        copy_bytes!overlapping(dest.ptr, arr.ptr, arr.length * T.sizeof);
-    return dest[0 .. arr.length];
-}
-
-U[] copy_to(bool overlapping = false, bool move = false, T, U)(T[] arr, U[] dest)
-    if (!copy_use_memcpy!(T, U) && !byte_copy_compatible!(T, U))
-{
-    alias UT = Unqual!T;
-    enum same_type = is(UT == U);
-
-    static assert (!overlapping || same_type, "overlapping copy must be same type");
-    assert(dest.length >= arr.length);
-
-    if (__ctfe)
-    {
-        static if (same_type)
-        {
-            if (arr.ptr < dest.ptr)
-            {
-                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-                    dest[i] = arr[i];
-                return dest[0 .. arr.length];
-            }
-        }
-        for (size_t i = 0; i < arr.length; ++i)
-            dest[i] = arr[i];
-    }
-    else static if (move)
-    {
-        static if (overlapping)
-        {
-            if (arr.ptr < dest.ptr && dest.ptr < arr.ptr + arr.length)
-            {
-                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-                    .move(arr[i], dest[i]);
-                return dest[0 .. arr.length];
-            }
-        }
-        for (size_t i = 0; i < arr.length; ++i)
-            .move(arr[i], dest[i]);
-    }
+    U[] prefix = dest.ptr[0 .. arr.length];
+    static if (is(Unqual!T == U))
+        _d_arrayassign_unchecked(prefix, arr);
     else
     {
-        static if (overlapping)
+        static if (byte_copy_compatible!(T, U))
         {
-            if (arr.ptr < dest.ptr && dest.ptr < arr.ptr + arr.length)
+            if (!__ctfe)
             {
-                for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-                    dest[i] = arr[i];
-                return dest[0 .. arr.length];
+                memcpy(prefix.ptr, arr.ptr, arr.length);
+                return prefix;
             }
         }
-        else static if (same_type)
-            dest[] = arr[];
-        else for (size_t i = 0; i < arr.length; ++i)
-            dest[i] = arr[i];
+        foreach (i, ref e; arr)
+            prefix[i] = e;
     }
-    return dest[0 .. arr.length];
+    return prefix;
 }
+
 pragma(inline, true)
-U[] move_to(bool overlapping = false, T, U)(T[] arr, U[] dest)
-    if (move_use_memcpy!(T, U) || byte_copy_compatible!(T, U))
-    => copy_to!overlapping(arr, dest);
-
-U[] move_to(bool overlapping = false, T, U)(T[] arr, U[] dest)
-    if (!move_use_memcpy!(T, U) && !byte_copy_compatible!(T, U))
-    => copy_to!(overlapping, true)(arr, dest);
+U[] move_to(T, U)(T[] arr, U[] dest)
+{
+    static assert(!is(T == shared) && !is(U == shared), "shared memory cannot be moved");
+    static if (!is(T == U) && ((is_trivial!T && is(Unqual!T == U)) || byte_copy_compatible!(T, U)))
+        return copy_to(arr, dest);
+    else
+    {
+        static assert(is(T == U) && !is(T == const) && !is(T == immutable), "move requires a mutable source of the destination's element type");
+        assert(dest.length >= arr.length);
+        return _d_arraymove!true(dest.ptr[0 .. arr.length], arr);
+    }
+}
 
 void emplace_all(bool move = false, T, U)(T[] arr, U[] dest)
 {
     assert(!__ctfe, "emplace_all should not be called at compile time");
 
-    static if (move && move_use_memcpy!(T, U))
-        move_to(cast(Unqual!T[])arr, dest);
-    else static if ((!move && copy_use_memcpy!(T, U)) || (is(T : U) && is_trivial!U))
-        copy_to(cast(Unqual!T[])arr, dest);
+    static if (is(Unqual!T == U) && (!move || is_trivial!T))
+    {
+        pragma(inline, true);
+        assert(dest.length >= arr.length);
+        _d_arrayctor_unchecked(dest.ptr[0 .. arr.length], arr);
+    }
     else static if (move)
     {
-//        pragma(msg, "move-emplace: ", T, " --> ", U);
-        for (size_t i = 0; i < arr.length; ++i)
-            moveEmplace(arr[i], dest[i]);
+        foreach (i, ref e; arr)
+            moveEmplace(e, dest[i]);
+    }
+    else static if (byte_copy_compatible!(T, U))
+    {
+        pragma(inline, true);
+        copy_to(arr, dest);
     }
     else
     {
-//        pragma(msg, "emplace: ", T, " --> ", U);
-        for (size_t i = 0; i < arr.length; ++i)
-            emplace!T(&dest[i], arr[i]);
+        foreach (i, ref e; arr)
+            emplace!U(&dest[i], e);
     }
 }
+pragma(inline, true)
 void move_emplace_all(T, U)(T[] arr, U[] dest)
     => emplace_all!(true, T, U)(arr, dest);
 
@@ -655,7 +600,7 @@ nothrow @nogc:
         assert(pos <= _length, "Insert position out of range");
         reserve(_length + 1);
         uint old_length = _length++;
-        move_emplace_overlapping(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
+        move_emplace_up(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
         static if (is(T == class) || is(T == interface))
             return (ptr[pos] = item);
         else
@@ -668,7 +613,7 @@ nothrow @nogc:
         assert(pos <= _length, "Insert position out of range");
         reserve(_length + 1);
         uint old_length = _length++;
-        move_emplace_overlapping(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
+        move_emplace_up(ptr[pos .. old_length], ptr[pos + 1 .. old_length + 1]);
         return *emplace!T(&ptr[pos], forward!args);
     }
 
@@ -717,7 +662,7 @@ nothrow @nogc:
         else
         {
             if (i < _length - count)
-                move_to!true(ptr[i + count .. _length], ptr[i .. _length - count]);
+                _d_arraymove!true(ptr[i .. _length - count], ptr[i + count .. _length]);
             destroy_all!false(ptr[_length - count .. length]);
         }
         _length -= cast(uint)count;
@@ -736,7 +681,7 @@ nothrow @nogc:
         else
         {
             if (i < _length - count)
-                move_to!true(ptr[_length - count .. _length], ptr[i .. i + count]);
+                _d_arraymove!true(ptr[i .. i + count], ptr[_length - count .. _length]);
             destroy_all!false(ptr[_length - count .. length]);
         }
         _length -= cast(uint)count;
@@ -1077,27 +1022,17 @@ private:
 
 private:
 
-pragma(inline, false)
-void copy_bytes(bool overlapping)(void* dest, const void* src, size_t bytes) pure
+void move_emplace_up(T)(T[] arr, T[] dest)
 {
-    static if (overlapping)
-        memmove(dest, src, bytes);
-    else
-        memcpy(dest, src, bytes);
-}
-
-void move_emplace_overlapping(T)(T[] arr, T[] dest)
-{
-    assert(arr.length == dest.length && arr.ptr < dest.ptr);
     static if (is_trivial!T)
-        move_to!true(arr, dest);
+    {
+        pragma(inline, true);
+        _d_arraymove!true(dest, arr);
+    }
     else
     {
-        for (ptrdiff_t i = ptrdiff_t(arr.length) - 1; i >= 0; --i)
-        {
-            moveEmplace!T(arr[i], dest[i]);
-            destroy!false(arr[i]);
-        }
+        foreach_reverse (i, ref e; arr)
+            moveEmplace(e, dest[i]);
     }
 }
 
@@ -1219,7 +1154,7 @@ bool el_cmp(T)(auto ref const T a, auto ref const T b)
 unittest
 {
     int[4] overlapping = [1, 2, 3, 4];
-    move_to!true(overlapping[0 .. 3], overlapping[1 .. 4]);
+    move_to(overlapping[0 .. 3], overlapping[1 .. 4]);
     assert(overlapping == [1, 1, 2, 3]);
 
     char[3] text = ['a', 'b', 'c'];

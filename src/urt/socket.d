@@ -238,7 +238,8 @@ else version (lwIP)
 else
     static assert(false, "Platform not supported");
 
-version (WinSock)
+version (SocketCallbacks) {}
+else version (WinSock)
     version = TestReceiveContext;
 else version (linux)
     version = TestReceiveContext;

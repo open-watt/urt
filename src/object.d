@@ -887,13 +887,14 @@ private void reassign(bool copy, T)(ref T dst, ref T src) @trusted
     import urt.mem : memcpy;
     import urt.traits : Unqual;
 
-    void[T.sizeof] old = void;
+    align(T.alignof) void[T.sizeof] old = void;
     memcpy(old.ptr, &dst, T.sizeof);
+    Unqual!T* saved = cast(Unqual!T*)old.ptr;
     static if (copy)
-        emplace!(Unqual!T)(cast(Unqual!T*)&dst, src);
+        emplace!(Unqual!T)(cast(Unqual!T*)&dst, *(&src is &dst ? cast(T*)saved : &src));
     else
         memcpy(cast(void*)&dst, &src, T.sizeof);
-    destruct_recurse(*cast(Unqual!T*)old.ptr);
+    destruct_recurse(*saved);
 }
 
 size_t _d_arraysetlengthT(Tarr : T[], T)(return ref scope Tarr arr, size_t newlength) @trusted
@@ -1898,6 +1899,28 @@ unittest
     grid = cells;
     assert(Tracked.copies == 4 && Tracked.destroyed == 3);
     assert(grid[0][0].value == 0 && grid[1][1].value == 7);
+
+    lhs = make_tracked(30);
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = lhs;
+    assert(Tracked.copies == 3 && Tracked.destroyed == 30 + 31 + 32);
+    assert(lhs[0].value == 30 && lhs[1].value == 31 && lhs[2].value == 32);
+
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = lhs[1];
+    assert(Tracked.copies == 3 && Tracked.destroyed == 30 + 31 + 32);
+    foreach (ref e; lhs)
+        assert(e.value == 31);
+
+    static struct Aligned
+    {
+        static size_t misaligned;
+        align(64) long value;
+        ~this() nothrow @nogc { misaligned |= cast(size_t)&this & (Aligned.alignof - 1); }
+    }
+    Aligned[2] aligned_lhs, aligned_rhs;
+    aligned_lhs = aligned_rhs;
+    assert(Aligned.misaligned == 0);
 
     static struct Blitted
     {

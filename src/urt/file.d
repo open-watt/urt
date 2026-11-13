@@ -725,6 +725,33 @@ Result remove_directory(const(char)[] path)
     return Result.success;
 }
 
+Result sync_directory(const(char)[] path)
+{
+    version (Windows)
+    {
+        HANDLE h = CreateFileW(path.twstringz, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+        if (h == INVALID_HANDLE_VALUE)
+            return getlasterror_result();
+        Result r = FlushFileBuffers(h) ? Result.success : getlasterror_result();
+        CloseHandle(h);
+        return r;
+    }
+    else version (Posix)
+    {
+        int fd = urt.internal.sys.posix.open(path.tstringz, O_RDONLY | O_CLOEXEC);
+        if (fd < 0)
+            return errno_result();
+        Result r = fsync(fd) == 0 ? Result.success : errno_result();
+        urt.internal.sys.posix.close(fd);
+        return r;
+    }
+    else version (HasFileBackend)
+        return Result.success; // backend operations commit atomically, entries included
+    else
+        return InternalResult.unsupported; // no filesystem on this platform
+}
+
 Result open(ref Directory dir, const(char)[] path)
 {
     version (Windows)
@@ -1665,6 +1692,9 @@ else unittest
     assert(create_directory(tconcat(dir_path, "/sub")));
 
     Directory dir;
+    assert(sync_directory(dir_path));
+    assert(!sync_directory(tconcat(dir_path, "/nope")));
+
     assert(dir.open(dir_path));
     assert(dir.is_open);
 

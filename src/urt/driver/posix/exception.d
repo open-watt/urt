@@ -772,7 +772,7 @@ private void dw_resolve_addresses(
                         found++;
                     }
 
-                    if (target == addr)
+                    if (target == addr && !is_end)
                         apply_loc(LocationInfo(machine.file_index, machine.line));
                     else if (last_address !is null && target > last_address && target < addr)
                         apply_loc(last_loc);

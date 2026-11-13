@@ -138,7 +138,7 @@ private __gshared SymGetLineFromAddr64Fn _sym_get_line;
 private __gshared StackWalk64Fn _stack_walk64;
 private __gshared FuncTableAccessFn _func_table_access64;
 private __gshared GetModuleBaseFn _get_module_base64;
-private __gshared char[32 * 1024] _batch_strings;
+private __gshared char[32 * 1024] _batch_strings = void;
 
 // --- Initialization --------------------------------------------------
 

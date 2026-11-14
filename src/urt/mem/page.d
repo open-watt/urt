@@ -163,6 +163,20 @@ const(void)[] page_chain_span(const(Page)* chain, size_t offset, size_t length)
     return null;
 }
 
+// a pool's page class: the largest page_required_capacity it holds, the pages it grows by, and the free pages an ISR can count on
+struct PageClass
+{
+    ushort capacity;
+    ushort pages_per_slab;
+    ushort reserve_pages;
+}
+
+size_t page_required_capacity(size_t bytes, size_t alignment, size_t headroom, size_t tailroom)
+{
+    debug assert(alignment != 0 && (alignment & (alignment - 1)) == 0);
+    return Page.sizeof + headroom + alignment - 1 + bytes + tailroom;
+}
+
 package(urt):
 
 void page_freed()
@@ -187,12 +201,6 @@ void page_pool_maintenance(void function() nothrow @nogc maintain)
 }
 
 enum size_t page_next_flags = 1;
-
-size_t page_required_capacity(size_t bytes, size_t alignment, size_t headroom, size_t tailroom)
-{
-    debug assert(alignment != 0 && (alignment & (alignment - 1)) == 0);
-    return Page.sizeof + headroom + alignment - 1 + bytes + tailroom;
-}
 
 bool page_initialise(Page* page, size_t storage_capacity, size_t bytes, size_t alignment, size_t headroom, size_t tailroom)
 {

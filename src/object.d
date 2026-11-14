@@ -829,15 +829,30 @@ TTo[] __ArrayCast(TFrom, TTo)(return scope TFrom[] from) @nogc pure @trusted
 
 // `make_weakly_pure` is never passed: with `inout` arrays the hook would otherwise be strongly pure, and DMD drops a
 // strongly pure call whose result is unused, silently leaving the elements unconstructed.
+pragma(inline, true)
 Tarr _d_arrayctor(Tarr : T[], T)(return scope Tarr to, scope Tarr from, char* make_weakly_pure = null) @trusted
 {
-    import urt.lifetime : emplace;
     import urt.traits : Unqual;
 
     assert(to.length == from.length, "Array ctor length mismatch");
-    foreach (i; 0 .. to.length)
-        emplace!(Unqual!T)(cast(Unqual!T*)&to[i], from[i]);
+    _d_arrayctor_unchecked(cast(Unqual!T[])to, from);
     return to;
+}
+
+// The unchecked cores take a mutable destination so they stay weakly pure; the caller guarantees equal lengths.
+void _d_arrayctor_unchecked(T, U)(U[] to, scope T[] from) @trusted
+{
+    import urt.lifetime : emplace;
+    import urt.mem : memcpy;
+    import urt.traits : is_trivial;
+
+    static if (is_trivial!T)
+        memcpy(to.ptr, from.ptr, to.length * T.sizeof);
+    else
+    {
+        foreach (i; 0 .. to.length)
+            emplace!U(&to[i], from.ptr[i]);
+    }
 }
 
 void _d_arraysetctor(Tarr : T[], T)(scope Tarr p, scope ref T value, char* make_weakly_pure = null) @trusted
@@ -849,19 +864,95 @@ void _d_arraysetctor(Tarr : T[], T)(scope Tarr p, scope ref T value, char* make_
         emplace!(Unqual!T)(cast(Unqual!T*)&p[i], value);
 }
 
+pragma(inline, true)
 Tarr _d_arrayassign_l(Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
 {
-    assert(false, "Array assign requires druntime");
+    import urt.traits : Unqual;
+
+    assert(to.length == from.length, "Array assign length mismatch");
+    _d_arrayassign_unchecked(cast(Unqual!T[])to, from);
+    return to;
 }
 
+void _d_arrayassign_unchecked(T, U)(U[] to, scope T[] from) @trusted
+{
+    import urt.mem : memmove;
+    import urt.traits : is_trivial;
+
+    static if (is_trivial!T)
+    {
+        if (!__ctfe)
+        {
+            memmove(to.ptr, from.ptr, to.length * T.sizeof);
+            return;
+        }
+    }
+    if (from.ptr < to.ptr && to.ptr < from.ptr + from.length)
+    {
+        foreach_reverse (i; 0 .. to.length)
+            to[i] = from.ptr[i];
+    }
+    else
+    {
+        foreach (i; 0 .. to.length)
+            to[i] = from.ptr[i];
+    }
+}
+
+pragma(inline, true)
 Tarr _d_arrayassign_r(Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
 {
-    assert(false, "Array assign requires druntime");
+    assert(to.length == from.length, "Array assign length mismatch");
+    return _d_arraymove!false(to, from);
 }
 
-void _d_arraysetassign(Tarr : T[], T)(return scope Tarr to, scope ref T value) @trusted
+// Move-assigns `from` into `to`. A `persistent` source outlives the call, so it may overlap `to` from above and each
+// element is reset to .init; otherwise it is a consumed, disjoint temporary the caller never destroys.
+Tarr _d_arraymove(bool persistent, Tarr : T[], T)(return scope Tarr to, scope Tarr from) @trusted
 {
-    assert(false, "Array set-assign requires druntime");
+    import urt.lifetime : move;
+    import urt.mem : memcpy, memmove;
+    import urt.traits : is_trivial, Unqual;
+
+    static if (is_trivial!T)
+    {
+        if (!__ctfe)
+        {
+            static if (persistent)
+                memmove(cast(void*)to.ptr, from.ptr, to.length * T.sizeof);
+            else
+                memcpy(cast(void*)to.ptr, from.ptr, to.length * T.sizeof);
+            return to;
+        }
+    }
+    Unqual!T[] dst = cast(Unqual!T[])to;
+    Unqual!T[] src = cast(Unqual!T[])from;
+    static if (persistent)
+    {
+        foreach (i; 0 .. dst.length)
+            move(src.ptr[i], dst[i]);
+    }
+    else
+    {
+        static Unqual!T consume(ref Unqual!T s)
+        {
+            Unqual!T r = void;
+            memcpy(&r, &s, T.sizeof);
+            return r;
+        }
+        foreach (i; 0 .. dst.length)
+            dst[i] = consume(src.ptr[i]);
+    }
+    return to;
+}
+
+Tarr _d_arraysetassign(Tarr : T[], T)(return scope Tarr to, scope ref T value) @trusted
+{
+    import urt.traits : Unqual;
+
+    foreach (ref dst; cast(Unqual!T[])to)
+        dst = value;
+    return to;
 }
 
 size_t _d_arraysetlengthT(Tarr : T[], T)(return ref scope Tarr arr, size_t newlength) @trusted
@@ -1791,6 +1882,12 @@ private ptrdiff_t try_copy_string(char[] buffer, const(char)[] src) pure nothrow
     return src.length;
 }
 
+// LDC 1.43 emits invalid IR (captures(none) on a return value) for a SysV x86-64 call returning a nested static
+// array of a non-POD type
+version (LDC) version (X86_64) version (Posix) version = LdcNestedArrayReturnBug;
+// DMD x86 doesn't over-align stack temporaries; even a lone `x = y` hands opAssign a misaligned by-value argument
+version (DigitalMars) version (X86) version = DmdX86NoOverAlign;
+
 unittest
 {
     static struct Counted
@@ -1818,4 +1915,172 @@ unittest
     Counted[3] filled = c;
     foreach (ref e; filled)
         assert(e.value == 107);
+
+    static struct Tracked
+    {
+        static int copies, destroyed;
+        int value;
+        this(int value) nothrow @nogc { this.value = value; }
+        this(ref const Tracked rh) nothrow @nogc { value = rh.value; ++copies; }
+        ~this() nothrow @nogc { destroyed += value; }
+    }
+    static Tracked[3] make_tracked(int base) nothrow @nogc
+    {
+        Tracked[3] r;
+        foreach (ref e; r)
+            e.value = base++;
+        return r;
+    }
+
+    Tracked[3] lhs = make_tracked(1);
+    Tracked[3] rhs = make_tracked(10);
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = rhs;
+    assert(Tracked.copies == 3 && Tracked.destroyed == 1 + 2 + 3);
+    assert(lhs[0].value == 10 && lhs[1].value == 11 && lhs[2].value == 12);
+
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs[1 .. 3] = lhs[0 .. 2];
+    assert(Tracked.copies == 2 && Tracked.destroyed == 11 + 12);
+    assert(lhs[0].value == 10 && lhs[1].value == 10 && lhs[2].value == 11);
+
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = make_tracked(20);
+    assert(Tracked.copies == 0 && Tracked.destroyed == 10 + 10 + 11);
+    assert(lhs[0].value == 20 && lhs[1].value == 21 && lhs[2].value == 22);
+
+    Tracked one = Tracked(5);
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = one;
+    assert(Tracked.copies == 3 && Tracked.destroyed == 20 + 21 + 22);
+    foreach (ref e; lhs)
+        assert(e.value == 5);
+
+    Tracked[2][2] grid, cells;
+    grid[0][0].value = 3;
+    cells[1][1].value = 7;
+    Tracked.copies = Tracked.destroyed = 0;
+    grid = cells;
+    assert(Tracked.copies == 4 && Tracked.destroyed == 3);
+    assert(grid[0][0].value == 0 && grid[1][1].value == 7);
+
+    version (LdcNestedArrayReturnBug) {} else
+    {
+        static Tracked[2][2] make_grid() nothrow @nogc
+        {
+            Tracked[2][2] r;
+            r[1][0].value = 9;
+            return r;
+        }
+        Tracked.copies = Tracked.destroyed = 0;
+        grid[] = make_grid();
+        // DMD 2.113 copies the rvalue and destroys the temporary rather than moving it
+        assert(Tracked.copies == 0 ? Tracked.destroyed == 7 : Tracked.copies == 4 && Tracked.destroyed == 7 + 9);
+        assert(grid[1][0].value == 9 && grid[1][1].value == 0);
+    }
+
+    lhs = make_tracked(30);
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = lhs;
+    assert(Tracked.copies == 3 && Tracked.destroyed == 30 + 31 + 32);
+    assert(lhs[0].value == 30 && lhs[1].value == 31 && lhs[2].value == 32);
+
+    Tracked.copies = Tracked.destroyed = 0;
+    lhs = lhs[1];
+    assert(Tracked.copies == 3 && Tracked.destroyed == 30 + 31 + 32);
+    foreach (ref e; lhs)
+        assert(e.value == 31);
+
+    version (DmdX86NoOverAlign) {} else
+    {
+        static struct Aligned
+        {
+            static size_t misaligned;
+            align(64) long value;
+            ~this() nothrow @nogc { misaligned |= cast(size_t)&this & (Aligned.alignof - 1); }
+        }
+        Aligned[2] aligned_lhs, aligned_rhs;
+        aligned_lhs = aligned_rhs;
+        assert(Aligned.misaligned == 0);
+    }
+
+    static struct Blitted
+    {
+        static int blits;
+        int value;
+        this(this) nothrow @nogc { ++blits; }
+    }
+    Blitted[2] blit_lhs, blit_rhs;
+    blit_rhs[0].value = 1;
+    blit_rhs[1].value = 2;
+    blit_lhs = blit_rhs;
+    assert(Blitted.blits == 2 && blit_lhs[0].value == 1 && blit_lhs[1].value == 2);
+
+    static struct PureBlit
+    {
+        int value;
+        this(this) pure nothrow @nogc { value += 100; }
+    }
+    PureBlit[3] shifted;
+    shifted[0].value = 1;
+    shifted[1].value = 2;
+    shifted[2].value = 3;
+    shifted[1 .. 3] = shifted[0 .. 2];
+    assert(shifted[0].value == 1 && shifted[1].value == 101 && shifted[2].value == 102);
+
+    static struct Assigned
+    {
+        int value;
+        ~this() nothrow @nogc {}
+        ref Assigned opAssign(ref const Assigned rh) nothrow @nogc { value = rh.value + 100; return this; }
+    }
+    Assigned[2] assigned_lhs, assigned_rhs;
+    assigned_rhs[0].value = 1;
+    assigned_rhs[1].value = 2;
+    assigned_lhs = assigned_rhs;
+    assert(assigned_lhs[0].value == 101 && assigned_lhs[1].value == 102);
+
+    import urt.array : copy_to, move_to;
+
+    static struct Qualified
+    {
+        int value;
+        ~this() nothrow @nogc {}
+        ref Qualified opAssign(ref Qualified rh) nothrow @nogc { value = rh.value + 1; rh.value = -1; return this; }
+        ref Qualified opAssign(ref const Qualified rh) nothrow @nogc { value = rh.value + 2; return this; }
+    }
+    Qualified[2] q_dest;
+    const Qualified[2] q_src = [Qualified(1), Qualified(2)];
+    copy_to(q_src[], q_dest[]);
+    assert(q_dest[0].value == 3 && q_dest[1].value == 4 && q_src[0].value == 1);
+
+    Tracked[2][2] owned_dest, owned_src;
+    owned_dest[0][1].value = 4;
+    owned_src[1][0].value = 8;
+    Tracked.copies = Tracked.destroyed = 0;
+    move_to(owned_src[], owned_dest[]);
+    assert(Tracked.copies == 0 && Tracked.destroyed == 4);
+    assert(owned_dest[1][0].value == 8 && owned_src[1][0].value == 0);
+
+    Assigned[2] self_moved;
+    self_moved[0].value = 1;
+    self_moved[1].value = 2;
+    move_to(self_moved[], self_moved[]);
+    assert(self_moved[0].value == 1 && self_moved[1].value == 2);
+    static assert(!__traits(compiles, move_to(q_src[], q_dest[])));
+    const int[2] trivial_src = [7, 8];
+    int[2] trivial_dest;
+    move_to(trivial_src[], trivial_dest[]);
+    assert(trivial_dest == [7, 8]);
+    shared(int)[2] shared_src;
+    shared(int)[2] shared_dest;
+    int[2] plain;
+    static assert(!__traits(compiles, move_to(shared_src[], shared_dest[])));
+    static assert(!__traits(compiles, copy_to(shared_src[], plain[])));
+    static assert(!__traits(compiles, move_to(shared_src[], plain[])));
+    static assert(!__traits(compiles, copy_to(plain[], shared_dest[])));
+    const(Qualified)[2] q_const;
+    immutable(Qualified)[2] q_immutable;
+    static assert(!__traits(compiles, move_to(q_const[], q_const[])));
+    static assert(!__traits(compiles, move_to(q_immutable[], q_immutable[])));
 }

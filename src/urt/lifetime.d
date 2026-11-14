@@ -200,12 +200,12 @@ private void moveImpl(T)(scope ref T target, return scope ref T source) nothrow 
 {
     import urt.internal.traits : hasElaborateDestructor;
 
-    static if (is(T == struct))
+    static if (is(T == struct) || __traits(isStaticArray, T))
     {
         //  Unsafe when compiling without -preview=dip1000
         if ((() @trusted => &source == &target)()) return;
         // Destroy target before overwriting it
-        static if (hasElaborateDestructor!T) target.__xdtor();
+        static if (hasElaborateDestructor!T) destruct_recurse(target);
     }
     // move and emplace source into target
     moveEmplaceImpl(target, source);

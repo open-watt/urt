@@ -1882,6 +1882,12 @@ private ptrdiff_t try_copy_string(char[] buffer, const(char)[] src) pure nothrow
     return src.length;
 }
 
+// LDC 1.43 emits invalid IR (captures(none) on a return value) for a SysV x86-64 call returning a nested static
+// array of a non-POD type
+version (LDC) version (X86_64) version (Posix) version = LdcNestedArrayReturnBug;
+// DMD x86 doesn't over-align stack temporaries; even a lone `x = y` hands opAssign a misaligned by-value argument
+version (DigitalMars) version (X86) version = DmdX86NoOverAlign;
+
 unittest
 {
     static struct Counted
@@ -1958,17 +1964,20 @@ unittest
     assert(Tracked.copies == 4 && Tracked.destroyed == 3);
     assert(grid[0][0].value == 0 && grid[1][1].value == 7);
 
-    static Tracked[2][2] make_grid() nothrow @nogc
+    version (LdcNestedArrayReturnBug) {} else
     {
-        Tracked[2][2] r;
-        r[1][0].value = 9;
-        return r;
+        static Tracked[2][2] make_grid() nothrow @nogc
+        {
+            Tracked[2][2] r;
+            r[1][0].value = 9;
+            return r;
+        }
+        Tracked.copies = Tracked.destroyed = 0;
+        grid[] = make_grid();
+        // DMD 2.113 copies the rvalue and destroys the temporary rather than moving it
+        assert(Tracked.copies == 0 ? Tracked.destroyed == 7 : Tracked.copies == 4 && Tracked.destroyed == 7 + 9);
+        assert(grid[1][0].value == 9 && grid[1][1].value == 0);
     }
-    Tracked.copies = Tracked.destroyed = 0;
-    grid[] = make_grid();
-    // DMD 2.113 copies the rvalue and destroys the temporary rather than moving it
-    assert(Tracked.copies == 0 ? Tracked.destroyed == 7 : Tracked.copies == 4 && Tracked.destroyed == 7 + 9);
-    assert(grid[1][0].value == 9 && grid[1][1].value == 0);
 
     lhs = make_tracked(30);
     Tracked.copies = Tracked.destroyed = 0;
@@ -1982,15 +1991,18 @@ unittest
     foreach (ref e; lhs)
         assert(e.value == 31);
 
-    static struct Aligned
+    version (DmdX86NoOverAlign) {} else
     {
-        static size_t misaligned;
-        align(64) long value;
-        ~this() nothrow @nogc { misaligned |= cast(size_t)&this & (Aligned.alignof - 1); }
+        static struct Aligned
+        {
+            static size_t misaligned;
+            align(64) long value;
+            ~this() nothrow @nogc { misaligned |= cast(size_t)&this & (Aligned.alignof - 1); }
+        }
+        Aligned[2] aligned_lhs, aligned_rhs;
+        aligned_lhs = aligned_rhs;
+        assert(Aligned.misaligned == 0);
     }
-    Aligned[2] aligned_lhs, aligned_rhs;
-    aligned_lhs = aligned_rhs;
-    assert(Aligned.misaligned == 0);
 
     static struct Blitted
     {

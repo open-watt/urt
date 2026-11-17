@@ -14,6 +14,10 @@ extern(C) nothrow @nogc:
 version (X86)      version = Time32;
 else version (ARM) version = Time32;
 
+version (D_LP64)
+    alias c_long = long;
+else
+    alias c_long = int;
 alias off_t = long;
 alias mode_t = uint;
 alias ssize_t = ptrdiff_t;
@@ -351,7 +355,7 @@ struct tm
     int tm_wday;
     int tm_yday;
     int tm_isdst;
-    long tm_gmtoff;
+    c_long tm_gmtoff;
     const(char)* tm_zone;
 }
 

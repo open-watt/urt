@@ -441,6 +441,19 @@ void free_retain(void[] mem) pure
     }
 }
 
+ubyte[] ctfe_alloc(size_t n) pure
+{
+    assert(__ctfe, "CTFE only");
+
+    static ubyte[] alloc(size_t x) nothrow pure
+    {
+        if (__ctfe)     // keeps _d_newarray out of the compiled program
+            return new ubyte[x];
+        assert(false);
+    }
+    return (cast(ubyte[] function(size_t) @nogc nothrow pure) &alloc)(n);
+}
+
 
 private void reaccount(size_t old_size, size_t new_size) pure
 {

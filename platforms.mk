@@ -520,6 +520,15 @@ endif
 ifeq ($(TINY),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)Tiny
 endif
+ifneq ($(filter esp32 esp32-s3 esp32-s31 esp32-c2 esp32-c3 esp32-c5 esp32-c6 esp32-h2,$(PLATFORM)),)
+  ifneq ($(TINY),1)
+    USE_BLE ?= 1
+  endif
+endif
+USE_BLE ?= 0
+ifeq ($(USE_BLE),1)
+    DFLAGS := $(DFLAGS) $(VERSION_FLAG)UseBLE
+endif
 ifeq ($(USE_MBEDTLS),1)
     DFLAGS := $(DFLAGS) $(VERSION_FLAG)MbedTLS
 endif

@@ -15,6 +15,8 @@
 #   COMPILER   - dmd | ldc | gdc. Auto-promoted to ldc for cross-compile.
 #   URT_SRCDIR - path to URT's src/ tree. Default `src` (URT in-tree); outer
 #                projects set this to e.g. `third_party/urt/src`.
+#   URT_CONFIG_DIR - directory of the urt_config module that tunes uRT. Default
+#                uRT's own `config`; a consumer supplies its own to override it.
 #   STM32_PART, STM32_HSE_HZ, STM32_DFU_BUTTON
 #              - STM32 board facts: memory map (platforms/stm32/stm32_<part>.ld), HSE crystal,
 #                and the button that enters the ROM bootloader.
@@ -412,6 +414,10 @@ MIPSEL_SYSROOT ?= $(HOME)/toolchains/picolibc-mipsel
 URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(URT_SRCDIR)/urt/driver/*')
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
 URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
+
+URT_CONFIG_DIR ?= $(URT_ROOT)config
+URT_SOURCES := $(URT_SOURCES) $(URT_CONFIG_DIR)/urt_config.d
+DFLAGS := $(DFLAGS) -I$(URT_CONFIG_DIR)
 
 # mbedtls availability -- host posix builds get it from system libs,
 # ESP-IDF ships it for esp% targets (linked via IDF main component).

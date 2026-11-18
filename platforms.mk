@@ -409,9 +409,9 @@ MIPSEL_SYSROOT ?= $(HOME)/toolchains/picolibc-mipsel
 # Caller appends app sources separately. C glue (mbedtls) is host-only.
 # =======================================================================
 
-URT_SOURCES := $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(URT_SRCDIR)/urt/driver/*')
-URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d')
-URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d')
+URT_SOURCES := $(sort $(shell find "$(URT_SRCDIR)" -type f -name '*.d' -not -path '$(URT_SRCDIR)/urt/driver/*'))
+URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver" -maxdepth 1 -type f -name '*.d'))
+URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/baremetal" -type f -name '*.d'))
 
 # mbedtls availability -- host posix builds get it from system libs,
 # ESP-IDF ships it for esp% targets (linked via IDF main component).
@@ -437,57 +437,57 @@ endif
 endif
 
 ifneq ($(filter bl808 bl808_d0,$(PLATFORM)),)
-  URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl_common" "$(URT_SRCDIR)/urt/driver/bl808" -type f -name '*.d')
+  URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bl_common" "$(URT_SRCDIR)/urt/driver/bl808" -type f -name '*.d'))
 endif
 ifeq ($(PLATFORM),bl808)
     # M0 is an E907 with the BL618's peripheral drivers.
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808_m0" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d'))
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d'))
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bl808_m0" -type f -name '*.d'))
 endif
 ifeq ($(PLATFORM),bl808_d0)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl808_d0" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bl808_d0" -type f -name '*.d'))
 endif
 ifeq ($(PLATFORM),bl618)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d')
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bl_common" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bl618" -type f -name '*.d'))
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bl_common" -type f -name '*.d'))
 endif
 ifneq ($(filter cortex-m%,$(PROCESSOR)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/cortex_m" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/cortex_m" -type f -name '*.d'))
 endif
 ifneq ($(filter riscv riscv64,$(ARCH)),)
   ifeq ($(OS),baremetal)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/riscv" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/riscv" -type f -name '*.d'))
   endif
 endif
 ifeq ($(PLATFORM),rp2350)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/rp2350" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/rp2350" -type f -name '*.d'))
 endif
 ifneq ($(filter bk7231n bk7231t,$(PLATFORM)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/bk7231" -type f -name '*.d' 2>/dev/null)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/bk7231" -type f -name '*.d' 2>/dev/null))
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d'))
 endif
 ifneq ($(filter esp%,$(PLATFORM)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/esp32" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/esp32" -type f -name '*.d'))
 endif
 ifdef STM32_VARIANT
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/stm32" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/stm32" -type f -name '*.d'))
 endif
 ifeq ($(PLATFORM),mt7621)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/mt7621" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/mt7621" -type f -name '*.d'))
 endif
 ifeq ($(OS),windows)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/windows" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/windows" -type f -name '*.d'))
 endif
 ifneq ($(filter linux ubuntu freebsd,$(OS)),)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/posix" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/posix" -type f -name '*.d'))
     # Native WPA STA supplicant + 4-way handshake (and its EAPOL/802.1X codec),
     # driven by the nl80211 backend in src/driver/linux instead of wpa_supplicant.
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d')
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/dot1x" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/wpa" -type f -name '*.d'))
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/dot1x" -type f -name '*.d'))
 endif
 ifeq ($(OS),freertos)
-    URT_SOURCES := $(URT_SOURCES) $(shell find "$(URT_SRCDIR)/urt/driver/freertos" -type f -name '*.d')
+    URT_SOURCES := $(URT_SOURCES) $(sort $(shell find "$(URT_SRCDIR)/urt/driver/freertos" -type f -name '*.d'))
 endif
 
 # =======================================================================

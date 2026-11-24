@@ -29,44 +29,9 @@ enum uint rx_reserve_pages = 2;
 
 // The frames of a taken chain, read as one series of bytes: each ends at a tag, and bytes after the last tag are a frame
 // still arriving. A frame that ended before the chain's first byte shows as an empty first one.
-alias UartBursts = PoolUartBursts!(urt.mem.pagepool.Pool);
-
-struct PoolUartBursts(alias pool)
+struct UartBursts
 {
-nothrow @nogc:
-    this(const(Page)* chain)
-    {
-        _page = chain;
-    }
-
-    bool next(out UartBurst burst)
-    {
-        burst.offset = _from;
-        while (_page && _index >= rx_tags!pool(_page))
-        {
-            _base += _page.length;
-            _page = (cast(Page*)_page).next;
-            _index = 0;
-        }
-        if (!_page)
-        {
-            burst.length = _base - _from;
-            _from = _base;
-            return burst.length != 0;
-        }
-        immutable ulong tag = rx_tag!pool(_page, _index++);
-        immutable size_t at = _base + cast(ushort)tag;
-        burst.length = at - _from;
-        burst.end = rx_rebuild(tag >> 16);
-        _from = at;
-        return true;
-    }
-
-private:
-    const(Page)* _page;
-    size_t _base;
-    size_t _from;
-    uint _index;
+    mixin BurstIterator!(urt.mem.pagepool.Pool);
 }
 
 struct UartPorts(uint count, uint first, alias tx_idle, alias tx_fill, alias pool = urt.mem.pagepool.Pool)
@@ -537,6 +502,50 @@ private:
 
 
 private:
+
+mixin template BurstIterator(alias pool)
+{
+nothrow @nogc:
+    this(const(Page)* chain)
+    {
+        _page = chain;
+    }
+
+    bool next(out UartBurst burst)
+    {
+        burst.offset = _from;
+        while (_page && _index >= rx_tags!pool(_page))
+        {
+            _base += _page.length;
+            _page = (cast(Page*)_page).next;
+            _index = 0;
+        }
+        if (!_page)
+        {
+            burst.length = _base - _from;
+            _from = _base;
+            return burst.length != 0;
+        }
+        immutable ulong tag = rx_tag!pool(_page, _index++);
+        immutable size_t at = _base + cast(ushort)tag;
+        burst.length = at - _from;
+        burst.end = rx_rebuild(tag >> 16);
+        _from = at;
+        return true;
+    }
+
+private:
+    const(Page)* _page;
+    size_t _base;
+    size_t _from;
+    uint _index;
+}
+
+version (unittest)
+struct PoolUartBursts(alias pool)
+{
+    mixin BurstIterator!pool;
+}
 
 size_t rx_capacity(alias pool = urt.mem.pagepool.Pool)(const(Page)* page)
     => Page.sizeof + pool.page_payload_size(pool.page_category(page));

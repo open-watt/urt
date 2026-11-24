@@ -18,6 +18,10 @@ public import urt.util : min, max, swap;
 
 import urt.io;
 
+version (Beken)
+    version (BareMetal)
+        version = EarlyPagePool;
+
 version (Windows)
 {
     private enum crt = __traits(getTargetInfo, "cppRuntimeLibrary");
@@ -46,11 +50,11 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     import urt.time : init_clock;
     init_clock();
 
-    import urt.mem.pagepool : page_pool_init;
-    if (!page_pool_init())
+    version (EarlyPagePool) {} else
     {
-        writeln_err("Page pool initialization failed");
-        return 1;
+        import urt.mem.pagepool : page_pool_init;
+        bool pool_ready = page_pool_init();
+        debug assert(pool_ready, "page pool initialisation failed");
     }
 
     import urt.driver.uart : uart_init, uart_deinit;

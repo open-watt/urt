@@ -548,7 +548,10 @@ unittest
     {
         void[] expanded = expand(mem, 8);
         if (expanded !is null)
+        {
             assert(expanded.ptr is mem.ptr);
+            mem = expanded;
+        }
     }
     free(mem);
 

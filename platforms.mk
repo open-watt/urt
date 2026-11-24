@@ -712,7 +712,8 @@ ifeq ($(COMPILER),ldc)
         ifeq ($(OS),windows)
             DFLAGS := $(DFLAGS) -mtriple=i686-windows-msvc
         else
-            DFLAGS := $(DFLAGS) -mtriple=i686-linux-gnu
+            # ImportC needs the GCC float128 shim for 32-bit glibc headers.
+            DFLAGS := $(DFLAGS) -mtriple=i686-linux-gnu -gcc=gcc
         endif
     else ifeq ($(ARCH),arm64)
         ifeq ($(OS),freertos)

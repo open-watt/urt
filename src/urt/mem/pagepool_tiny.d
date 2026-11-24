@@ -65,7 +65,7 @@ template PagePool(alias classes, bool runtime_pool = false)
         {
             auto guard = _lock.acquire();
             if (_initialised)
-                return runtime_pool;
+                return false;
             _initialised = true;
         }
 

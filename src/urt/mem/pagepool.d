@@ -160,7 +160,7 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
     {
         auto guard = _lock.acquire();
         if (_num_categories != 0)
-            return runtime_pool;
+            return false;
 
         foreach (i, ref cfg; categories)
         {

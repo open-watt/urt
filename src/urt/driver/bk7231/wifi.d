@@ -1455,7 +1455,6 @@ unittest
     assert(events.pop().event == WifiEvent.scan_done);
     assert(events.empty);
 
-    import urt.mem.pagepool : page_pool_init, page_pool_deinit;
 
     static void close_rx(Wifi wifi, const(ubyte)[] frame, byte rssi, ubyte channel) nothrow @nogc
     {
@@ -1479,8 +1478,6 @@ unittest
         monitor_callback(packet.ptr, cast(int)packet.length, null);
     }
 
-    assert(page_pool_init());
-    scope(exit) page_pool_deinit();
     _mac_state = MacState.ready;
     _initialized = true;
     foreach (callback; [&close_rx, &reopen_rx])

@@ -27,7 +27,7 @@ version (Tiny)
     import urt.mem.pagepool_tiny;
 
     static assert(page_classes.length <= page_tag_category_mask);
-    alias Pool = PagePool!page_classes;
+    alias Pool = urt.mem.pagepool_tiny.PagePool!(page_classes, true);
 
     alias page_pool_init     = Pool.page_pool_init;
     alias page_alloc         = Pool.page_alloc;
@@ -55,22 +55,22 @@ version (Tiny)
 nothrow @nogc:
 
 // refcount 0 is lent for the call (copy to keep or edit), 1 is the holder's, above 1 is shared (share to keep)
-Page* page_retain(Page* page)
-    => page_foreign(page) ? page_copy(page, page.headroom, page.tailroom) : page_share(page);
+Page* page_retain(alias pool = Pool)(Page* page)
+    => pool.page_foreign(page) ? page_copy!pool(page, page.headroom, page.tailroom) : pool.page_share(page);
 
-Page* page_mutable(Page* page, size_t headroom, size_t tailroom)
+Page* page_mutable(alias pool = Pool)(Page* page, size_t headroom, size_t tailroom)
 {
-    if (page_unique(page) && page.headroom >= headroom && page.tailroom >= tailroom)
+    if (pool.page_unique(page) && page.headroom >= headroom && page.tailroom >= tailroom)
         return page;
-    Page* copy = page_copy(page, headroom, tailroom);
+    Page* copy = page_copy!pool(page, headroom, tailroom);
     if (copy)
-        page_free(page);
+        pool.page_free(page);
     return copy;
 }
 
-private Page* page_copy(const(Page)* page, size_t headroom, size_t tailroom)
+private Page* page_copy(alias pool = Pool)(const(Page)* page, size_t headroom, size_t tailroom)
 {
-    Page* copy = page_alloc(page.length, default_alignment, headroom, tailroom);
+    Page* copy = pool.page_alloc(page.length, default_alignment, headroom, tailroom);
     if (copy)
         copy.data[] = page.data[];
     return copy;
@@ -112,6 +112,29 @@ struct PagePoolStats
 }
 
 
+alias Pool = PagePool!(page_classes, true);
+alias page_pool_init = Pool.page_pool_init;
+alias page_alloc = Pool.page_alloc;
+alias page_alloc_isr = Pool.page_alloc_isr;
+alias page_adopt = Pool.page_adopt;
+alias page_free = Pool.page_free;
+alias page_share = Pool.page_share;
+alias StackPage = Pool.StackPage;
+alias page_free_isr = Pool.page_free_isr;
+alias page_unique = Pool.page_unique;
+alias page_foreign = Pool.page_foreign;
+alias page_category = Pool.page_category;
+alias page_payload_size = Pool.page_payload_size;
+alias page_pool_num_categories = Pool.page_pool_num_categories;
+alias page_pool_reserve = Pool.page_pool_reserve;
+alias page_pool_trim = Pool.page_pool_trim;
+alias page_pool_stats = Pool.page_pool_stats;
+alias page_pool_deinit = Pool.page_pool_deinit;
+
+template PagePool(alias classes, bool runtime_pool = false)
+{
+nothrow @nogc:
+
 bool page_pool_init()
 {
     // a micro's cap is its memory budget; elsewhere a category grows as far as the heap does
@@ -119,9 +142,9 @@ bool page_pool_init()
         enum ushort max_slabs = 8;
     else
         enum ushort max_slabs = ushort.max;
-    static immutable PageCategoryConfig[page_classes.length] defaults = () {
-        PageCategoryConfig[page_classes.length] r;
-        foreach (i, c; page_classes)
+    static immutable PageCategoryConfig[classes.length] defaults = () {
+        PageCategoryConfig[classes.length] r;
+        foreach (i, c; classes)
             r[i] = PageCategoryConfig((c.capacity + 15) & ~15, c.pages_per_slab, max_slabs, 1, c.reserve_pages);
         return r;
     }();
@@ -137,7 +160,7 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
     {
         auto guard = _lock.acquire();
         if (_num_categories != 0)
-            return false;
+            return runtime_pool;
 
         foreach (i, ref cfg; categories)
         {
@@ -159,7 +182,8 @@ bool page_pool_init(const(PageCategoryConfig)[] categories)
         _num_categories = 0;
         return false;
     }
-    page_pool_maintenance(&maintain);
+    static if (runtime_pool)
+        page_pool_maintenance(&maintain);
 
     foreach (i; 0 .. categories.length)
     {
@@ -381,7 +405,8 @@ void page_pool_deinit()
     if (_num_categories == 0)
         return;
     unregister_reclaimer(&trim_handler);
-    page_pool_maintenance(null);
+    static if (runtime_pool)
+        page_pool_maintenance(null);
     free_deferred();
     foreach (i; 0 .. _num_categories)
     {
@@ -721,7 +746,8 @@ ReclaimResult trim_handler(size_t bytes_needed)
     => page_pool_trim(bytes_needed);
 
 
-unittest
+version (unittest)
+void test_pool()()
 {
     static immutable PageCategoryConfig[2] test_cfg = [
         PageCategoryConfig(64, 4, 3, 1),
@@ -829,9 +855,11 @@ unittest
     foreach (ref p; pages[0 .. 4])
         p = take_page(small, true);
     page_pool_wake();
+    maintain();
     signals = 0;
     assert(page_alloc_isr(8) is null && small.slab_count == 1 && signals == 1);
     page_pool_wake();
+    maintain();
     Page* from_isr = page_alloc_isr(8);
     assert(from_isr && page_category(from_isr) == 0 && small.slab_count == 2);
     page_free(from_isr);
@@ -851,10 +879,12 @@ unittest
     void[] r4 = take_page(small, false);
     assert(signals == 1 && small.free.length == 0);
     page_pool_wake();
+    maintain();
     assert(small.free.length >= 2 && small.slab_count == 2);
     page_pool_reserve(0, 4);
     assert(signals == 2, "raising the reserve asks for a refill");
     page_pool_wake();
+    maintain();
     assert(small.free.length >= 6 && small.slab_count == 3);
     page_pool_reserve(0, -4);
     free_payload(r1.ptr);
@@ -892,6 +922,7 @@ unittest
     assert(page_pool_stats(0).pages_in_use == pooled_in_use - 1);
     assert(page_pool_stats(page_category_heap).pages_in_use == 1 && signals == 1);
     page_pool_wake();
+    maintain();
     assert(page_pool_stats(page_category_heap).pages_in_use == 0);
     page_free(mid);
     page_free(tiny);
@@ -937,19 +968,19 @@ unittest
         page_free(borrowed);
         assert(page_foreign(borrowed) && cast(const(char)[])borrowed.data == "lent!", "freeing a lent page leaves it alone");
 
-        Page* kept = page_retain(borrowed);
+        Page* kept = page_retain!(PagePool!(classes, runtime_pool))(borrowed);
         assert(kept !is borrowed && page_unique(kept) && kept.data == borrowed.data, "a lent page is copied to keep");
-        Page* edited = page_mutable(borrowed, 4, 2);
+        Page* edited = page_mutable!(PagePool!(classes, runtime_pool))(borrowed, 4, 2);
         assert(edited !is borrowed && page_unique(edited) && edited.headroom >= 4 && edited.tailroom >= 2 && edited.data == borrowed.data, "and to edit");
         page_free(edited);
 
-        assert(page_retain(kept) is kept && !page_unique(kept), "a pool page is shared to keep");
-        Page* copy = page_mutable(kept, 0, 0);
+        assert(page_retain!(PagePool!(classes, runtime_pool))(kept) is kept && !page_unique(kept), "a pool page is shared to keep");
+        Page* copy = page_mutable!(PagePool!(classes, runtime_pool))(kept, 0, 0);
         assert(copy !is kept && page_unique(kept) && copy.data == kept.data, "a shared page is copied to edit, dropping a reference");
         page_free(copy);
-        assert(page_mutable(kept, 0, 0) is kept, "a unique page with the room is edited in place");
+        assert(page_mutable!(PagePool!(classes, runtime_pool))(kept, 0, 0) is kept, "a unique page with the room is edited in place");
         size_t more = kept.headroom + 1;
-        Page* grown = page_mutable(kept, more, 0);
+        Page* grown = page_mutable!(PagePool!(classes, runtime_pool))(kept, more, 0);
         assert(grown !is kept && grown.headroom >= more && cast(const(char)[])grown.data == "lent!", "one without the room is copied, and freed");
         page_free(grown);
 
@@ -976,18 +1007,23 @@ unittest
         &fill_reclaimer!4, &fill_reclaimer!5,
         &fill_reclaimer!6, &fill_reclaimer!7,
     ];
+    size_t registered;
     foreach (handler; fillers)
-        assert(register_reclaimer(handler, 1, true));
+    {
+        if (!register_reclaimer(handler, 1, true))
+            break;
+        ++registered;
+    }
     assert(!page_pool_init(test_cfg));
     assert(page_pool_num_categories() == 0);
-    foreach (handler; fillers)
+    foreach (handler; fillers[0 .. registered])
         assert(unregister_reclaimer(handler));
     assert(page_pool_init(test_cfg));
     page_pool_deinit();
 }
 
-version (BareMetal) {} else
-unittest
+version (BareMetal) {} else version (unittest)
+void test_concurrency()()
 {
     import urt.thread : thread_join, thread_spawn;
 
@@ -1057,6 +1093,26 @@ unittest
     assert(s.pages_in_use == 0 && s.pages_free == s.slab_count * 4, "every page came back once");
     assert(s.alloc_count + s.fail_count == 3 * 5000 * 4);
     page_pool_wake();
+    maintain();
     page_pool_deinit();
+}
+}
+
+unittest
+{
+    alias TestPool = PagePool!page_classes;
+    Page* global_page = page_alloc(8);
+    assert(global_page);
+    uint global_in_use = page_pool_stats(page_category(global_page)).pages_in_use;
+    TestPool.test_pool!()();
+    version (BareMetal) {} else
+        TestPool.test_concurrency!()();
+    assert(page_pool_stats(page_category(global_page)).pages_in_use == global_in_use);
+    assert(page_unique(global_page));
+    page_free(global_page);
+    page_pool_reserve(0, 1);
+    page_pool_wake();
+    assert(!atomicLoad(Pool._categories[0].refill), "private teardown preserves process pool maintenance");
+    page_pool_reserve(0, -1);
 }
 }

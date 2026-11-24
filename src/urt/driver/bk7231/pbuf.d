@@ -256,9 +256,6 @@ unittest
     assert(!ip4addr_aton("192.168.4.1x".ptr, &address));
     assert(!ip4addr_aton(null, &address));
 
-    import urt.mem.pagepool : page_pool_init, page_pool_deinit;
-    assert(page_pool_init());
-    scope(exit) page_pool_deinit();
 
     foreach (layer; PbufLayer.transport .. PbufLayer.raw + 1)
     {

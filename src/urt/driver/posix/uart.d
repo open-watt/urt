@@ -919,11 +919,9 @@ unittest
 {
     import urt.driver.uart;
     import urt.mem.page : page_chain_span;
-    import urt.mem.pagepool : page_alloc, page_free, page_pool_deinit, page_pool_init;
+    import urt.mem.pagepool : page_alloc, page_free;
     import urt.system : sleep;
 
-    immutable bool owns_pool = page_pool_init();
-    scope (exit) if (owns_pool) page_pool_deinit();
 
     // a pseudo-terminal stands in for the wire: what the master writes, the port receives
     immutable int master = posix_openpt(O_RDWR | O_NOCTTY);

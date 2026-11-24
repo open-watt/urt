@@ -71,6 +71,9 @@ ifdef MBEDTLS_LIB
   MBEDTLS_CFLAGS   := $(BAREMETAL_CFLAGS) $(BAREMETAL_SPECS) -ffreestanding -Oz \
       -ffunction-sections -fdata-sections \
       -I$(MBEDTLS_INC) -DMBEDTLS_CONFIG_FILE='"mbedtls_config_openwatt.h"' -fcommon
+  ifeq ($(PLATFORM),bl808_d0)
+    MBEDTLS_CFLAGS += -DURT_BL808_D0
+  endif
 endif
 
 ifdef LFS_DIR

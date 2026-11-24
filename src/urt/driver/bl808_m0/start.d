@@ -11,7 +11,8 @@ import core.volatile;
 import urt.zip : uncompress;
 import urt.driver.bl_common.uart : uart0_early_init, uart0_hw_puts;
 import urt.driver.bl808.clock : d0_clock_hz, m0_clock_hz, mtime_hz;
-import urt.driver.bl808.ipc : ipc_reset;
+import urt.driver.bl808.ipc : ipc_reset, ipc_seed_publish, ipc_seed_size;
+import urt.driver.bl_common.trng : trng_init, trng_read;
 
 @nogc nothrow:
 
@@ -35,19 +36,33 @@ extern(C) void m0_bringup()
     wifi_em_carveout();
     psram_init();
     l2_sram_partition();
+    d0_halt();
+    ipc_reset();
+    if (!trng_init())
+    {
+        uart0_hw_puts("BL808 M0: TRNG init failed\n");
+        return;
+    }
     launch_d0();
 }
 
 private void launch_d0()
 {
-    d0_halt();
-    ipc_reset();
     uint entry = d0_image_load();
     if (!entry)
     {
         uart0_hw_puts("BL808 M0: no valid D0 image, D0 stays halted\n");
         return;
     }
+    ubyte[ipc_seed_size] seed = void;
+    scope(exit) foreach (ref value; seed)
+        volatileStore(&value, cast(ubyte)0);
+    if (!trng_read(seed[]))
+    {
+        uart0_hw_puts("BL808 M0: D0 entropy seed failed\n");
+        return;
+    }
+    ipc_seed_publish(seed);
     d0_console_pins();
     mtime_config(MM_MISC_CPU_RTC, d0_clock_hz);
     mmio_write(MM_MISC_CPU0_BOOT, entry);

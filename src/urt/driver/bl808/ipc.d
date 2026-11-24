@@ -74,7 +74,37 @@ void ipc_on_space(IpcSpaceHandler handler)
     arm();
 }
 
-// The XRAM above both mailbox rings, 64-aligned; laid out by its users.
+enum size_t ipc_seed_size = 64;
+
+version (BL808_M0)
+void ipc_seed_publish(ref const ubyte[ipc_seed_size] seed)
+{
+    auto slot = cast(BootSeed*)(xram_base + seed_offset);
+    slot.bytes[] = seed[];
+    fence();
+    volatileStore(&slot.present, 1u);
+    clean(slot, seed_stride);
+}
+
+version (BL808_D0)
+size_t ipc_seed_take(ubyte[] dst)
+{
+    if (dst.length < ipc_seed_size)
+        return 0;
+    auto slot = cast(BootSeed*)(xram_base + seed_offset);
+    invalidate(slot, seed_stride);
+    if (!volatileLoad(&slot.present))
+        return 0;
+    fence();
+    volatileStore(&slot.present, 0u);
+    dst[0 .. ipc_seed_size] = slot.bytes[];
+    foreach (ref value; slot.bytes)
+        volatileStore(&value, cast(ubyte)0);
+    clean(slot, seed_stride);
+    return ipc_seed_size;
+}
+
+// The XRAM above both mailbox rings and the boot seed, 64-aligned; laid out by its users.
 enum size_t ipc_shared_size = xram_size - shared_offset;
 
 void[] ipc_shared()
@@ -113,7 +143,18 @@ enum uint producer_offset = 0x00;
 enum uint consumer_offset = 0x40;
 enum uint data_offset = 0x80;
 enum uint ring_stride = data_offset + ring_capacity;
-enum size_t shared_offset = 2 * ring_stride;
+enum size_t seed_offset = 2 * ring_stride;
+enum size_t seed_stride = 2 * cache_line;
+enum size_t shared_offset = seed_offset + seed_stride;
+
+struct BootSeed
+{
+    ubyte[ipc_seed_size] bytes;
+    uint present;
+}
+
+static assert(BootSeed.sizeof <= seed_stride);
+static assert(seed_offset % cache_line == 0);
 
 static assert(record_size(ipc_max_payload) <= cache_line, "a record must fit one cache line");
 static assert(shared_offset % cache_line == 0);

@@ -142,7 +142,7 @@ size_t read(ref Uart u, ubyte[] buf, bool* gap = null, size_t* gaps = null)
 void uart_contract()
 {
     import urt.driver.uart_core : tx_drain_limit;
-    import urt.mem.pagepool : page_pool_deinit, page_pool_init;
+    import urt.mem.pagepool : page_pool_num_categories, page_pool_stats, page_pool_wake;
 
     reset();
     UartConfig cfg;
@@ -177,9 +177,15 @@ void uart_contract()
             assert(uart_open(u, uart_port, bad) == InternalResult.unsupported, "a setting the backend cannot honour is refused");
     }
 
-    immutable int baseline = live;
-    assert(!uart_open(u, uart_port, cfg, &on_rx) && live == baseline, "a port does not open before the page pool, and takes nothing");
-    immutable bool owns_pool = page_pool_init();
+    uint pool_slabs()
+    {
+        uint count;
+        foreach (ubyte category; 0 .. cast(ubyte)page_pool_num_categories())
+            count += page_pool_stats(category).slab_count;
+        return count;
+    }
+    immutable int baseline = live - pool_slabs();
+    assert(page_pool_num_categories() != 0, "the runtime starts the pool before the driver contract");
     immutable uint pages = pages_in_use();
 
     static if (uart_has_pin_select)
@@ -441,9 +447,8 @@ void uart_contract()
     assert(pages_in_use() == pages, "and releases every page, the ones it never sent among them");
     tx_hold(false);
 
-    if (owns_pool)
-        page_pool_deinit();
-    assert(live == baseline, "closed ports hold no memory, and every page came back");
+    page_pool_wake();
+    assert(live - pool_slabs() == baseline, "closed ports hold no memory, and every page came back");
     assert(tx_fifo_overflows() == 0, "the TX FIFO is never written while full");
 }
 

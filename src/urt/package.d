@@ -46,6 +46,13 @@ extern(C) int main(int argc, char** argv) nothrow @nogc @trusted
     import urt.time : init_clock;
     init_clock();
 
+    import urt.mem.pagepool : page_pool_init;
+    if (!page_pool_init())
+    {
+        writeln_err("Page pool initialization failed");
+        return 1;
+    }
+
     import urt.driver.uart : uart_init, uart_deinit;
     uart_init();
 

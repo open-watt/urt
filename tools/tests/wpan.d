@@ -2,7 +2,7 @@ module tests.wpan;
 
 import urt.driver.esp32.wpan;
 import urt.driver.wpan : Wpan, WpanConfig, WpanRxInfo, WpanTxError;
-import urt.mem.pagepool : Page, page_pool_init, page_pool_deinit, page_release;
+import urt.mem.pagepool : Page, page_release;
 
 nothrow @nogc:
 
@@ -57,8 +57,6 @@ private void on_tx(Wpan w, WpanTxError error, const(ubyte)[] ack, ref const Wpan
 
 unittest
 {
-    bool owns_pool = page_pool_init();
-    scope (exit) if (owns_pool) page_pool_deinit();
     WpanConfig cfg;
     cfg.rx_headroom = 64;
     assert(wpan_hw_open(0, cfg));

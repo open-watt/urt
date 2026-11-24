@@ -53,7 +53,7 @@ version (PagePoolDiagnostics)
     }
 }
 
-template PagePool(alias classes)
+template PagePool(alias classes, bool runtime_pool = false)
 {
     enum ubyte num_classes = classes.length;
     static foreach (ubyte i; 0 .. num_classes)
@@ -65,7 +65,7 @@ template PagePool(alias classes)
         {
             auto guard = _lock.acquire();
             if (_initialised)
-                return false;
+                return runtime_pool;
             _initialised = true;
         }
 
@@ -75,7 +75,8 @@ template PagePool(alias classes)
             _initialised = false;
             return false;
         }
-        page_pool_maintenance(&maintain);
+        static if (runtime_pool)
+            page_pool_maintenance(&maintain);
 
         foreach (ubyte category; 0 .. num_classes)
             preallocate(category, classes[category].reserve_pages);
@@ -188,7 +189,8 @@ template PagePool(alias classes)
         if (!_initialised)
             return;
         unregister_reclaimer(&page_pool_trim);
-        page_pool_maintenance(null);
+        static if (runtime_pool)
+            page_pool_maintenance(null);
         free_deferred();
 
         foreach (ubyte category; 0 .. num_classes)
@@ -583,17 +585,20 @@ void page_pool_tiny_test()()
 
     // an allocation that may not grow fails at once, and the wake grows what it found empty
     page_pool_wake();
+    TestPool.maintain();
     signals = 0;
     foreach (ref allocated; pages[0 .. 6])
         allocated = TestPool.page_alloc_isr(32);
     assert(pages[5] is null && signals == 1 && TestPool._allocated_pages[0] == 5);
     assert(TestPool.page_alloc_isr(100) is null && TestPool.page_alloc_isr(1000) is null, "no growth, and never the heap");
     page_pool_wake();
+    TestPool.maintain();
     assert(TestPool._free[0].length == 3 && TestPool._allocated_pages[0] == 8);
     pages[5] = TestPool.page_alloc_isr(32);
     assert(pages[5] !is null);
     TestPool.page_pool_reserve(0, 2);
     page_pool_wake();
+    TestPool.maintain();
     assert(TestPool._free[0].length == 2 && TestPool._allocated_pages[0] == 8, "the reserve grows up to the cap");
     TestPool.page_pool_reserve(0, -2);
     foreach (allocated; pages[0 .. 6])
@@ -612,10 +617,12 @@ void page_pool_tiny_test()()
     // an ISR's release of a heap page waits for the wake
     Page* late = TestPool.page_alloc(1000);
     page_pool_wake();
+    TestPool.maintain();
     signals = 0;
     TestPool.page_free_isr(late);
     assert(signals == 1 && TestPool._deferred.length == 1);
     page_pool_wake();
+    TestPool.maintain();
     assert(TestPool._deferred.length == 0);
 
     Page* reserved = TestPool.page_alloc(1000, size_t.sizeof, 3, 64);
@@ -661,6 +668,7 @@ void page_pool_tiny_test()()
     reclaim_memory(1);
 
     page_pool_wake();
+    TestPool.maintain();
     TestPool.page_pool_deinit();
     assert(TestPool.page_pool_init());
     TestPool.page_pool_deinit();
@@ -674,10 +682,15 @@ void page_pool_tiny_test()()
         &fill_reclaimer!4, &fill_reclaimer!5,
         &fill_reclaimer!6, &fill_reclaimer!7,
     ];
+    size_t registered;
     foreach (handler; fillers)
-        assert(register_reclaimer(handler, 1, true));
+    {
+        if (!register_reclaimer(handler, 1, true))
+            break;
+        ++registered;
+    }
     assert(!TestPool.page_pool_init());
-    foreach (handler; fillers)
+    foreach (handler; fillers[0 .. registered])
         assert(unregister_reclaimer(handler));
     assert(TestPool.page_pool_init());
     TestPool.page_pool_deinit();

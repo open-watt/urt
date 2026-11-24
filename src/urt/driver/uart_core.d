@@ -29,7 +29,9 @@ enum uint rx_reserve_pages = 2;
 
 // The frames of a taken chain, read as one series of bytes: each ends at a tag, and bytes after the last tag are a frame
 // still arriving. A frame that ended before the chain's first byte shows as an empty first one.
-struct UartBursts
+alias UartBursts = PoolUartBursts!(urt.mem.pagepool.Pool);
+
+struct PoolUartBursts(alias pool)
 {
 nothrow @nogc:
     this(const(Page)* chain)
@@ -40,7 +42,7 @@ nothrow @nogc:
     bool next(out UartBurst burst)
     {
         burst.offset = _from;
-        while (_page && _index >= rx_tags(_page))
+        while (_page && _index >= rx_tags!pool(_page))
         {
             _base += _page.length;
             _page = (cast(Page*)_page).next;
@@ -52,7 +54,7 @@ nothrow @nogc:
             _from = _base;
             return burst.length != 0;
         }
-        immutable ulong tag = rx_tag(_page, _index++);
+        immutable ulong tag = rx_tag!pool(_page, _index++);
         immutable size_t at = _base + cast(ushort)tag;
         burst.length = at - _from;
         burst.end = rx_rebuild(tag >> 16);
@@ -67,7 +69,7 @@ private:
     uint _index;
 }
 
-struct UartPorts(uint count, uint first, alias tx_idle, alias tx_fill)
+struct UartPorts(uint count, uint first, alias tx_idle, alias tx_fill, alias pool = urt.mem.pagepool.Pool)
 {
 nothrow @nogc:
 
@@ -75,7 +77,7 @@ nothrow @nogc:
     // callbacks report.
     bool acquire(uint id, ref const UartConfig cfg, ubyte port = ubyte.max)
     {
-        if (!page_pool_num_categories())
+        if (!pool.page_pool_num_categories())
             return false;
         immutable uint frame = uart_frame_bits(cfg);
         immutable ubyte category = cfg.baud_rate / frame / 50 > rx_room(0) / 2 ? largest() : 0;
@@ -89,7 +91,7 @@ nothrow @nogc:
             p.char_ticks = char_ticks(cfg);
             p.rx_category = category;
         }
-        page_pool_reserve(category, rx_reserve_pages);
+        pool.page_pool_reserve(category, rx_reserve_pages);
         return true;
     }
 
@@ -143,11 +145,11 @@ nothrow @nogc:
             {
                 Page* next = chain.next;
                 chain.next = null;
-                page_free(chain);
+                pool.page_free(chain);
                 chain = next;
             }
         }
-        page_pool_reserve(category, -cast(int)rx_reserve_pages);
+        pool.page_pool_reserve(category, -cast(int)rx_reserve_pages);
     }
 
     // TX: the chain becomes the driver's; it goes out behind what was written or sent before it, and each page is
@@ -201,7 +203,7 @@ nothrow @nogc:
                         full = page;
                     full_last = page;
                 }
-                page = page_alloc(0, 1, 0, page_payload_size(0));
+                page = pool.page_alloc(0, 1, 0, pool.page_payload_size(0));
                 if (!page)
                     break;
             }
@@ -421,11 +423,11 @@ private:
         => cast(uint)nsecs(ulong(uart_frame_bits(cfg)) * 1_000_000_000 / cfg.baud_rate).ticks;
 
     static ubyte largest()
-        => cast(ubyte)(page_pool_num_categories() - 1);
+        => cast(ubyte)(pool.page_pool_num_categories() - 1);
 
     // the tailroom that fills a page of category
     static size_t rx_room(ubyte category)
-        => page_payload_size(category);
+        => pool.page_payload_size(category);
 
     static void enqueue(Port* p, Page* chain, Page* last)
     {
@@ -444,7 +446,7 @@ private:
             p.tx_tail = null;
         head.next = null;
         p.tx_sent = 0;
-        page_free_isr(head);
+        pool.page_free_isr(head);
     }
 
     static void record(Port* p, UartError errors)
@@ -459,7 +461,7 @@ private:
 
     static Page* open_page(Port* p)
     {
-        Page* page = page_alloc_isr(0, 1, 0, rx_room(p.rx_category));
+        Page* page = pool.page_alloc_isr(0, 1, 0, rx_room(p.rx_category));
         if (!page)
         {
             record(p, UartError.overrun);
@@ -495,7 +497,7 @@ private:
     }
 
     static size_t rx_used(const(Page)* page)
-        => page.length + rx_tags(page) * rx_tag_size;
+        => page.length + rx_tags!pool(page) * rx_tag_size;
 
     // A page that filled before the take calls for larger pages at once; takes that keep filling most of a page do so
     // after a few; on large pages, takes a small page would have held go back to small ones.
@@ -505,7 +507,7 @@ private:
         ubyte category = p.rx_category;
         bool filled;
         for (Page* page = closed; page && page !is active; page = page.next)
-            filled |= rx_used(page) * 100 >= rx_room(page_category(page)) * rx_fill_threshold;
+            filled |= rx_used(page) * 100 >= rx_room(pool.page_category(page)) * rx_fill_threshold;
         if (filled)
             category = large;
         else if (active)
@@ -527,8 +529,8 @@ private:
         if (category == p.rx_category)
             return;
         p.rx_up = p.rx_down = 0;
-        page_pool_reserve(category, rx_reserve_pages);
-        page_pool_reserve(p.rx_category, -cast(int)rx_reserve_pages);
+        pool.page_pool_reserve(category, rx_reserve_pages);
+        pool.page_pool_reserve(p.rx_category, -cast(int)rx_reserve_pages);
         p.rx_category = category;
     }
 }
@@ -536,14 +538,14 @@ private:
 
 private:
 
-size_t rx_capacity(const(Page)* page)
-    => Page.sizeof + page_payload_size(page_category(page));
+size_t rx_capacity(alias pool = urt.mem.pagepool.Pool)(const(Page)* page)
+    => Page.sizeof + pool.page_payload_size(pool.page_category(page));
 
-uint rx_tags(const(Page)* page)
-    => cast(uint)(rx_capacity(page) - page.capacity) / rx_tag_size;
+uint rx_tags(alias pool = urt.mem.pagepool.Pool)(const(Page)* page)
+    => cast(uint)(rx_capacity!pool(page) - page.capacity) / rx_tag_size;
 
-ulong rx_tag(const(Page)* page, uint index)
-    => (cast(const(ulong)*)(cast(const(ubyte)*)page + rx_capacity(page)))[-1 - cast(int)index];
+ulong rx_tag(alias pool = urt.mem.pagepool.Pool)(const(Page)* page, uint index)
+    => (cast(const(ulong)*)(cast(const(ubyte)*)page + rx_capacity!pool(page)))[-1 - cast(int)index];
 
 MonoTime rx_rebuild(ulong tag48)
 {
@@ -561,9 +563,11 @@ unittest
     {
         static void with_classes(const(PageCategoryConfig)[] classes)
         {
-            assert(page_pool_init(classes));
-            uart_ports_test();
-            page_pool_deinit();
+            import urt_config : page_classes;
+            alias TestPool = PagePool!page_classes;
+            assert(TestPool.page_pool_init(classes));
+            uart_ports_test!TestPool();
+            TestPool.page_pool_deinit();
         }
         static immutable PageCategoryConfig[1] one = [PageCategoryConfig(1648, 4, 8, 1, 2)];
         static immutable PageCategoryConfig[3] three = [PageCategoryConfig(352, 8, 8, 1, 4), PageCategoryConfig(800, 4, 8, 1, 2), PageCategoryConfig(1648, 4, 8, 1, 2)];
@@ -572,7 +576,7 @@ unittest
     }
 }
 
-version (unittest) private void uart_ports_test()
+version (unittest) private void uart_ports_test(alias pool = urt.mem.pagepool.Pool)()
 {
     static struct Model
     {
@@ -580,7 +584,7 @@ version (unittest) private void uart_ports_test()
         static __gshared size_t room = size_t.max;
         static __gshared ubyte[4096] wire;
         static __gshared size_t sent;
-        static __gshared UartPorts!(2, 1, idle, fill) ports;
+        static __gshared UartPorts!(2, 1, idle, fill, pool) ports;
         static __gshared size_t rx_calls, tx_calls;
 
     nothrow @nogc:
@@ -617,21 +621,20 @@ version (unittest) private void uart_ports_test()
             return false;
         }
     }
+    alias UartBursts = PoolUartBursts!pool;
     alias ports = Model.ports;
-    alias rx_room_of = UartPorts!(2, 1, Model.idle, Model.fill).rx_room;
+    alias rx_room_of = UartPorts!(2, 1, Model.idle, Model.fill, pool).rx_room;
     Model.sent = Model.rx_calls = Model.tx_calls = 0;
 
-    bool owns_pool = page_pool_init();
-    scope (exit) if (owns_pool) page_pool_deinit();
-    immutable ubyte large = cast(ubyte)(page_pool_num_categories() - 1);
-    enum bool counted = __traits(compiles, page_pool_stats(0));
+    immutable ubyte large = cast(ubyte)(pool.page_pool_num_categories() - 1);
+    enum bool counted = __traits(compiles, pool.page_pool_stats(0));
     uint in_use()
     {
         uint pages;
         static if (counted)
         {
             foreach (category; 0 .. large + 1)
-                pages += page_pool_stats(cast(ubyte)category).pages_in_use;
+                pages += pool.page_pool_stats(cast(ubyte)category).pages_in_use;
         }
         return pages;
     }
@@ -639,14 +642,14 @@ version (unittest) private void uart_ports_test()
 
     Page* make(const(char)[] text)
     {
-        Page* page = page_alloc(text.length);
+        Page* page = pool.page_alloc(text.length);
         (cast(char[])page.data)[] = text[];
         return page;
     }
 
     Page* refused = make("x");
     assert(!ports.send(1, refused) && ports.write(1, "x") == 0, "a closed port takes nothing, and the caller keeps the page");
-    page_free(refused);
+    pool.page_free(refused);
     assert(ports.rx_take(1) is null && ports.tx_pending(1) == 0);
 
     UartConfig cfg;
@@ -660,11 +663,11 @@ version (unittest) private void uart_ports_test()
     chain.next = make("world");
     assert(ports.send(1, chain) && Model.wire[0 .. 11] == "hello world" && Model.tx_calls == 2, "a running line takes the chain");
     assert(in_use() == baseline, "sent pages are released");
-    Page* kept = page_retain(make("a frame its sender keeps"));
+    Page* kept = page_retain!pool(make("a frame its sender keeps"));
     immutable size_t from = Model.sent;
     assert(ports.send(1, kept) && Model.wire[from .. from + 24] == "a frame its sender keeps");
-    assert(page_unique(kept) && cast(const(char)[])kept.data == "a frame its sender keeps", "a shared page goes out in pieces and comes back untouched");
-    page_free(kept);
+    assert(pool.page_unique(kept) && cast(const(char)[])kept.data == "a frame its sender keeps", "a shared page goes out in pieces and comes back untouched");
+    pool.page_free(kept);
     Model.sent = from;
 
     // written bytes go out at once on an idle line, and gather in one page behind a busy one
@@ -672,7 +675,7 @@ version (unittest) private void uart_ports_test()
     Model.stalled = true;
     foreach (i; 0 .. 100)
         assert(ports.write(1, "0123") == 4);
-    assert(ports.tx_pending(1) == 400 && (!counted || in_use() == baseline + (400 + page_payload_size(0) - 1) / page_payload_size(0)), "short writes share pages");
+    assert(ports.tx_pending(1) == 400 && (!counted || in_use() == baseline + (400 + pool.page_payload_size(0) - 1) / pool.page_payload_size(0)), "short writes share pages");
     assert(ports.send(1, make("|lent|")) && ports.write(1, "tail") == 4 && ports.tx_pending(1) == 410);
     Model.busy = true;
     assert(!ports.tx_done(1), "a stalled line is not done");
@@ -724,12 +727,12 @@ version (unittest) private void uart_ports_test()
     ports.notify(1);
     Page* page = ports.rx_take(1);
     got = bursts(page, count);
-    assert(page && !page.next && rx_tags(page) == 2 && count == 3);
+    assert(page && !page.next && rx_tags!pool(page) == 2 && count == 3);
     assert(got[0].offset == 0 && got[0].length == 3 && cast(const(char)[])page_chain_span(page, 0, 3) == "one");
     assert(got[0].end + gap_time >= before_gap && got[0].end + gap_time <= after_gap, "a frame ends the gap time before its gap");
     assert(got[1].offset == 3 && got[1].length == 3 && got[1].end >= got[0].end);
     assert(got[2].offset == 6 && got[2].length == 1 && !got[2].end, "a frame still arriving has no end yet");
-    page_free(page);
+    pool.page_free(page);
 
     ports.gap(1);
     ports.notify(1);
@@ -737,15 +740,15 @@ version (unittest) private void uart_ports_test()
     ports.notify(1);
     page = ports.rx_take(1);
     got = bursts(page, count);
-    assert(count == 2 && rx_tags(page) == 1);
+    assert(count == 2 && rx_tags!pool(page) == 1);
     assert(got[0].length == 0 && got[0].end, "a gap after the take ends the frame taken, and keeps its time");
     assert(got[1].offset == 0 && got[1].length == 1 && !got[1].end && cast(const(char)[])page_chain_span(page, 0, 1) == "r");
-    page_free(page);
+    pool.page_free(page);
     ports.gap(1);
     page = ports.rx_take(1);
     got = bursts(page, count);
     assert(count == 1 && got[0].end && !got[0].length);
-    page_free(page);
+    pool.page_free(page);
     ports.gap(1);
     assert(ports.rx_take(1) is null, "a gap with no frame before it is nothing");
     assert(Model.rx_calls == 6 && ports.take_errors(1) == UartError.none);
@@ -758,7 +761,7 @@ version (unittest) private void uart_ports_test()
     ports.gap(1);
     ports.receive(1, 'n');
     page = ports.rx_take(1);
-    assert(page && page.next && !page.next.next && page_category(page) == 0 && !rx_tags(page));
+    assert(page && page.next && !page.next.next && pool.page_category(page) == 0 && !rx_tags!pool(page));
     got = bursts(page, count);
     assert(count == 2, "a frame a page boundary cuts is still one");
     UartBurst whole = got[0];
@@ -774,19 +777,19 @@ version (unittest) private void uart_ports_test()
     assert(pieces == 2, "its bytes come in a span per page");
     UartBurst n = got[1];
     assert(n.offset == room + 10 && n.length == 1 && cast(const(char)[])page_chain_span(page, n.offset, 1) == "n");
-    page_free(page.next);
-    page_free(page);
+    pool.page_free(page.next);
+    pool.page_free(page);
     foreach (take; 0 .. rx_resize_takes)
     {
         ports.receive(1, 's');
         page = ports.rx_take(1);
-        assert(page_category(page) == large);
-        page_free(page);
+        assert(pool.page_category(page) == large);
+        pool.page_free(page);
     }
     ports.receive(1, 's');
     page = ports.rx_take(1);
-    assert(page_category(page) == 0, "takes a small page would have held go back to small pages");
-    page_free(page);
+    assert(pool.page_category(page) == 0, "takes a small page would have held go back to small pages");
+    pool.page_free(page);
 
     // a new line rate retimes the gap; the frame arriving carries on, and its gap back-dates it by the new rate
     immutable uint slow_gap = ports._port[1].gap_ticks;
@@ -800,7 +803,7 @@ version (unittest) private void uart_ports_test()
     page = ports.rx_take(1);
     got = bursts(page, count);
     assert(count == 1 && got[0].length == 2 && got[0].end && cast(const(char)[])page_chain_span(page, 0, 2) == "ab");
-    page_free(page);
+    pool.page_free(page);
     ports.reconfigure(1, cfg, UartRxTiming(80, 35));
 
     ports.error(1, UartError.parity);
@@ -808,7 +811,7 @@ version (unittest) private void uart_ports_test()
     assert(ports.take_errors(1) == (UartError.parity | UartError.framing) && ports.take_errors(1) == UartError.none);
 
     Page* hoard;
-    while (Page* taken = page_alloc_isr(0, 1, 0, room))
+    while (Page* taken = pool.page_alloc_isr(0, 1, 0, room))
     {
         taken.next = hoard;
         hoard = taken;
@@ -820,7 +823,7 @@ version (unittest) private void uart_ports_test()
     {
         Page* next = hoard.next;
         hoard.next = null;
-        page_free(hoard);
+        pool.page_free(hoard);
         hoard = next;
     }
 

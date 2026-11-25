@@ -201,8 +201,7 @@ char[] tformat(Args...)(const(char)[] fmt, ref Args args)
     return tformat_packed(fmt, packed[]);
 }
 
-pragma(inline, false)
-private char[] tformat_packed(const(char)[] fmt, const(FormatArg)[] args)
+package(urt) char[] tformat_packed(const(char)[] fmt, const(FormatArg)[] args)
 {
     import urt.string.format : format_packed;
 

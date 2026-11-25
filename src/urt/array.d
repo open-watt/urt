@@ -504,6 +504,8 @@ nothrow @nogc:
         // char arrays are really just a string buffer, and so we'll expand the capability of concat to match what `MutableString` accepts...
         static assert(is(T == char), "TODO: wchar and dchar"); // needs buffer length counting helpers
 
+        private import urt.string.format : ConcatArg, ConcatArgLayout;
+
         // TODO: string's have this function `concat` which clears the string first, and that's different than Array
         //       we need to tighten this up!
         ref Array!(T, EmbedCount) concat(Things...)(auto ref Things things)
@@ -515,19 +517,18 @@ nothrow @nogc:
 
         ref Array!(T, EmbedCount) append(Things...)(auto ref Things things)
         {
-            import urt.string.format : ConcatArg, concat_mask, make_concat_args;
+            import urt.string.format : make_concat_args;
             ConcatArg[Things.length] args = void;
-            make_concat_args(things, args.ptr);
-            return append_packed(args.ptr, concat_mask!Things);
+            auto layout = make_concat_args(things, args.ptr);
+            return append_packed(args.ptr, layout);
         }
 
-        private ref Array!(T, EmbedCount) append_packed(const(void)* args, size_t arg_mask)
+        private ref Array!(T, EmbedCount) append_packed(const(ConcatArg)* args, ConcatArgLayout layout)
         {
-            import urt.string.format : ConcatArg, concat_impl;
-            const(ConcatArg)* packed = cast(const(ConcatArg)*)args;
-            size_t ext_len = concat_impl(null, 0, packed, arg_mask).length;
+            import urt.string.format : concat_impl;
+            size_t ext_len = concat_impl(null, 0, args, layout).length;
             grow(_length + ext_len);
-            concat_impl(ptr + _length, ext_len, packed, arg_mask);
+            concat_impl(ptr + _length, ext_len, args, layout);
             _length += ext_len;
             return this;
         }

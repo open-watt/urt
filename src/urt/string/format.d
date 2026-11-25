@@ -84,6 +84,12 @@ void make_concat_arg(T)(ref const T arg, ref ConcatArg result)
     }
 }
 
+// The top set bit marks the end. Each lower bit selects a text slice (1) or a stringify callback (0).
+enum ConcatArgLayout : size_t
+{
+    empty = 1,
+}
+
 enum concat_mask(Args...) = () {
     static assert(Args.length <= max_concat_args, "Too many concat arguments");
     size_t mask = size_t(1) << Args.length;
@@ -93,12 +99,13 @@ enum concat_mask(Args...) = () {
     return mask;
 }();
 
-void make_concat_args(Args...)(ref const Args args, ConcatArg* result)
+ConcatArgLayout make_concat_args(Args...)(ref const Args args, ConcatArg* result)
 {
     pragma(inline, true);
 
     static foreach (i; 0 .. Args.length)
         make_concat_arg(args[i], result[i]);
+    return cast(ConcatArgLayout)concat_mask!Args;
 }
 
 char[] concat(Args...)(char[] buffer, auto ref const Args args)
@@ -110,8 +117,8 @@ char[] concat(Args...)(char[] buffer, auto ref const Args args)
     else
     {
         ConcatArg[Args.length] packed = void;
-        make_concat_args(args, packed.ptr);
-        return concat_impl(buffer.ptr, buffer.length, packed.ptr, concat_mask!Args);
+        auto layout = make_concat_args(args, packed.ptr);
+        return concat_impl(buffer.ptr, buffer.length, packed.ptr, layout);
     }
 }
 

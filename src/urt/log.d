@@ -1,7 +1,7 @@
 module urt.log;
 
 import urt.mem.temp : tconcat_impl, tformat, tformat_packed;
-import urt.string.format : ConcatArg, concat_mask, FormatArg, make_concat_args, pack_format_args;
+import urt.string.format : ConcatArg, ConcatArgLayout, FormatArg, make_concat_args, pack_format_args;
 import urt.time;
 
 nothrow @nogc:
@@ -96,52 +96,52 @@ void set_log_hostname(const(char)[] name)
     g_log_hostname = name;
 }
 
-void log_emergency(T...)(const(char)[] tag, ref T args) { write_log(Severity.emergency, tag, null, args); }
-void log_alert(T...)(const(char)[] tag, ref T args) { write_log(Severity.alert, tag, null, args); }
-void log_critical(T...)(const(char)[] tag, ref T args) { write_log(Severity.critical, tag, null, args); }
-void log_error(T...)(const(char)[] tag, ref T args) { write_log(Severity.error, tag, null, args); }
-void log_warning(T...)(const(char)[] tag, ref T args) { write_log(Severity.warning, tag, null, args); }
-void log_notice(T...)(const(char)[] tag, ref T args) { write_log(Severity.notice, tag, null, args); }
-void log_info(T...)(const(char)[] tag, ref T args) { write_log(Severity.info, tag, null, args); }
+pragma(inline, true) void log_emergency(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.emergency, tag, args); }
+pragma(inline, true) void log_alert(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.alert, tag, args); }
+pragma(inline, true) void log_critical(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.critical, tag, args); }
+pragma(inline, true) void log_error(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.error, tag, args); }
+pragma(inline, true) void log_warning(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.warning, tag, args); }
+pragma(inline, true) void log_notice(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.notice, tag, args); }
+pragma(inline, true) void log_info(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.info, tag, args); }
 
-void log_emergencyf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.emergency, tag, null, fmt, args); }
-void log_alertf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.alert, tag, null, fmt, args); }
-void log_criticalf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.critical, tag, null, fmt, args); }
-void log_errorf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.error, tag, null, fmt, args); }
-void log_warningf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.warning, tag, null, fmt, args); }
-void log_noticef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.notice, tag, null, fmt, args); }
-void log_infof(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.info, tag, null, fmt, args); }
+pragma(inline, true) void log_emergencyf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.emergency, tag, fmt, args); }
+pragma(inline, true) void log_alertf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.alert, tag, fmt, args); }
+pragma(inline, true) void log_criticalf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.critical, tag, fmt, args); }
+pragma(inline, true) void log_errorf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.error, tag, fmt, args); }
+pragma(inline, true) void log_warningf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.warning, tag, fmt, args); }
+pragma(inline, true) void log_noticef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.notice, tag, fmt, args); }
+pragma(inline, true) void log_infof(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.info, tag, fmt, args); }
 
-void log_debug(T...)(const(char)[] tag, ref T args) { write_log(Severity.debug_, tag, null, args); }
-void log_trace(T...)(const(char)[] tag, ref T args) { write_log(Severity.trace, tag, null, args); }
-void log_debugf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.debug_, tag, null, fmt, args); }
-void log_tracef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf(Severity.trace, tag, null, fmt, args); }
+pragma(inline, true) void log_debug(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.debug_, tag, args); }
+pragma(inline, true) void log_trace(T...)(const(char)[] tag, ref T args) { write_log_from!(const(char)[], T)(Severity.trace, tag, args); }
+pragma(inline, true) void log_debugf(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.debug_, tag, fmt, args); }
+pragma(inline, true) void log_tracef(T...)(const(char)[] tag, const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.trace, tag, fmt, args); }
 
 // this can be declared in any scope to automatically prefix log messages with a tag (e.g. module name)
 // eg: alias log = Log!"my.module";
 //     log.warn("oh no!");
 template Log(alias tag)
 {
-    void info(T...)(ref T args) { write_log(Severity.info, tag[], null, args); }
-    void warning(T...)(ref T args) { write_log(Severity.warning, tag[], null, args); }
-    void error(T...)(ref T args) { write_log(Severity.error, tag[], null, args); }
-    void notice(T...)(ref T args) { write_log(Severity.notice, tag[], null, args); }
-    void critical(T...)(ref T args) { write_log(Severity.critical, tag[], null, args); }
-    void alert(T...)(ref T args) { write_log(Severity.alert, tag[], null, args); }
-    void emergency(T...)(ref T args) { write_log(Severity.emergency, tag[], null, args); }
+    pragma(inline, true) void info(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.info, tag[], args); }
+    pragma(inline, true) void warning(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.warning, tag[], args); }
+    pragma(inline, true) void error(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.error, tag[], args); }
+    pragma(inline, true) void notice(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.notice, tag[], args); }
+    pragma(inline, true) void critical(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.critical, tag[], args); }
+    pragma(inline, true) void alert(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.alert, tag[], args); }
+    pragma(inline, true) void emergency(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.emergency, tag[], args); }
 
-    void infof(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.info, tag[], null, fmt, args); }
-    void warningf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.warning, tag[], null, fmt, args); }
-    void errorf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.error, tag[], null, fmt, args); }
-    void noticef(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.notice, tag[], null, fmt, args); }
-    void criticalf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.critical, tag[], null, fmt, args); }
-    void alertf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.alert, tag[], null, fmt, args); }
-    void emergencyf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.emergency, tag[], null, fmt, args); }
+    pragma(inline, true) void infof(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.info, tag[], fmt, args); }
+    pragma(inline, true) void warningf(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.warning, tag[], fmt, args); }
+    pragma(inline, true) void errorf(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.error, tag[], fmt, args); }
+    pragma(inline, true) void noticef(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.notice, tag[], fmt, args); }
+    pragma(inline, true) void criticalf(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.critical, tag[], fmt, args); }
+    pragma(inline, true) void alertf(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.alert, tag[], fmt, args); }
+    pragma(inline, true) void emergencyf(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.emergency, tag[], fmt, args); }
 
-    void debug_(T...)(ref T args) { write_log(Severity.debug_, tag[], null, args); }
-    void trace(T...)(ref T args) { write_log(Severity.trace, tag[], null, args); }
-    void debugf(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.debug_, tag[], null, fmt, args); }
-    void tracef(T...)(const(char)[] fmt, ref T args) { write_logf(Severity.trace, tag[], null, fmt, args); }
+    pragma(inline, true) void debug_(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.debug_, tag[], args); }
+    pragma(inline, true) void trace(T...)(ref T args) { write_log_from!(const(char)[], T)(Severity.trace, tag[], args); }
+    pragma(inline, true) void debugf(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.debug_, tag[], fmt, args); }
+    pragma(inline, true) void tracef(T...)(const(char)[] fmt, ref T args) { write_logf_from!(const(char)[], T)(Severity.trace, tag[], fmt, args); }
 }
 
 void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_name, ref T args)
@@ -156,9 +156,9 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
     else
     {
         ConcatArg[T.length] packed = void;
-        make_concat_args(args, packed.ptr);
+        auto layout = make_concat_args(args, packed.ptr);
         write_concat_log(severity, tag.ptr, tag.length, object_name.ptr, object_name.length,
-            packed.ptr, concat_mask!T);
+            packed.ptr, layout);
     }
 }
 
@@ -171,7 +171,7 @@ void write_logf(T...)(Severity severity, const(char)[] tag, const(char)[] object
 }
 
 // Resolve the tag and retain the name through formatting and sink dispatch.
-// source.type() supplies the tag and source.name() returns its owning String.
+// A tag slice has no object name. An object supplies its tag via type() and its owning String via name().
 void write_log_from(Source, T...)(Severity severity, Source source, ref T args)
 {
     if (severity > g_max_severity)
@@ -181,8 +181,8 @@ void write_log_from(Source, T...)(Severity severity, Source source, ref T args)
     else
     {
         ConcatArg[T.length] packed = void;
-        make_concat_args(args, packed.ptr);
-        write_source_concat(severity, source, packed.ptr, concat_mask!T);
+        auto layout = make_concat_args(args, packed.ptr);
+        write_source_concat(severity, source, packed.ptr, layout);
     }
 }
 
@@ -248,12 +248,12 @@ void writeErrorf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Err
 
 void writeLog(T...)(Level level, ref T things)
 {
-    write_log(level_to_severity(level), null, null, things);
+    write_log_from!(const(char)[], T)(level_to_severity(level), null, things);
 }
 
 void writeLogf(T...)(Level level, const(char)[] format, ref T things)
 {
-    write_logf(level_to_severity(level), null, null, format, things);
+    write_logf_from!(const(char)[], T)(level_to_severity(level), null, format, things);
 }
 
 alias LegacyLogSink = void function(Level level, scope const(char)[] message) nothrow @nogc;
@@ -276,35 +276,51 @@ import urt.string : MutableString, String;
 enum is_log_string(T) = is(T : const(char)[]) || is(T : const String) ||
     is(T : const MutableString!N, size_t N) || is(T : const Array!char);
 
+const(char)[] source_tag(Source)(Source source)
+{
+    static if (is(Source : const(char)[]))
+        return source;
+    else
+        return source.type();
+}
+
+auto source_name(Source)(Source source)
+{
+    static if (is(Source : const(char)[]))
+        return cast(const(char)[])null;
+    else
+        return source.name();
+}
+
 pragma(inline, false)
 void write_source_message(Source)(Severity severity, Source source, const(char)[] message)
 {
-    const(char)[] tag = source.type();
-    auto name = source.name();
+    auto tag = source_tag(source);
+    auto name = source_name(source);
     write_log_message(severity, tag.ptr, tag.length, name[].ptr, name[].length, message.ptr, message.length);
 }
 
 pragma(inline, false)
-void write_source_concat(Source)(Severity severity, Source source, const(void)* args, size_t mask)
+void write_source_concat(Source)(Severity severity, Source source, const(ConcatArg)* args, ConcatArgLayout layout)
 {
-    const(char)[] tag = source.type();
-    auto name = source.name();
-    write_concat_log(severity, tag.ptr, tag.length, name[].ptr, name[].length, args, mask);
+    auto tag = source_tag(source);
+    auto name = source_name(source);
+    write_concat_log(severity, tag.ptr, tag.length, name[].ptr, name[].length, args, layout);
 }
 
 pragma(inline, false)
 void write_source_format(Source)(Severity severity, Source source, const(char)[] fmt, const(FormatArg)[] args)
 {
-    const(char)[] tag = source.type();
-    auto name = source.name();
+    auto tag = source_tag(source);
+    auto name = source_name(source);
     const(char)[] message = tformat_packed(fmt, args);
     write_log_message(severity, tag.ptr, tag.length, name[].ptr, name[].length, message.ptr, message.length);
 }
 
 void write_concat_log(Severity severity, const(char)* tag, size_t tag_length, const(char)* object_name,
-    size_t object_name_length, const(void)* args, size_t arg_mask)
+    size_t object_name_length, const(ConcatArg)* args, ConcatArgLayout layout)
 {
-    const(char)[] message = tconcat_impl(args, arg_mask);
+    const(char)[] message = tconcat_impl(args, layout);
     write_log_message(severity, tag, tag_length, object_name, object_name_length, message.ptr, message.length);
 }
 
@@ -384,6 +400,14 @@ unittest
     log_info("test", "value=", 10);
     assert(capture.tag == "test");
     assert(capture.message == "value=10");
+
+    alias module_log = Log!"module";
+    module_log.info("direct");
+    assert(capture.tag == "module" && !capture.named_object && capture.message == "direct");
+    log_infof("test", "value={0}", 13);
+    assert(capture.tag == "test" && !capture.named_object && capture.message == "value=13");
+    writeInfof("value={0}", 14);
+    assert(capture.tag.length == 0 && !capture.named_object && capture.message == "value=14");
 
     TestLogSource source;
     write_log_from(Severity.debug_, &source, "filtered");

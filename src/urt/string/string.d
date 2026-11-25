@@ -173,6 +173,38 @@ char* write_string(char* buffer, const(char)[] str) pure nothrow @nogc
     return buffer;
 }
 
+package(urt) size_t string_slab_entry_size(size_t length) pure nothrow @nogc
+    => 2 + length + (length & 1);
+
+// The slab uses byte lengths and lexicographic order within each length.
+int compare_string_keys(scope const(char)[] a, scope const(char)[] b) pure nothrow @trusted @nogc
+{
+    if (a.length != b.length)
+        return a.length < b.length ? -1 : 1;
+    if (__ctfe)
+        return a == b ? 0 : (a < b ? -1 : 1);
+    return a.length ? memcmp(a.ptr, b.ptr, a.length) : 0;
+}
+
+// Slabs are sorted by compare_string_keys.
+package(urt) size_t find_slab_key(scope const(char)[] key, scope const(ushort)[] offsets, scope const(char)* buffer) pure nothrow @nogc
+{
+    size_t lo, hi = offsets.length;
+    while (lo < hi)
+    {
+        const mid = lo + (hi - lo) / 2;
+        const order = compare_string_keys(key, as_dstring(buffer + offsets[mid]));
+        if (order == 0)
+            return mid;
+        if (order < 0)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    return size_t.max;
+}
+
+
 String as_string(const(char)* s) pure nothrow @nogc
     => String(s, false);
 
@@ -483,6 +515,20 @@ unittest
 }
 
 
+bool packed_labels_fit(scope const(char[])[] labels) pure nothrow @safe @nogc
+{
+    size_t size;
+    foreach (i, label; labels)
+    {
+        if (label.length > ubyte.max || (i && compare_string_keys(labels[i - 1], label) > 0))
+            return false;
+        size += label.length;
+        if (size > ushort.max)
+            return false;
+    }
+    return true;
+}
+
 struct StringTable(size_t n, size_t data_len, size_t max_offset = data_len)
 {
 nothrow @nogc:
@@ -580,11 +626,85 @@ nothrow @nogc:
     }
 }
 
-template make_table(const(char[])[] strings, bool dedupe = true)
+enum StringTableLayout : ubyte
 {
-    private enum packed = pack_strings!(strings.length)(strings, dedupe);
+    length_prefixed,
+    indexed,
+}
 
-    enum make_table = fill_table!(StringTable!(packed.offsets.length, packed.cache.length, packed.max_offset))(packed);
+template make_table(const(char[])[] strings, bool dedupe = true, StringTableLayout layout = StringTableLayout.length_prefixed)
+{
+    private enum indexed = layout == StringTableLayout.indexed;
+    private enum packed = pack_strings!(strings.length, indexed)(strings, dedupe);
+    static if (indexed)
+    {
+        enum make_table = () {
+            StringKeyTable!(strings.length, packed.cache.length, packed.max_offset) table;
+            foreach (i, key; strings)
+                table.entries[i] = cast(typeof(table.entries[i]))((key.length << table.offset_bits) | packed.offsets[i]);
+            table.cache[] = packed.cache[];
+            return table;
+        }();
+    }
+    else
+        enum make_table = fill_table!(StringTable!(packed.offsets.length, packed.cache.length, packed.max_offset))(packed);
+}
+
+private struct StringKeyTable(size_t count, size_t data_len, size_t max_offset)
+{
+nothrow @nogc:
+    static if (max_offset <= ubyte.max)
+        alias Entry = ushort;
+    else
+        alias Entry = uint;
+
+    enum offset_bits = Entry.sizeof == ushort.sizeof ? 8 : 16;
+    Entry[count] entries;
+    char[data_len] cache;
+
+    const(char)[] key_at(size_t i) const pure
+    {
+        enum offset_mask = (1u << offset_bits) - 1;
+        const entry = entries[i];
+        const offset = entry & offset_mask;
+        return cache[offset .. offset + (entry >> offset_bits)];
+    }
+
+    size_t find_sorted(scope const(char)[] key) const pure
+    {
+        if (__ctfe)
+        {
+            foreach (i; 0 .. count)
+                if (key_at(i) == key)
+                    return i;
+            return size_t.max;
+        }
+        return find_indexed_key!offset_bits(key, entries[], cache.ptr);
+    }
+}
+
+private size_t find_indexed_key(uint offset_bits, Entry)(scope const(char)[] key, scope const(Entry)[] entries, scope const(char)* text) pure nothrow @nogc
+{
+    enum offset_mask = (1u << offset_bits) - 1;
+    size_t lo, hi = entries.length;
+    while (lo < hi)
+    {
+        const mid = lo + (hi - lo) / 2;
+        const entry = entries[mid];
+        const length = entry >> offset_bits;
+        int order;
+        if (key.length != length)
+            order = key.length < length ? -1 : 1;
+        else if (length)
+            order = memcmp(key.ptr, text + (entry & offset_mask), length);
+        if (order == 0)
+            return mid;
+        if (order < 0)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    return size_t.max;
 }
 
 private Table fill_table(Table, size_t count)(PackedStrings!count packed)
@@ -606,18 +726,23 @@ private struct PackedStrings(size_t count)
     ushort max_offset;
 }
 
-private PackedStrings!count pack_strings(size_t count)(const(char[])[] strings, bool dedupe) nothrow
+package(urt) PackedStrings!count pack_strings(size_t count, bool compact = false)(const(char[])[] strings, bool dedupe, size_t keep_empty = 0, size_t max_length = MaxStringLen) nothrow
 {
     assert(__ctfe, "only for compile-time use");
 
     PackedStrings!count r;
     foreach (i, s; strings)
     {
-        assert(s.length <= MaxStringLen, "String too long");
-        if (s.length == 0)
-            continue;
+        static if (compact)
+            assert(s.length <= ubyte.max, "Lookup key too long");
+        else
+        {
+            assert(s.length <= max_length, "String too long");
+            if (s.length == 0 && i >= keep_empty)
+                continue;
+        }
 
-        ushort at = 0;
+        size_t at = size_t.max;
         if (dedupe)
         {
             foreach (j; 0 .. i)
@@ -629,23 +754,53 @@ private PackedStrings!count pack_strings(size_t count)(const(char[])[] strings, 
                 }
             }
         }
-        if (at == 0)
+        if (at == size_t.max)
         {
-            version (LittleEndian)
-                r.cache ~= [ char(s.length & 0xFF), cast(char)(s.length >> 8) ];
-            else
-                r.cache ~= [ cast(char)(s.length >> 8), char(s.length & 0xFF) ];
-            at = cast(ushort)r.cache.length;
+            static if (!compact)
+            {
+                version (LittleEndian)
+                    r.cache ~= [cast(char)s.length, cast(char)(s.length >> 8)];
+                else
+                    r.cache ~= [cast(char)(s.length >> 8), cast(char)s.length];
+            }
+            at = r.cache.length;
+            assert(at <= ushort.max, "String cache too large");
             r.cache ~= s[];
-            if (s.length & 1)
-                r.cache ~= '\0';
+            static if (!compact)
+                if (s.length & 1)
+                    r.cache ~= '\0';
         }
-        r.offsets[i] = at;
+        r.offsets[i] = cast(ushort)at;
         if (at > r.max_offset)
-            r.max_offset = at;
+            r.max_offset = cast(ushort)at;
     }
     assert(r.cache.length <= ushort.max, "String cache too large");
     return r;
+}
+
+unittest
+{
+    static immutable keys = make_table!(["", "b", "ab", "z\0"], false, StringTableLayout.indexed);
+    static assert(keys.entries[0].sizeof == 2);
+    static assert(keys.cache[] == "babz\0");
+    assert(keys.find_sorted("") == 0);
+    assert(keys.find_sorted("b") == 1);
+    assert(keys.find_sorted("ab") == 2);
+    assert(keys.find_sorted("z\0") == 3);
+    assert(keys.find_sorted("z") == size_t.max);
+    static assert(keys.find_sorted("ab") == 2);
+
+    static immutable repeated = make_table!(["a", "a", "b"], true, StringTableLayout.indexed);
+    static assert(repeated.cache[] == "ab");
+    static assert(repeated.entries[0] == repeated.entries[1]);
+
+    enum block = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    enum wide = block ~ block ~ block ~ block[0 .. 63];
+    static immutable wide_offsets = make_table!([wide, wide[0 .. $-1] ~ "g", wide[0 .. $-1] ~ "h"], false, StringTableLayout.indexed);
+    static assert(wide_offsets.entries[0].sizeof == 4);
+    assert(wide_offsets.find_sorted(wide) == 0);
+    assert(wide_offsets.find_sorted(wide[0 .. $-1] ~ "g") == 1);
+    assert(wide_offsets.find_sorted(wide[0 .. $-1] ~ "h") == 2);
 }
 
 unittest

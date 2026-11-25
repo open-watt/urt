@@ -1,6 +1,7 @@
 module urt.meta.enuminfo;
 
 import urt.algorithm : binary_search, qsort;
+import urt.string.string : compare_string_keys, find_slab_key, pack_strings, string_slab_entry_size;
 import urt.traits :EnumType, is_enum, Unqual;
 import urt.mem;
 import urt.meta : Iota, STATIC_MAP;
@@ -117,30 +118,22 @@ nothrow @nogc:
 
     Variant value_for(const(char)[] key) const pure
     {
-        size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
-        if (i == count)
+        size_t i = find_slab_key(key, _keys[0 .. count], _string_buffer);
+        if (i >= count)
             return Variant();
         i = _lookup_tables[i];
         return _get_value(_values + i*stride, &this);
     }
 
-    // display names are stored in key order, so this scans where value_for can binary search
     Variant value_for_display(const(char)[] display) const pure
     {
-        // an empty name is no name; it must not match every unlabelled entry
-        if (_display is null || display.length == 0)
-            return Variant();
-        foreach (i; 0 .. count)
-        {
-            if (get_display(i) == display)
-                return _get_value(_values + _lookup_tables[i]*stride, &this);
-        }
-        return Variant();
+        size_t i = display_value_index(display);
+        return i < count ? _get_value(_values + i*stride, &this) : Variant();
     }
 
     bool contains(const(char)[] key) const pure
     {
-        size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
+        size_t i = find_slab_key(key, _keys[0 .. count], _string_buffer);
         return i < count;
     }
 
@@ -256,6 +249,22 @@ private:
         this._get_value = get_value;
     }
 
+    size_t display_value_index(const(char)[] display) const pure
+    {
+        if (_display is null || display.length == 0)
+            return count;
+
+        import urt.string.uni : uni_compare;
+        size_t best = count;
+        foreach (i; 0 .. count)
+        {
+            // Retain the lexical tie-break for ambiguous display names.
+            if (get_display(i) == display && (best == count || uni_compare(get_key(i), get_key(best)) < 0))
+                best = i;
+        }
+        return best < count ? _lookup_tables[best] : count;
+    }
+
     const(char)[] get_key(size_t i) const pure
     {
         const(char)* s = _string_buffer + _keys[i];
@@ -337,24 +346,16 @@ template EnumInfo(E)
 
             const(E)* value_for(const(char)[] key) const pure
             {
-                size_t i = binary_search!key_compare(_keys[0 .. count], key, _string_buffer);
-                if (i == count)
+                size_t i = find_slab_key(key, _keys[0 .. count], _string_buffer);
+                if (i >= count)
                     return null;
                 return _values + _lookup_tables[i];
             }
 
-            // display names are stored in key order, so this scans where value_for can binary search
             const(E)* value_for_display(const(char)[] display) const pure
             {
-                // an empty name is no name; it must not match every unlabelled entry
-                if (_display is null || display.length == 0)
-                    return null;
-                foreach (i; 0 .. count)
-                {
-                    if (get_display(i) == display)
-                        return _values + _lookup_tables[i];
-                }
-                return null;
+                size_t i = _base.display_value_index(display);
+                return i < count ? _values + i : null;
             }
 
             bool contains(const(char)[] key) const pure
@@ -371,7 +372,6 @@ template enum_info(E)
     enum ubyte num_items = enum_members.length;
     static assert(num_items <= ubyte.max, "Too many enum items!");
     // keys and display names are reached by ushort offsets carrying ushort length prefixes
-    static assert(total_strings <= ushort.max, "Enum key and display name data too large: " ~ E.stringof);
 
     __gshared immutable enum_info = immutable(EnumInfo!E)(
         num_items,
@@ -387,89 +387,28 @@ template enum_info(E)
 private:
     import urt.algorithm : binary_search, compare, qsort;
     import urt.hash : fnv1a;
-    import urt.string.uni : uni_compare;
 
     // keys and values are sorted for binary search
     __gshared immutable E[num_items] _values = [ STATIC_MAP!(GetValue, iota) ];
 
-    // keys are stored as offsets info the string buffer
-    __gshared immutable ushort[num_items] _keys = () {
-        ushort[num_items] key_offsets;
-        size_t offset = 2;
-        foreach (i; 0 .. num_items)
-        {
-            const(char)[] key = by_key[i].k;
-            key_offsets[i] = cast(ushort)offset;
-            offset += 2 + key.length;
-            if (key.length & 1)
-                offset += 1; // align to 2 bytes
-        }
-        return key_offsets;
-    }();
-
-    // display names are stored in sorted-key order; members without one are left at offset 0
     enum size_t num_display = has_display ? num_items : 0;
-    __gshared immutable ushort[num_display] _display = () {
-        ushort[num_display] offsets;
+    enum slab_text = () {
+        string[num_items + num_display] text;
+        foreach (i; 0 .. num_items)
+            text[i] = by_key[i].k;
         static if (has_display)
-        {
-            size_t offset = total_key_strings + 2;
-            foreach (i; 0 .. num_items)
-            {
-                string d = display_by_sorted[i];
-                if (d.length != 0)
-                {
-                    offsets[i] = cast(ushort)offset;
-                    offset += 2 + d.length + (d.length & 1);
-                }
-            }
-        }
-        return offsets;
+            foreach (i, display; display_by_sorted)
+                text[num_items + i] = display;
+        return text;
     }();
+    enum slab = pack_strings!(slab_text.length)(slab_text[], false, num_items, ushort.max);
 
-    // build the string buffer
-    __gshared immutable char[total_strings] _strings = () {
-        char[total_strings] str_data;
-        char* ptr = str_data.ptr;
-        foreach (i; 0 .. num_items)
-        {
-            const(char)[] key = by_key[i].k;
-            version (LittleEndian)
-            {
-                *ptr++ = key.length & 0xFF;
-                *ptr++ = (key.length >> 8) & 0xFF;
-            }
-            else
-            {
-                *ptr++ = (key.length >> 8) & 0xFF;
-                *ptr++ = key.length & 0xFF;
-            }
-            ptr[0 .. key.length] = key[];
-            ptr += key.length;
-            if (key.length & 1)
-                *ptr++ = 0; // align to 2 bytes
-        }
-        foreach (i; 0 .. num_items)
-        {
-            string d = display_by_sorted[i];
-            if (d.length == 0)
-                continue;
-            version (LittleEndian)
-            {
-                *ptr++ = d.length & 0xFF;
-                *ptr++ = (d.length >> 8) & 0xFF;
-            }
-            else
-            {
-                *ptr++ = (d.length >> 8) & 0xFF;
-                *ptr++ = d.length & 0xFF;
-            }
-            ptr[0 .. d.length] = d[];
-            ptr += d.length;
-            if (d.length & 1)
-                *ptr++ = 0; // align to 2 bytes
-        }
-        return str_data;
+    __gshared immutable ushort[num_items] _keys = slab.offsets[0 .. num_items];
+    __gshared immutable ushort[num_display] _display = slab.offsets[num_items .. $];
+    align(2) __gshared immutable char[slab.cache.length] _strings = () {
+        char[slab.cache.length] cache;
+        cache[] = slab.cache[];
+        return cache;
     }();
 
     // these tables map between indices of keys and values
@@ -491,7 +430,7 @@ private:
 
     alias iota = Iota!(enum_members.length);
     enum enum_members = __traits(allMembers, E);
-    enum by_key = (){ KI[num_items] r = [ STATIC_MAP!(MakeKI, iota) ]; r.qsort!((ref a, ref b) => uni_compare(a.k, b.k)); return r; }();
+    enum by_key = (){ KI[num_items] r = [ STATIC_MAP!(MakeKI, iota) ]; r.qsort!((ref a, ref b) => compare_string_keys(a.k, b.k)); return r; }();
     enum by_value = (){ VI[num_items] r = [ STATIC_MAP!(MakeVI, iota) ]; r.qsort!((ref a, ref b) => compare(a.v, b.v)); return r; }();
     enum inv_key = (){ KI[num_items] bk = by_key; ubyte[num_items] r; foreach (ubyte i, ref ki; bk) r[ki.i] = i; return r; }();
     enum inv_val = (){ VI[num_items] bv = by_value; ubyte[num_items] r; foreach (ubyte i, ref vi; bv) r[vi.i] = i; return r; }();
@@ -499,27 +438,6 @@ private:
     enum string[num_items] displays = [ STATIC_MAP!(GetDisplay, iota) ];
     enum display_by_sorted = (){ string[num_items] r; foreach (i; 0 .. num_items) r[i] = displays[by_key[i].i]; return r; }();
     enum has_display = (){ foreach (d; display_by_sorted) { if (d.length != 0) return true; } return false; }();
-
-    // must measure the trimmed keys; this is where the display strings begin, not just a buffer bound
-    enum total_key_strings = () {
-        size_t total = 0;
-        foreach (i; 0 .. num_items)
-        {
-            size_t l = by_key[i].k.length;
-            total += 2 + l + (l & 1);
-        }
-        return total;
-    }();
-
-    enum total_strings = () {
-        size_t total = total_key_strings;
-        foreach (d; display_by_sorted)
-        {
-            if (d.length != 0)
-                total += 2 + d.length + (d.length & 1);
-        }
-        return total;
-    }();
 
     enum MakeKI(ushort i) = KI(trim_key!(enum_members[i]), i);
     enum MakeVI(ushort i) = VI(__traits(getMember, E, enum_members[i]), i);
@@ -536,7 +454,6 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     import urt.hash : fnv1a;
     import urt.mem.temp;
     import urt.string;
-    import urt.string.uni;
     import urt.util;
 
     assert(keys.length == values.length, "keys and values must have the same length");
@@ -570,7 +487,7 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
         ksort[i] = VI!(const(char)[])(keys[i], cast(ubyte)i);
         vsort[i] = VI!T(values[i], cast(ubyte)i);
     }
-    ksort.qsort!((ref a, ref b) => uni_compare(a.v, b.v));
+    ksort.qsort!((ref a, ref b) => compare_string_keys(a.v, b.v));
     vsort.qsort!((ref a, ref b) => compare(a.v, b.v));
 
     // build the reverse lookup tables
@@ -584,13 +501,13 @@ VoidEnumInfo* make_enum_info(T)(const(char)[] name, const(char)[][] keys, T[] va
     // count the string memory
     size_t total_string;
     foreach (i; 0 .. count)
-        total_string += 2 + keys[i].length + (keys[i].length & 1);
+        total_string += string_slab_entry_size(keys[i].length);
     if (any_display)
     {
         foreach (d; display_names)
         {
             if (d.length != 0)
-                total_string += 2 + d.length + (d.length & 1);
+                total_string += string_slab_entry_size(d.length);
         }
     }
     // keys and display names are reached by ushort offsets carrying ushort length prefixes
@@ -659,10 +576,10 @@ size_t enum_info_size(ref const VoidEnumInfo info) pure nothrow @nogc
     foreach (i; 0 .. info.count)
     {
         size_t l = info.key_by_sorted_index(i).length;
-        total_string += 2 + l + (l & 1);
+        total_string += string_slab_entry_size(l);
         size_t dl = info.display_by_sorted_index(i).length;
         if (dl != 0)
-            total_string += 2 + dl + (dl & 1);
+            total_string += string_slab_entry_size(dl);
     }
     size_t total = VoidEnumInfo.sizeof + info.stride*info.count;
     total += (total & 1) + ushort.sizeof*info.count*(info._display ? 2 : 1) + info.count*3;
@@ -706,14 +623,6 @@ ushort key_length(const(char)* key) pure
     else
         return *cast(ushort*)(key - 2);
 }
-
-int key_compare(ushort a, const(char)[] b, const(char)* strings) pure
-{
-    import urt.string.uni : uni_compare;
-    const(char)* s = strings + a;
-    return uni_compare(s[0 .. s.key_length], b);
-}
-
 
 unittest
 {
@@ -792,6 +701,36 @@ unittest
     assert(named.value_for_display("beta").isNull);          // the key is not a display name
     assert(named.value_for_display("").isNull);
     assert(plain.value_for_display("Alpha!").isNull);        // no display names at all
+
+    enum TestEmptyKey { _, a }
+    auto empty_key = &enum_info!TestEmptyKey;
+    assert(empty_key.key_by_decl_index(0).ptr !is null);
+    assert(*empty_key.value_for("") == TestEmptyKey._);
+    assert(*empty_key.value_for("a") == TestEmptyKey.a);
+
+    enum TestLengthOrder
+    {
+        @display_name("Shared") alphabet = 7,
+        @display_name("Shared") z = 2,
+        bee = 4,
+    }
+    auto order = &enum_info!TestLengthOrder;
+    assert(order.key_by_sorted_index(0) == "z");
+    assert(order.key_by_sorted_index(1) == "bee");
+    assert(order.key_by_sorted_index(2) == "alphabet");
+    assert(order.key_by_decl_index(0) == "alphabet");
+    assert(*order.value_for("alphabet") == TestLengthOrder.alphabet);
+    assert(order.make_void().value_for("z").asLong == 2);
+    assert(*order.value_for_display("Shared") == TestLengthOrder.alphabet);
+    assert(order.make_void().value_for_display("Shared").asLong == 7);
+
+    const(char)[][3] length_keys = ["alphabet", "z", "bee"];
+    int[3] length_values = [7, 2, 4];
+    VoidEnumInfo* runtime_order = make_enum_info("LengthOrder", length_keys[], length_values[]);
+    scope(exit) free((cast(void*)runtime_order)[0 .. enum_info_size(*runtime_order)]);
+    assert(runtime_order.key_by_sorted_index(0) == "z");
+    assert(runtime_order.key_by_decl_index(0) == "alphabet");
+    assert(runtime_order.value_for("alphabet").asLong == 7);
     assert(enum_info_equal(*named, *named) && !enum_info_equal(*plain, *named));
     assert(enum_info_size(*named) > enum_info_size(*plain));
     free((cast(void*)plain)[0 .. enum_info_size(*plain)]);

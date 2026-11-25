@@ -236,15 +236,15 @@ Severity level_to_severity(Level level)
 
 __gshared Level logLevel = Level.Info;
 
-void writeDebug(T...)(ref T things) { writeLog(Level.Debug, things); }
-void writeInfo(T...)(ref T things) { writeLog(Level.Info, things); }
-void writeWarning(T...)(ref T things) { writeLog(Level.Warning, things); }
-void writeError(T...)(ref T things) { writeLog(Level.Error, things); }
+void writeDebug(T...)(ref T things) { write_log_from!(const(char)[], T)(Severity.debug_, null, things); }
+void writeInfo(T...)(ref T things) { write_log_from!(const(char)[], T)(Severity.info, null, things); }
+void writeWarning(T...)(ref T things) { write_log_from!(const(char)[], T)(Severity.warning, null, things); }
+void writeError(T...)(ref T things) { write_log_from!(const(char)[], T)(Severity.error, null, things); }
 
-void writeDebugf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Debug, format, things); }
-void writeInfof(T...)(const(char)[] format, ref T things) { writeLogf(Level.Info, format, things); }
-void writeWarningf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Warning, format, things); }
-void writeErrorf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Error, format, things); }
+void writeDebugf(T...)(const(char)[] format, ref T things) { write_logf_from!(const(char)[], T)(Severity.debug_, null, format, things); }
+void writeInfof(T...)(const(char)[] format, ref T things) { write_logf_from!(const(char)[], T)(Severity.info, null, format, things); }
+void writeWarningf(T...)(const(char)[] format, ref T things) { write_logf_from!(const(char)[], T)(Severity.warning, null, format, things); }
+void writeErrorf(T...)(const(char)[] format, ref T things) { write_logf_from!(const(char)[], T)(Severity.error, null, format, things); }
 
 void writeLog(T...)(Level level, ref T things)
 {

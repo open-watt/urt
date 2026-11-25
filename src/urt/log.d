@@ -225,10 +225,7 @@ void writeErrorf(T...)(const(char)[] format, ref T things) { writeLogf(Level.Err
 
 void writeLog(T...)(Level level, ref T things)
 {
-    Severity sev = level_to_severity(level);
-    if (sev > g_max_severity)
-        return;
-    write_log(sev, null, null, things);
+    write_log(level_to_severity(level), null, null, things);
 }
 
 void writeLogf(T...)(Level level, const(char)[] format, ref T things)

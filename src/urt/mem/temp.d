@@ -2,6 +2,7 @@ module urt.mem.temp;
 
 import urt.attribute : fast_data;
 import urt.mem;
+import urt.string.format : FormatArg;
 
 version = DebugTempAlloc;
 
@@ -194,12 +195,22 @@ const(char)[] tconcat_impl(const(void)* raw_args, size_t arg_mask)
 
 char[] tformat(Args...)(const(char)[] fmt, ref Args args)
 {
-    import urt.string.format : format;
-    char[] r = format(cast(char[])tempMem[alloc_offset..$], fmt, args);
+    import urt.string.format : pack_format_args;
+
+    auto packed = pack_format_args(args);
+    return tformat_packed(fmt, packed[]);
+}
+
+pragma(inline, false)
+private char[] tformat_packed(const(char)[] fmt, const(FormatArg)[] args)
+{
+    import urt.string.format : format_packed;
+
+    char[] r = format_packed(cast(char[])tempMem[alloc_offset..$], fmt, args);
     if (!r)
     {
         alloc_offset = 0;
-        r = format(cast(char[])tempMem[0..TempMemSize / 2], fmt, args);
+        r = format_packed(cast(char[])tempMem[0..TempMemSize / 2], fmt, args);
     }
     alloc_offset += r.length;
     return r;

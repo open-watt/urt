@@ -181,6 +181,24 @@ char[] format(Args...)(char[] buffer, const(char)[] fmt, auto ref Args args)
     return r;
 }
 
+package(urt) FormatArg[Args.length] pack_format_args(Args...)(ref Args args)
+{
+    pragma(inline, true);
+    FormatArg[Args.length] packed = void;
+    static foreach (i, arg; args)
+        packed[i] = FormatArg(arg);
+    return packed;
+}
+
+package(urt) char[] format_packed(char[] buffer, const(char)[] fmt, const(FormatArg)[] args)
+{
+    debug InFormatFunction = true;
+    char[] r = formatImpl(buffer, fmt, args);
+    debug InFormatFunction = false;
+    return r;
+}
+
+
 struct FormatArg
 {
     private this(T)(ref T value) pure nothrow @nogc

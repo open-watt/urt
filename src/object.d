@@ -135,16 +135,16 @@ static if (__VERSION__ >= 2113)
 class Object
 {
 @nogc:
-    size_t toHash() @trusted nothrow
+    size_t toHash() const nothrow @trusted
     {
         size_t addr = cast(size_t) cast(void*) this;
         return addr ^ (addr >>> 4);
     }
 
-    bool opEquals(Object rhs)
+    bool opEquals(Object rhs) const nothrow
         => this is rhs;
 
-    int opCmp(Object rhs)
+    int opCmp(Object rhs) const nothrow
         => 0;
 
     ptrdiff_t toString(char[] buffer) const nothrow
@@ -180,39 +180,39 @@ bool opEquals(LHS, RHS)(LHS lhs, RHS rhs)
 class TypeInfo
 {
 @nogc:
-    size_t getHash(scope const void* p) @trusted nothrow const
+    size_t getHash(scope const void* p) const nothrow @trusted
         => 0;
 
-    bool equals(scope const void* p1, scope const void* p2) @trusted const
+    bool equals(scope const void* p1, scope const void* p2) const @trusted
         => p1 == p2;
 
-    int compare(scope const void* p1, scope const void* p2) @trusted const
+    int compare(scope const void* p1, scope const void* p2) const @trusted
         => 0;
 
-    @property size_t tsize() nothrow pure const @safe @nogc
+    @property size_t tsize() const pure nothrow @safe
         => 0;
 
-    const(TypeInfo) next() nothrow pure const @nogc
+    const(TypeInfo) next() const pure nothrow
         => null;
 
-    size_t[] offTi() nothrow const
+    size_t[] offTi() const nothrow
         => null;
 
-    @property uint flags() nothrow pure const @safe @nogc
+    @property uint flags() const pure nothrow @safe
         => 0;
 
-    @property size_t talign() nothrow pure const @safe @nogc
+    @property size_t talign() const pure nothrow @safe
         => tsize;
 
-    const(void)[] initializer() nothrow pure const @safe @nogc
+    const(void)[] initializer() const pure nothrow @safe
         => null;
 
-    @property immutable(void)* rtInfo() nothrow pure const @safe @nogc
+    @property immutable(void)* rtInfo() const pure nothrow @safe
         => null;
 
     version (WithArgTypes)
     {
-        int argTypes(out TypeInfo arg1, out TypeInfo arg2) @safe nothrow
+        int argTypes(out TypeInfo arg1, out TypeInfo arg2) nothrow @safe
         {
             arg1 = null;
             arg2 = null;
@@ -220,13 +220,13 @@ class TypeInfo
         }
     }
 
-    override size_t toHash() @trusted nothrow const
+    override size_t toHash() const nothrow @trusted
         => 0;
 
-    override bool opEquals(Object rhs)
+    override bool opEquals(Object rhs) const nothrow
         => false;
 
-    override int opCmp(Object rhs)
+    override int opCmp(Object rhs) const nothrow
         => 0;
 
     override ptrdiff_t toString(char[] buffer) const nothrow
@@ -277,12 +277,12 @@ class TypeInfo_Class : TypeInfo
     void function(Object) @nogc defaultConstructor;
 
     immutable(void)* m_RTInfo;
-    override @property immutable(void)* rtInfo() nothrow pure const @safe { return m_RTInfo; }
+    override @property immutable(void)* rtInfo() const pure nothrow @safe { return m_RTInfo; }
 
     // The compiler validates the ClassInfo field count, so nameSig cannot be dropped.
     uint[4] nameSig;
 
-    override @property size_t tsize() nothrow pure const @safe
+    override @property size_t tsize() const pure nothrow @safe
     {
         return (void*).sizeof;
     }
@@ -296,10 +296,10 @@ class TypeInfo_Struct : TypeInfo
     override ptrdiff_t toString(char[] buffer) const nothrow
         => try_copy_string(buffer, name);
 
-    override size_t toHash() @trusted nothrow const
+    override size_t toHash() const nothrow @trusted
         => hashOf(mangledName);
 
-    override bool opEquals(Object o)
+    override bool opEquals(Object o) const nothrow
     {
         if (this is o)
             return true;
@@ -309,14 +309,14 @@ class TypeInfo_Struct : TypeInfo
         return s && this.mangledName == s.mangledName;
     }
 
-    override size_t getHash(scope const void* p) @trusted pure nothrow const
+    override size_t getHash(scope const void* p) @trusted pure const nothrow
     {
         if (xtoHash)
             return (*xtoHash)(p);
         return 0;
     }
 
-    override bool equals(scope const void* p1, scope const void* p2) @trusted pure nothrow const
+    override bool equals(scope const void* p1, scope const void* p2) @trusted pure const nothrow
     {
         if (!p1 || !p2) return false;
         if (xopEquals)
@@ -327,7 +327,7 @@ class TypeInfo_Struct : TypeInfo
         return p1 == p2;
     }
 
-    override int compare(scope const void* p1, scope const void* p2) @trusted pure nothrow const
+    override int compare(scope const void* p1, scope const void* p2) @trusted pure const nothrow
     {
         if (p1 == p2) return 0;
         if (!p1) return -1;
@@ -340,21 +340,21 @@ class TypeInfo_Struct : TypeInfo
         return 0;
     }
 
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => initializer().length;
 
-    override const(void)[] initializer() nothrow pure const @safe @nogc
+    override const(void)[] initializer() const pure nothrow @safe
         => m_init;
 
-    override @property uint flags() nothrow pure const
+    override @property uint flags() const pure nothrow
         => m_flags;
 
-    override @property size_t talign() nothrow pure const
+    override @property size_t talign() const pure nothrow
         => m_align;
 
     string mangledName;
 
-    @property string name() nothrow const @trusted
+    @property string name() const nothrow @trusted
         => mangledName; // no demangling - avoids pulling in core.demangle
 
     void[] m_init;
@@ -395,7 +395,7 @@ class TypeInfo_Struct : TypeInfo
         TypeInfo m_arg2;
     }
 
-    override @property immutable(void)* rtInfo() nothrow pure const @safe @nogc
+    override @property immutable(void)* rtInfo() const pure nothrow @safe
         => m_RTInfo;
 
     immutable(void)* m_RTInfo;
@@ -407,13 +407,13 @@ class TypeInfo_Enum : TypeInfo
     override size_t getHash(scope const void* p) const { return base.getHash(p); }
     override bool equals(scope const void* p1, scope const void* p2) const { return base.equals(p1, p2); }
     override int compare(scope const void* p1, scope const void* p2) const { return base.compare(p1, p2); }
-    override @property size_t tsize() nothrow pure const { return base.tsize; }
-    override const(TypeInfo) next() nothrow pure const @nogc { return base.next; }
-    override @property uint flags() nothrow pure const { return base.flags; }
-    override @property size_t talign() nothrow pure const { return base.talign; }
-    override @property immutable(void)* rtInfo() nothrow pure const @safe @nogc { return base.rtInfo; }
+    override @property size_t tsize() const pure nothrow { return base.tsize; }
+    override const(TypeInfo) next() const pure nothrow { return base.next; }
+    override @property uint flags() const pure nothrow { return base.flags; }
+    override @property size_t talign() const pure nothrow { return base.talign; }
+    override @property immutable(void)* rtInfo() const pure nothrow @safe { return base.rtInfo; }
 
-    override const(void)[] initializer() nothrow pure const @nogc
+    override const(void)[] initializer() const pure nothrow
         => m_init.length ? m_init : base.initializer();
 
     version (WithArgTypes)
@@ -430,10 +430,10 @@ class TypeInfo_Enum : TypeInfo
 class TypeInfo_Pointer : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => (void*).sizeof;
 
-    override const(TypeInfo) next() nothrow pure const @nogc
+    override const(TypeInfo) next() const pure nothrow
         => m_next;
 
     TypeInfo m_next;
@@ -442,10 +442,10 @@ class TypeInfo_Pointer : TypeInfo
 class TypeInfo_Array : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => (void[]).sizeof;
 
-    override const(TypeInfo) next() nothrow pure const @nogc
+    override const(TypeInfo) next() const pure nothrow
         => value;
 
     TypeInfo value;
@@ -473,10 +473,10 @@ class TypeInfo_Av : TypeInfo_Array {}   // void[]
 class TypeInfo_StaticArray : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => len * value.tsize;
 
-    override const(TypeInfo) next() nothrow pure const @nogc
+    override const(TypeInfo) next() const pure nothrow
         => value;
 
     TypeInfo value;
@@ -486,7 +486,7 @@ class TypeInfo_StaticArray : TypeInfo
 class TypeInfo_Vector : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => base.tsize;
 
     TypeInfo base;
@@ -495,7 +495,7 @@ class TypeInfo_Vector : TypeInfo
 class TypeInfo_Function : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => 0;
 
     TypeInfo next;
@@ -505,7 +505,7 @@ class TypeInfo_Function : TypeInfo
 class TypeInfo_Delegate : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
     {
         alias dg = int delegate();
         return dg.sizeof;
@@ -518,7 +518,7 @@ class TypeInfo_Delegate : TypeInfo
 class TypeInfo_Interface : TypeInfo
 {
 @nogc:
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => (void*).sizeof;
 
     TypeInfo_Class info;
@@ -552,7 +552,7 @@ class TypeInfo_AssociativeArray : TypeInfo
         return l;
     }
 
-    override bool opEquals(Object o)
+    override bool opEquals(Object o) const nothrow
     {
         if (this is o)
             return true;
@@ -562,20 +562,20 @@ class TypeInfo_AssociativeArray : TypeInfo
         return c && this.key == c.key && this.value == c.value;
     }
 
-    override bool equals(scope const void* p1, scope const void* p2) @trusted const
+    override bool equals(scope const void* p1, scope const void* p2) const @trusted
         => xopEquals(p1, p2);
 
-    override hash_t getHash(scope const void* p) nothrow @trusted const
+    override hash_t getHash(scope const void* p) nothrow const @trusted
         => xtoHash(p);
 
-    override @property size_t tsize() nothrow pure const
+    override @property size_t tsize() const pure nothrow
         => (char[int]).sizeof;
 
     override const(void)[] initializer() const @trusted
         => (cast(void*)null)[0 .. (char[int]).sizeof];
 
-    override const(TypeInfo) next() nothrow pure const @nogc { return value; }
-    override @property uint flags() nothrow pure const { return 1; }
+    override const(TypeInfo) next() const pure nothrow { return value; }
+    override @property uint flags() const pure nothrow { return 1; }
 
     private static import urt.internal.aa;
     alias Entry(K, V) = urt.internal.aa.Entry!(K, V);
@@ -590,7 +590,7 @@ class TypeInfo_AssociativeArray : TypeInfo
     alias aaOpEqual(K, V) = urt.internal.aa._aaOpEqual!(K, V);
     alias aaGetHash(K, V) = urt.internal.aa._aaGetHash!(K, V);
 
-    override @property size_t talign() nothrow pure const
+    override @property size_t talign() const pure nothrow
         => (char[int]).alignof;
 }
 
@@ -600,11 +600,11 @@ class TypeInfo_Const : TypeInfo
     override size_t getHash(scope const void* p) const { return base.getHash(p); }
     override bool equals(scope const void* p1, scope const void* p2) const { return base.equals(p1, p2); }
     override int compare(scope const void* p1, scope const void* p2) const { return base.compare(p1, p2); }
-    override @property size_t tsize() nothrow pure const { return base.tsize; }
-    override const(TypeInfo) next() nothrow pure const @nogc { return base.next; }
-    override @property uint flags() nothrow pure const { return base.flags; }
-    override const(void)[] initializer() nothrow pure const @nogc { return base.initializer(); }
-    override @property size_t talign() nothrow pure const { return base.talign; }
+    override @property size_t tsize() const pure nothrow { return base.tsize; }
+    override const(TypeInfo) next() const pure nothrow { return base.next; }
+    override @property uint flags() const pure nothrow { return base.flags; }
+    override const(void)[] initializer() const pure nothrow { return base.initializer(); }
+    override @property size_t talign() const pure nothrow { return base.talign; }
 
     TypeInfo base;
 }
@@ -629,21 +629,21 @@ class TypeInfo_Inout : TypeInfo_Const
 // u=ushort, v=void, x=const, y=immutable.
 // ----------------------------------------------------------------------
 
-class TypeInfo_a : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return char.sizeof; } }
-class TypeInfo_b : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return bool.sizeof; } }
-class TypeInfo_d : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return double.sizeof; } }
-class TypeInfo_f : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return float.sizeof; } }
-class TypeInfo_g : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return byte.sizeof; } }
-class TypeInfo_h : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return ubyte.sizeof; } }
-class TypeInfo_i : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return int.sizeof; } }
-class TypeInfo_k : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return uint.sizeof; } }
-class TypeInfo_l : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return long.sizeof; } }
-class TypeInfo_m : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return ulong.sizeof; } }
-class TypeInfo_o : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return dchar.sizeof; } }
-class TypeInfo_s : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return short.sizeof; } }
-class TypeInfo_t : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return wchar.sizeof; } }
-class TypeInfo_u : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return ushort.sizeof; } }
-class TypeInfo_v : TypeInfo { override @property size_t tsize() nothrow pure const @safe @nogc { return 0; } }
+class TypeInfo_a : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return char.sizeof; } }
+class TypeInfo_b : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return bool.sizeof; } }
+class TypeInfo_d : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return double.sizeof; } }
+class TypeInfo_f : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return float.sizeof; } }
+class TypeInfo_g : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return byte.sizeof; } }
+class TypeInfo_h : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return ubyte.sizeof; } }
+class TypeInfo_i : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return int.sizeof; } }
+class TypeInfo_k : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return uint.sizeof; } }
+class TypeInfo_l : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return long.sizeof; } }
+class TypeInfo_m : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return ulong.sizeof; } }
+class TypeInfo_o : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return dchar.sizeof; } }
+class TypeInfo_s : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return short.sizeof; } }
+class TypeInfo_t : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return wchar.sizeof; } }
+class TypeInfo_u : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return ushort.sizeof; } }
+class TypeInfo_v : TypeInfo { override @property size_t tsize() const pure nothrow @safe @nogc { return 0; } }
 
 // Helper for TypeInfo_Struct delegate dispatch.
 // Uses a union to overlay raw delegate ABI (ptr + funcptr) with typed delegate fields.
@@ -657,7 +657,7 @@ private struct _member_func
             const void* funcptr;
         }
 
-        @safe pure nothrow
+        pure nothrow @safe
         {
             bool delegate(in void*) @nogc xopEquals;
             int delegate(in void*) @nogc xopCmp;
@@ -780,7 +780,7 @@ int __cmp(T)(scope const T[] lhs, scope const T[] rhs) @trusted
 }
 
 bool __equals(T1, T2)(scope const T1[] lhs, scope const T2[] rhs)
-nothrow @nogc pure @trusted
+pure nothrow @nogc @trusted
 if (__traits(isScalar, T1) && __traits(isScalar, T2))
 {
     if (lhs.length != rhs.length)
@@ -819,7 +819,7 @@ if (!__traits(isScalar, T1) || !__traits(isScalar, T2))
     return true;
 }
 
-TTo[] __ArrayCast(TFrom, TTo)(return scope TFrom[] from) @nogc pure @trusted
+TTo[] __ArrayCast(TFrom, TTo)(return scope TFrom[] from) pure @nogc @trusted
 {
     const fromSize = from.length * TFrom.sizeof;
     if (fromSize % TTo.sizeof != 0)
@@ -1195,14 +1195,32 @@ void __ArrayPostblit(T)(T[] a)
 
 int __switch(T, caseLabels...)(const scope T[] condition) pure nothrow @safe @nogc
 {
-    foreach (i, s; caseLabels)
+    // Larger switches save flash by sharing the comparison loop across label sets.
+    static if (is(T : const(char)) && caseLabels.length >= 5)
     {
-        static if (is(typeof(s) : typeof(condition)))
-        {
-            if (condition == s)
-                return cast(int) i;
-        }
+        static immutable const(char)[][caseLabels.length] labels = [caseLabels];
+        return switch_label_index(condition, labels[]);
     }
+    else
+    {
+        foreach (i, s; caseLabels)
+        {
+            static if (is(typeof(s) : typeof(condition)))
+            {
+                if (condition == s)
+                    return cast(int) i;
+            }
+        }
+        return -1;
+    }
+}
+
+pragma(inline, false)
+private int switch_label_index(const scope char[] condition, scope const(char[])[] labels) pure nothrow @safe @nogc
+{
+    foreach (i, label; labels)
+        if (condition == label)
+            return cast(int)i;
     return -1;
 }
 

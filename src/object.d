@@ -1199,7 +1199,7 @@ int __switch(T, caseLabels...)(const scope T[] condition) pure nothrow @safe @no
     static if (is(T : const(char)) && caseLabels.length >= 5)
     {
         static immutable const(char)[][caseLabels.length] labels = [caseLabels];
-        return switch_label_index(condition, labels[]);
+        return switch_label_index!(switch_labels_sorted(labels[]))(condition, labels[]);
     }
     else
     {
@@ -1215,13 +1215,70 @@ int __switch(T, caseLabels...)(const scope T[] condition) pure nothrow @safe @no
     }
 }
 
-pragma(inline, false)
-private int switch_label_index(const scope char[] condition, scope const(char[])[] labels) pure nothrow @safe @nogc
+private int switch_label_index(bool sorted)(const scope char[] condition, scope const(char[])[] labels) pure nothrow @safe @nogc
 {
+    static if (sorted)
+        if (!__ctfe)
+            return binary_switch_label_index(condition, labels[]);
+
     foreach (i, label; labels)
         if (condition == label)
             return cast(int)i;
     return -1;
+}
+
+
+// D orders compiler-generated switch labels by length, then by code unit.
+private bool switch_labels_sorted(scope const(char[])[] labels) pure nothrow @safe @nogc
+{
+    foreach (i, label; labels)
+    {
+        if (i == 0)
+            continue;
+        const previous = labels[i - 1];
+        if (previous.length > label.length || (previous.length == label.length && previous > label))
+            return false;
+    }
+    return true;
+}
+
+private int binary_switch_label_index(const scope char[] condition, scope const(char[])[] labels) pure nothrow @trusted @nogc
+{
+    import urt.mem : memcmp;
+
+    size_t lo, hi = labels.length;
+    while (lo < hi)
+    {
+        const mid = lo + (hi - lo) / 2;
+        const label = labels[mid];
+        int order;
+        if (condition.length != label.length)
+            order = condition.length < label.length ? -1 : 1;
+        else if (condition.length)
+            order = memcmp(condition.ptr, label.ptr, condition.length);
+
+        if (order == 0)
+            return cast(int)mid;
+        if (order < 0)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    return -1;
+}
+
+
+unittest
+{
+    alias lookup = __switch!(const(char), "", "a", "b", "ab", "zz", "\u00e9", "long");
+    foreach (i, label; ["", "a", "b", "ab", "zz", "\u00e9", "long"])
+        assert(lookup(label) == i);
+
+    assert(lookup("ac") == -1);
+
+    alias unsorted = __switch!(const(char), "b", "a", "ab", "", "zz");
+    assert(unsorted("a") == 1);
+    static assert(lookup("zz") == 4);
 }
 
 void __switch_error()(string file = __FILE__, size_t line = __LINE__)

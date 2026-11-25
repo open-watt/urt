@@ -809,6 +809,25 @@ nothrow @nogc:
         }
     }
 
+    pragma(inline, false)
+    bool try_class_user(uint type_id, out const(void)* object) const pure
+    {
+        if (!isUserType || (flags & Flags.Embedded))
+            return false;
+
+        if (count != type_id)
+        {
+            auto td = &get_type_details(alloc);
+            while (td.super_type_id && td.super_type_id != type_id)
+                td = &find_type_details(td.super_type_id);
+            if (!td.super_type_id)
+                return false;
+        }
+
+        object = ptr;
+        return true;
+    }
+
     bool canFitInt(I)() const pure
         if (is_some_int!I)
     {

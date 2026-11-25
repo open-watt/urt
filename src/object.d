@@ -1198,6 +1198,15 @@ int __switch(T, caseLabels...)(const scope T[] condition) pure nothrow @safe @no
     // Larger switches save flash by sharing the comparison loop across label sets.
     static if (is(T : const(char)) && caseLabels.length >= 5)
     {
+        import urt.string.string : make_table, packed_labels_fit, StringTableLayout;
+
+        static if (packed_labels_fit([caseLabels]))
+        {
+            static immutable slab = make_table!([caseLabels], false, StringTableLayout.indexed);
+            if (!__ctfe)
+                return (() @trusted => cast(int)slab.find_sorted(condition))();
+        }
+
         static immutable const(char)[][caseLabels.length] labels = [caseLabels];
         return switch_label_index(condition, labels[]);
     }
@@ -1215,13 +1224,35 @@ int __switch(T, caseLabels...)(const scope T[] condition) pure nothrow @safe @no
     }
 }
 
-pragma(inline, false)
 private int switch_label_index(const scope char[] condition, scope const(char[])[] labels) pure nothrow @safe @nogc
 {
     foreach (i, label; labels)
         if (condition == label)
             return cast(int)i;
     return -1;
+}
+
+unittest
+{
+    alias lookup = __switch!(const(char), "", "a", "b", "ab", "zz", "\u00e9", "long");
+    foreach (i, label; ["", "a", "b", "ab", "zz", "\u00e9", "long"])
+        assert(lookup(label) == i);
+
+    assert(lookup("ac") == -1);
+
+    alias unsorted = __switch!(const(char), "b", "a", "ab", "", "zz");
+    assert(unsorted("a") == 1);
+    static assert(lookup("zz") == 4);
+
+    import urt.string.string : packed_labels_fit;
+
+    enum block = "0123456789abcdef";
+    enum label_part = block ~ block ~ block ~ block;
+    enum long_label = label_part ~ label_part ~ label_part ~ label_part;
+    static assert(!packed_labels_fit(["", "a", "ab", "abc", long_label]));
+    alias oversized = __switch!(const(char), "", "a", "ab", "abc", long_label);
+    assert(oversized(long_label) == 4);
+    assert(oversized(long_label[0 .. $-1]) == -1);
 }
 
 void __switch_error()(string file = __FILE__, size_t line = __LINE__)

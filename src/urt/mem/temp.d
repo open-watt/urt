@@ -177,7 +177,6 @@ const(char)[] tconcat(Args...)(ref Args args)
     }
 }
 
-pragma(inline, false)
 const(char)[] tconcat_impl(const(void)* raw_args, size_t arg_mask)
 {
     import urt.string.format : ConcatArg, concat_impl;

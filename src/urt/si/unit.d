@@ -1,5 +1,7 @@
 module urt.si.unit;
 
+import urt.string.string : compare_string_keys;
+
 import urt.array;
 import urt.string;
 
@@ -1445,18 +1447,18 @@ unittest
     assert((Hour^^-1).format_unit(fmt_buf[], pre) == 3 && fmt_buf[0..3] == "/hr" && pre == 1);
     assert((ScaledUnit(Second)^^-1).format_unit(fmt_buf[], pre) == 2 && fmt_buf[0..2] == "/s");
 
-    foreach (i, entry; g_unit_spellings)
+    foreach (i; 0 .. g_unit_spellings.length)
     {
-        const(char)[] spelling = scaled_unit_spelling_text(entry);
+        const(char)[] spelling = g_spelling_strings.key_at(i);
         assert(find_scaled_unit_spelling(spelling) == i);
         if (i)
-            assert(uni_compare(scaled_unit_spelling_text(g_unit_spellings[i - 1]), spelling) < 0);
+            assert(compare_string_keys(g_spelling_strings.key_at(i - 1), spelling) < 0);
     }
     foreach (i, unit; g_units)
     {
         size_t spelling_index = g_canonical_string[i];
         assert(scaled_unit_from_spelling(spelling_index) == unit);
-        assert(scaled_unit_spelling(unit) == scaled_unit_spelling_text(g_unit_spellings[spelling_index]));
+        assert(scaled_unit_spelling(unit) == g_spelling_strings.key_at(spelling_index));
     }
 }
 
@@ -1465,7 +1467,6 @@ private:
 
 import urt.algorithm : binary_search, qsort;
 import urt.math : PI, fabs;
-import urt.string.uni : uni_compare;
 
 immutable byte[8] decodeExp = [ 1, 2, 3, 4, -1, -2, -3, -4 ];
 immutable ubyte[9] encodeExp = [ 7, 6, 5, 4, 0, 0, 1, 2, 3 ];
@@ -1546,14 +1547,11 @@ immutable double[8] biasedOffsets = [
 
 struct ScaledUnitSpelling
 {
-    ushort spelling_offset;
     ubyte unit_offset;
     bool is_prefixable;
 }
 
-static assert(ScaledUnitSpelling.sizeof == 4);
-
-align(2) immutable char[packed_scaled_unit_spelling_strings.cache.length] g_spelling_strings = packed_scaled_unit_spelling_strings.cache;
+immutable g_spelling_strings = make_table!(scaled_unit_spelling_texts, false, StringTableLayout.indexed);
 immutable ScaledUnit[sorted_scaled_units.length] g_units = sorted_scaled_units;
 immutable ScaledUnitSpelling[sorted_scaled_unit_spelling_specs.length] g_unit_spellings = scaled_unit_lookup_tables.spellings;
 immutable ubyte[sorted_scaled_units.length] g_canonical_string = scaled_unit_lookup_tables.canonical;
@@ -1604,7 +1602,7 @@ enum sorted_scaled_unit_spelling_specs = () {
             }
         }
     }}
-    specs.qsort!((ref a, ref b) => uni_compare(a.spelling, b.spelling));
+    specs.qsort!((ref a, ref b) => compare_string_keys(a.spelling, b.spelling));
     foreach (i; 1 .. specs.length)
         assert(specs[i - 1].spelling != specs[i].spelling, "Duplicate scaled unit spelling");
     return specs;
@@ -1630,8 +1628,6 @@ enum sorted_scaled_units = () {
 static assert(sorted_scaled_unit_spelling_specs.length <= ubyte.max);
 static assert(sorted_scaled_units.length <= ubyte.max);
 
-enum packed_scaled_unit_spelling_strings = make_table!(scaled_unit_spelling_texts, false);
-
 struct ScaledUnitLookupTables
 {
     ScaledUnitSpelling[sorted_scaled_unit_spelling_specs.length] spellings;
@@ -1643,9 +1639,6 @@ enum scaled_unit_lookup_tables = () {
     tables.canonical[] = ubyte.max;
     foreach (i, spec; sorted_scaled_unit_spelling_specs)
     {
-        size_t spelling_offset = cast(size_t)packed_scaled_unit_spelling_strings.offsets[i] << packed_scaled_unit_spelling_strings.offset_shift;
-        assert(spelling_offset <= ushort.max);
-
         size_t unit_offset = size_t.max;
         foreach (j, unit; sorted_scaled_units)
             if (unit == spec.unit)
@@ -1655,7 +1648,7 @@ enum scaled_unit_lookup_tables = () {
             }
         assert(unit_offset != size_t.max);
 
-        tables.spellings[i] = ScaledUnitSpelling(cast(ushort)spelling_offset, cast(ubyte)unit_offset, (spec.flags & ScaledUnitSpellingFlags.si_prefixable) != 0);
+        tables.spellings[i] = ScaledUnitSpelling(cast(ubyte)unit_offset, (spec.flags & ScaledUnitSpellingFlags.si_prefixable) != 0);
         if (spec.flags & ScaledUnitSpellingFlags.canonical)
         {
             assert(tables.canonical[unit_offset] == ubyte.max);
@@ -1672,15 +1665,10 @@ bool valid_si_exp(long e) pure
 
 size_t find_scaled_unit_spelling(const(char)[] spelling, bool require_si_prefix = false) pure nothrow @nogc
 {
-    size_t index = binary_search!scaled_unit_spelling_compare(g_unit_spellings[], spelling);
-    if (index == g_unit_spellings.length || (require_si_prefix && !g_unit_spellings[index].is_prefixable))
+    size_t index = g_spelling_strings.find_sorted(spelling);
+    if (index >= g_unit_spellings.length || (require_si_prefix && !g_unit_spellings[index].is_prefixable))
         return g_unit_spellings.length;
     return index;
-}
-
-int scaled_unit_spelling_compare(const ScaledUnitSpelling entry, const(char)[] spelling) pure nothrow @nogc
-{
-    return uni_compare(scaled_unit_spelling_text(entry), spelling);
 }
 
 int scaled_unit_compare(const ScaledUnit a, const ScaledUnit b) pure nothrow @nogc
@@ -1693,27 +1681,12 @@ ScaledUnit scaled_unit_from_spelling(size_t index) pure nothrow @nogc
     return g_units[g_unit_spellings[index].unit_offset];
 }
 
-const(char)[] scaled_unit_spelling_text(const ScaledUnitSpelling entry) pure nothrow @nogc
-{
-    // CTFE cannot follow a pointer into a global, so read the length prefix by index
-    if (__ctfe)
-    {
-        size_t o = entry.spelling_offset;
-        version (LittleEndian)
-            size_t len = (g_spelling_strings[o - 2] | (g_spelling_strings[o - 1] << 8)) & 0x7FFF;
-        else
-            size_t len = (g_spelling_strings[o - 1] | (g_spelling_strings[o - 2] << 8)) & 0x7FFF;
-        return g_spelling_strings[o .. o + len];
-    }
-    return as_string(g_spelling_strings.ptr + entry.spelling_offset)[];
-}
-
 const(char)[] scaled_unit_spelling(ScaledUnit u) pure nothrow @nogc
 {
     size_t unit_index = binary_search!scaled_unit_compare(g_units[], u);
     if (unit_index == g_units.length)
         return null;
-    return scaled_unit_spelling_text(g_unit_spellings[g_canonical_string[unit_index]]);
+    return g_spelling_strings.key_at(g_canonical_string[unit_index]);
 }
 
 ptrdiff_t format_si_scale(int e, char[] buffer) pure nothrow @nogc

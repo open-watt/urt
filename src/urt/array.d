@@ -515,13 +515,19 @@ nothrow @nogc:
 
         ref Array!(T, EmbedCount) append(Things...)(auto ref Things things)
         {
-            import urt.string.format : ConcatArg, concat_impl, concat_mask, make_concat_args;
+            import urt.string.format : ConcatArg, concat_mask, make_concat_args;
             ConcatArg[Things.length] args = void;
             make_concat_args(things, args.ptr);
-            enum arg_mask = concat_mask!Things;
-            size_t ext_len = concat_impl(null, 0, args.ptr, arg_mask).length;
+            return append_packed(args.ptr, concat_mask!Things);
+        }
+
+        private ref Array!(T, EmbedCount) append_packed(const(void)* args, size_t arg_mask)
+        {
+            import urt.string.format : ConcatArg, concat_impl;
+            const(ConcatArg)* packed = cast(const(ConcatArg)*)args;
+            size_t ext_len = concat_impl(null, 0, packed, arg_mask).length;
             grow(_length + ext_len);
-            concat_impl(ptr + _length, ext_len, args.ptr, arg_mask);
+            concat_impl(ptr + _length, ext_len, packed, arg_mask);
             _length += ext_len;
             return this;
         }

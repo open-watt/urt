@@ -249,6 +249,14 @@ private struct Blob(T)
     align(T.alignof) ubyte[T.sizeof] bytes;
 }
 
+private void move_and_clear_words(size_t count)(size_t* target, size_t* source) pure nothrow @nogc
+{
+    import urt.internal.lifetime : copy_words, clear_words;
+    assert(source !is target, "source and target must not be identical");
+    copy_words!count(target, source);
+    clear_words!count(source);
+}
+
 private void moveEmplaceImpl(T)(scope ref T target, return scope ref T source) @nogc
 {
     // TODO: this assert pulls in half of phobos. we need to work out an alternative assert strategy.
@@ -264,27 +272,37 @@ private void moveEmplaceImpl(T)(scope ref T target, return scope ref T source) @
     static if (is(T == struct))
     {
 
-        //  Unsafe when compiling without -preview=dip1000
-        assert((() @trusted => &source !is &target)(), "source and target must not be identical");
+        import urt.internal.lifetime : has_small_word_copy;
 
-        static if (hasElaborateAssign!T || !isAssignable!T)
-            () @trusted { *cast(Blob!T*)&target = *cast(Blob!T*)&source; }();
+        // Byte-array copies can lower to byte loads even for aligned owners such as Array.
+        static if (!hasElaborateMove!T && (hasElaborateDestructor!T || hasElaborateCopyConstructor!T)
+            && (hasElaborateAssign!T || !isAssignable!T) && __traits(isZeroInit, T) && !hasContextPointers!T
+            && has_small_word_copy!T)
+            () @trusted { move_and_clear_words!(T.sizeof / size_t.sizeof)(cast(size_t*)&target, cast(size_t*)&source); }();
         else
-            target = source;
-
-        static if (hasElaborateMove!T)
-            __move_post_blt(target, source);
-
-        // If the source defines a destructor or a postblit hook, we must obliterate the
-        // object in order to avoid double freeing and undue aliasing
-        static if (hasElaborateDestructor!T || hasElaborateCopyConstructor!T)
         {
-            // If there are members that are nested structs, we must take care
-            // not to erase any context pointers, so we might have to recurse
-            static if (__traits(isZeroInit, T))
-                wipe(source);
+            //  Unsafe when compiling without -preview=dip1000
+            assert((() @trusted => &source !is &target)(), "source and target must not be identical");
+
+            static if (hasElaborateAssign!T || !isAssignable!T)
+                () @trusted { *cast(Blob!T*)&target = *cast(Blob!T*)&source; }();
             else
-                wipe(source, ref () @trusted { return *cast(immutable(T)*) __traits(initSymbol, T).ptr; } ());
+                target = source;
+
+            static if (hasElaborateMove!T)
+                __move_post_blt(target, source);
+
+            // If the source defines a destructor or a postblit hook, we must obliterate the
+            // object in order to avoid double freeing and undue aliasing
+            static if (hasElaborateDestructor!T || hasElaborateCopyConstructor!T)
+            {
+                // If there are members that are nested structs, we must take care
+                // not to erase any context pointers, so we might have to recurse
+                static if (__traits(isZeroInit, T))
+                    wipe(source);
+                else
+                    wipe(source, ref () @trusted { return *cast(immutable(T)*) __traits(initSymbol, T).ptr; } ());
+            }
         }
     }
     else static if (__traits(isStaticArray, T))
@@ -563,3 +581,47 @@ template TypeInfoSize(T)
     enum TypeInfoSize = hasElaborateDestructor!T ? size_t.sizeof : 0;
 }
 +/
+
+
+unittest
+{
+    import urt.internal.lifetime : emplaceInitializer;
+
+    static struct Owner(size_t count)
+    {
+        size_t[count] words;
+
+        @disable this(this);
+        @disable void opAssign(ref const Owner);
+        ~this() nothrow @nogc {}
+    }
+
+    static struct Initialized(size_t count)
+    {
+        size_t first = 17;
+        size_t[count - 1] rest;
+    }
+
+    static foreach (count; 2 .. 6)
+    {{
+        Owner!count source, target;
+        foreach (i, ref word; source.words)
+            word = i + 1;
+        moveEmplace(source, target);
+        foreach (i, word; target.words)
+            assert(word == i + 1 && source.words[i] == 0);
+
+        target.words[] = 23;
+        emplaceInitializer(target);
+        foreach (word; target.words)
+            assert(word == 0);
+
+        Initialized!count initialized;
+        initialized.first = 29;
+        initialized.rest[] = 31;
+        emplaceInitializer(initialized);
+        assert(initialized.first == 17);
+        foreach (word; initialized.rest)
+            assert(word == 0);
+    }}
+}

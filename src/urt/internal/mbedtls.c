@@ -6,6 +6,7 @@
 // mbedtls 4.x hides the classic primitives unless this precedes every header; a PSA backend would not need it (TODO.md).
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 
+#include <limits.h>
 #include <stddef.h>
 #include <string.h>
 #include <mbedtls/version.h>
@@ -108,8 +109,7 @@ static int _urt_rng_seeded = 0;
 /* When MBEDTLS_NO_PLATFORM_ENTROPY is set (embedded configs that strip the
  * /dev/urandom/Windows-RNG auto-poll), mbedtls_entropy_init adds no sources
  * and seed will fail with ENTROPY_SOURCE_FAILED. The platform must supply
- * its own poll function -- on Bouffalo that's the SEC_ENG TRNG driver in
- * urt.driver.bl_common.trng (declared extern(C) urt_platform_entropy_poll). */
+ * its own poll function (declared extern(C) urt_platform_entropy_poll). */
 #if defined(MBEDTLS_NO_PLATFORM_ENTROPY)
 extern int urt_platform_entropy_poll(void *data, unsigned char *output, size_t len, size_t *olen);
 #endif
@@ -135,6 +135,9 @@ int urt_rng_init(void)
         mbedtls_entropy_free(&_urt_entropy);
         return ret;
     }
+#if defined(URT_BL808_D0)
+    mbedtls_ctr_drbg_set_reseed_interval(&_urt_ctr_drbg, INT_MAX - 1);
+#endif
     _urt_rng_seeded = 1;
     return 0;
 }

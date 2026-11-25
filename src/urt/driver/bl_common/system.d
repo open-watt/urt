@@ -1,6 +1,6 @@
 // Bouffalo sys_init -- single canonical bring-up called from start.S after
 // section init. Owns the order in which subsystems come up: exception
-// unwinder, IRQ controller, TRNG, chip-specific extras, then global IRQ
+// unwinder, IRQ controller, chip-specific extras, then global IRQ
 // enable, then the platform tick.
 //
 // Driver bring-up bodies live in their owning modules (exception_init,
@@ -11,7 +11,8 @@ import urt.driver.uart;
 import urt.driver.irq : irq_init, irq_global_enable;
 import urt.driver.timer;
 import urt.driver.bl_common.exception : exception_init;
-import urt.driver.bl_common.trng;
+version (BL618)
+    import urt.driver.bl_common.trng : trng_init;
 
 @nogc nothrow:
 
@@ -34,11 +35,9 @@ extern(C) void sys_init()
 
     irq_init();
 
-    // SEC_ENG hardware RNG. trng_init is idempotent and lazily retried on
-    // first read, so a failure here only loses the eager bring-up -- mbedtls
-    // entropy poll still works as long as the block is reachable.
-    if (!trng_init())
-        uart0_hw_puts(chip_name ~ ": TRNG init failed\n");
+    version (BL618)
+        if (!trng_init())
+            uart0_hw_puts(chip_name ~ ": TRNG init failed\n");
 
     chip_post_init();
 

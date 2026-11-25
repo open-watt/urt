@@ -33,6 +33,31 @@ BaseType_t urt_task_create(TaskFunction_t code, const char *name, uint32_t stack
     return xTaskCreate(code, name, stack_depth, params, priority, task);
 }
 
+#include "esp_random.h"
+#if SOC_WIFI_SUPPORTED || SOC_BT_SUPPORTED || SOC_IEEE802154_SUPPORTED
+#include "esp_phy_init.h"
+#include "esp_private/phy.h"
+#include <sys/lock.h>
+#endif
+
+bool urt_crypto_random(void *dst, size_t len)
+{
+#if !CONFIG_ESP_BRINGUP_BYPASS_RANDOM_SETTING && (CONFIG_ESP_WIFI_ENABLED || CONFIG_BT_ENABLED || CONFIG_IEEE802154_ENABLED)
+    // A pre-radio call must not initialize a private copy of the lazy PHY lock.
+    if (phy_get_modem_flag() == 0)
+        return false;
+    _lock_t lock = phy_get_lock();
+    _lock_acquire(&lock);
+    bool ready = phy_get_modem_flag() != 0;
+    if (ready)
+        esp_fill_random(dst, len);
+    _lock_release(&lock);
+    return ready;
+#else
+    return false;
+#endif
+}
+
 // -- errno accessor (picolibc uses _Thread_local errno, incompatible with emulated-TLS) --
 
 #include <errno.h>

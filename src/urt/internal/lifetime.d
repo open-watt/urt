@@ -84,6 +84,27 @@ void emplaceRef(UT, Args...)(ref UT chunk, auto ref Args args)
     emplaceRef!(UT, UT)(chunk, forward!args);
 }
 
+package(urt) enum bool has_small_word_copy(T) = is(T == struct) &&
+    T.alignof >= size_t.alignof && T.sizeof % size_t.sizeof == 0 &&
+    T.sizeof >= 2 * size_t.sizeof && T.sizeof <= 5 * size_t.sizeof;
+
+// Read the entire value before writing it so fixed-size copies also tolerate overlap.
+package(urt) void copy_words(size_t count)(size_t* target, const(size_t)* source) pure nothrow @nogc
+{
+    size_t[count] words = void;
+    static foreach (i; 0 .. count)
+        words[i] = source[i];
+    static foreach (i; 0 .. count)
+        target[i] = words[i];
+}
+
+package(urt) void clear_words(size_t count)(size_t* target) pure nothrow @nogc
+{
+    static foreach (i; 0 .. count)
+        target[i] = 0;
+}
+
+
 /+
 Emplaces T.init.
 In contrast to `emplaceRef(chunk)`, there are no checks for disabled default
@@ -93,6 +114,19 @@ void emplaceInitializer(T)(scope ref T chunk) nothrow pure @trusted
     if (!is(T == const) && !is(T == immutable) && !is(T == inout))
 {
     import urt.internal.traits : hasElaborateAssign;
+
+    static if (has_small_word_copy!T)
+    {
+        if (!__ctfe)
+        {
+            enum count = T.sizeof / size_t.sizeof;
+            static if (__traits(isZeroInit, T))
+                clear_words!count(cast(size_t*)&chunk);
+            else
+                copy_words!count(cast(size_t*)&chunk, cast(const(size_t)*)__traits(initSymbol, T).ptr);
+            return;
+        }
+    }
 
     static if (__traits(isZeroInit, T))
     {

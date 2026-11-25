@@ -1,7 +1,7 @@
 module urt.log;
 
-import urt.mem.temp : tconcat_impl, tformat;
-import urt.string.format : ConcatArg, concat_mask, make_concat_args;
+import urt.mem.temp : tconcat_impl, tformat, tformat_packed;
+import urt.string.format : ConcatArg, concat_mask, FormatArg, make_concat_args, pack_format_args;
 import urt.time;
 
 nothrow @nogc:
@@ -148,8 +148,7 @@ void write_log(T...)(Severity severity, const(char)[] tag, const(char)[] object_
 {
     if (severity > g_max_severity)
         return;
-    import urt.string, urt.array;
-    static if (T.length == 1 && (is(T[0] : const(char)[]) || is(T[0] : const String) || is(T[0] : const MutableString!N, size_t N) || is(T[0] : const Array!char)))
+    static if (T.length == 1 && is_log_string!(T[0]))
     {
         const(char)[] message = args[0][];
         write_log_message(severity, tag.ptr, tag.length, object_name.ptr, object_name.length, message.ptr, message.length);
@@ -169,6 +168,30 @@ void write_logf(T...)(Severity severity, const(char)[] tag, const(char)[] object
         return;
     const(char)[] message = tformat(fmt, args);
     write_log_message(severity, tag.ptr, tag.length, object_name.ptr, object_name.length, message.ptr, message.length);
+}
+
+// Resolve the tag and retain the name through formatting and sink dispatch.
+// source.type() supplies the tag and source.name() returns its owning String.
+void write_log_from(Source, T...)(Severity severity, Source source, ref T args)
+{
+    if (severity > g_max_severity)
+        return;
+    static if (T.length == 1 && is_log_string!(T[0]))
+        write_source_message(severity, source, args[0][]);
+    else
+    {
+        ConcatArg[T.length] packed = void;
+        make_concat_args(args, packed.ptr);
+        write_source_concat(severity, source, packed.ptr, concat_mask!T);
+    }
+}
+
+void write_logf_from(Source, T...)(Severity severity, Source source, const(char)[] fmt, ref T args)
+{
+    if (severity > g_max_severity)
+        return;
+    auto packed = pack_format_args(args);
+    write_source_format(severity, source, fmt, packed[]);
 }
 
 void write_log(scope ref const LogMessage msg)
@@ -247,6 +270,37 @@ LogSinkHandle register_log_sink(LegacyLogSink sink)
 
 private:
 
+import urt.array : Array;
+import urt.string : MutableString, String;
+
+enum is_log_string(T) = is(T : const(char)[]) || is(T : const String) ||
+    is(T : const MutableString!N, size_t N) || is(T : const Array!char);
+
+pragma(inline, false)
+void write_source_message(Source)(Severity severity, Source source, const(char)[] message)
+{
+    const(char)[] tag = source.type();
+    auto name = source.name();
+    write_log_message(severity, tag.ptr, tag.length, name[].ptr, name[].length, message.ptr, message.length);
+}
+
+pragma(inline, false)
+void write_source_concat(Source)(Severity severity, Source source, const(void)* args, size_t mask)
+{
+    const(char)[] tag = source.type();
+    auto name = source.name();
+    write_concat_log(severity, tag.ptr, tag.length, name[].ptr, name[].length, args, mask);
+}
+
+pragma(inline, false)
+void write_source_format(Source)(Severity severity, Source source, const(char)[] fmt, const(FormatArg)[] args)
+{
+    const(char)[] tag = source.type();
+    auto name = source.name();
+    const(char)[] message = tformat_packed(fmt, args);
+    write_log_message(severity, tag.ptr, tag.length, name[].ptr, name[].length, message.ptr, message.length);
+}
+
 void write_concat_log(Severity severity, const(char)* tag, size_t tag_length, const(char)* object_name,
     size_t object_name_length, const(void)* args, size_t arg_mask)
 {
@@ -295,6 +349,22 @@ version (unittest)
     {
         const(char)[] tag;
         const(char)[] message;
+        bool named_object;
+    }
+
+    struct TestLogSource
+    {
+    nothrow @nogc:
+        uint lookups;
+
+        const(char)[] type() => "source";
+
+        String name()
+        {
+            import urt.string : make_string;
+            ++lookups;
+            return make_string("object");
+        }
     }
 
     void test_log_sink(void* context, scope ref const LogMessage message)
@@ -302,6 +372,7 @@ version (unittest)
         TestLogCapture* capture = cast(TestLogCapture*)context;
         capture.tag = message.tag;
         capture.message = message.message;
+        capture.named_object = message.object_name == "object";
     }
 }
 
@@ -313,6 +384,22 @@ unittest
     log_info("test", "value=", 10);
     assert(capture.tag == "test");
     assert(capture.message == "value=10");
+
+    TestLogSource source;
+    write_log_from(Severity.debug_, &source, "filtered");
+    write_logf_from(Severity.debug_, &source, "{0}", 12);
+    assert(source.lookups == 0);
+
+    write_log_from(Severity.info, &source, "direct");
+    assert(capture.tag == "source");
+    assert(capture.named_object);
+    assert(capture.message == "direct");
+    write_log_from(Severity.info, &source, "value=", 11);
+    assert(capture.message == "value=11");
+    write_logf_from(Severity.info, &source, "value={0}", 12);
+    assert(capture.message == "value=12");
+    assert(source.lookups == 3);
+
     unregister_log_sink(sink);
     g_max_severity = old_max_severity;
 }

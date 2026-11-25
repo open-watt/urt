@@ -173,9 +173,6 @@ char* write_string(char* buffer, const(char)[] str) pure nothrow @nogc
     return buffer;
 }
 
-package(urt) size_t string_slab_entry_size(size_t length) pure nothrow @nogc
-    => 2 + length + (length & 1);
-
 // The slab uses byte lengths and lexicographic order within each length.
 int compare_string_keys(scope const(char)[] a, scope const(char)[] b) pure nothrow @trusted @nogc
 {
@@ -185,25 +182,6 @@ int compare_string_keys(scope const(char)[] a, scope const(char)[] b) pure nothr
         return a == b ? 0 : (a < b ? -1 : 1);
     return a.length ? memcmp(a.ptr, b.ptr, a.length) : 0;
 }
-
-// Slabs are sorted by compare_string_keys.
-package(urt) size_t find_slab_key(scope const(char)[] key, scope const(ushort)[] offsets, scope const(char)* buffer) pure nothrow @nogc
-{
-    size_t lo, hi = offsets.length;
-    while (lo < hi)
-    {
-        const mid = lo + (hi - lo) / 2;
-        const order = compare_string_keys(key, as_dstring(buffer + offsets[mid]));
-        if (order == 0)
-            return mid;
-        if (order < 0)
-            hi = mid;
-        else
-            lo = mid + 1;
-    }
-    return size_t.max;
-}
-
 
 String as_string(const(char)* s) pure nothrow @nogc
     => String(s, false);
@@ -724,58 +702,6 @@ private struct PackedStrings(size_t count)
     ushort[count] offsets;
     char[] cache;
     ushort max_offset;
-}
-
-package(urt) PackedStrings!count pack_strings(size_t count, bool compact = false)(const(char[])[] strings, bool dedupe, size_t keep_empty = 0, size_t max_length = MaxStringLen) nothrow
-{
-    assert(__ctfe, "only for compile-time use");
-
-    PackedStrings!count r;
-    foreach (i, s; strings)
-    {
-        static if (compact)
-            assert(s.length <= ubyte.max, "Lookup key too long");
-        else
-        {
-            assert(s.length <= max_length, "String too long");
-            if (s.length == 0 && i >= keep_empty)
-                continue;
-        }
-
-        size_t at = size_t.max;
-        if (dedupe)
-        {
-            foreach (j; 0 .. i)
-            {
-                if (strings[j][] == s[])
-                {
-                    at = r.offsets[j];
-                    break;
-                }
-            }
-        }
-        if (at == size_t.max)
-        {
-            static if (!compact)
-            {
-                version (LittleEndian)
-                    r.cache ~= [cast(char)s.length, cast(char)(s.length >> 8)];
-                else
-                    r.cache ~= [cast(char)(s.length >> 8), cast(char)s.length];
-            }
-            at = r.cache.length;
-            assert(at <= ushort.max, "String cache too large");
-            r.cache ~= s[];
-            static if (!compact)
-                if (s.length & 1)
-                    r.cache ~= '\0';
-        }
-        r.offsets[i] = cast(ushort)at;
-        if (at > r.max_offset)
-            r.max_offset = cast(ushort)at;
-    }
-    assert(r.cache.length <= ushort.max, "String cache too large");
-    return r;
 }
 
 unittest
@@ -1468,6 +1394,82 @@ unittest
     m_copy_src[1] = 'Y';
     assert(m_copy_src == "XYpy Me");
     assert(m_assign_dst == "Xopy Me"); // Assignment should also copy
+}
+
+
+package(urt):
+
+size_t string_slab_entry_size(size_t length) pure nothrow @nogc
+    => 2 + length + (length & 1);
+
+// Slabs are sorted by compare_string_keys.
+size_t find_slab_key(scope const(char)[] key, scope const(ushort)[] offsets, scope const(char)* buffer) pure nothrow @nogc
+{
+    size_t lo, hi = offsets.length;
+    while (lo < hi)
+    {
+        const mid = lo + (hi - lo) / 2;
+        const order = compare_string_keys(key, as_dstring(buffer + offsets[mid]));
+        if (order == 0)
+            return mid;
+        if (order < 0)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    return size_t.max;
+}
+
+PackedStrings!count pack_strings(size_t count, bool compact = false)(const(char[])[] strings, bool dedupe, size_t keep_empty = 0, size_t max_length = MaxStringLen) nothrow
+{
+    assert(__ctfe, "only for compile-time use");
+
+    PackedStrings!count r;
+    foreach (i, s; strings)
+    {
+        static if (compact)
+            assert(s.length <= ubyte.max, "Lookup key too long");
+        else
+        {
+            assert(s.length <= max_length, "String too long");
+            if (s.length == 0 && i >= keep_empty)
+                continue;
+        }
+
+        size_t at = size_t.max;
+        if (dedupe)
+        {
+            foreach (j; 0 .. i)
+            {
+                if (strings[j][] == s[])
+                {
+                    at = r.offsets[j];
+                    break;
+                }
+            }
+        }
+        if (at == size_t.max)
+        {
+            static if (!compact)
+            {
+                version (LittleEndian)
+                    r.cache ~= [cast(char)s.length, cast(char)(s.length >> 8)];
+                else
+                    r.cache ~= [cast(char)(s.length >> 8), cast(char)s.length];
+            }
+            at = r.cache.length;
+            assert(at <= ushort.max, "String cache too large");
+            r.cache ~= s[];
+            static if (!compact)
+                if (s.length & 1)
+                    r.cache ~= '\0';
+        }
+        r.offsets[i] = cast(ushort)at;
+        if (at > r.max_offset)
+            r.max_offset = cast(ushort)at;
+    }
+    assert(r.cache.length <= ushort.max, "String cache too large");
+    return r;
 }
 
 

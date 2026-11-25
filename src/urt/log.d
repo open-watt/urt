@@ -1,7 +1,7 @@
 module urt.log;
 
 import urt.mem.temp : tconcat_impl, tformat, tformat_packed;
-import urt.string.format : ConcatArg, ConcatArgLayout, FormatArg, make_concat_args, pack_format_args;
+import urt.string.format : ConcatArg, ConcatArgLayout, ConcatWordLayout, FormatArg, make_concat_args, pack_format_args;
 import urt.time;
 
 nothrow @nogc:
@@ -174,16 +174,9 @@ void write_logf(T...)(Severity severity, const(char)[] tag, const(char)[] object
 // A tag slice has no object name. An object supplies its tag via type() and its owning String via name().
 void write_log_from(Source, T...)(Severity severity, Source source, ref T args)
 {
-    if (severity > g_max_severity)
-        return;
-    static if (T.length == 1 && is_log_string!(T[0]))
-        write_source_message(severity, source, args[0][]);
-    else
-    {
-        ConcatArg[T.length] packed = void;
-        auto layout = make_concat_args(args, packed.ptr);
-        write_source_concat(severity, source, packed.ptr, layout);
-    }
+    import urt.meta : STATIC_MAP;
+
+    write_log_from_args!(Source, STATIC_MAP!(LogArgument, T))(severity, source, args);
 }
 
 void write_logf_from(Source, T...)(Severity severity, Source source, const(char)[] fmt, ref T args)
@@ -273,6 +266,43 @@ private:
 import urt.array : Array;
 import urt.string : MutableString, String;
 
+// Read-only log arguments can share an instantiation across qualifier variations.
+template LogArgument(T)
+{
+    import urt.traits : Unqual, is_some_int, is_some_char, is_some_float;
+
+    static if (is(Unqual!T == E[], E) && is(T : const(char)[]))
+        alias LogArgument = const(char[]);
+    else static if (is_some_int!T || (is_some_char!T && !is(T == enum)) || is_some_float!T || is(Unqual!T == bool) || is(Unqual!T == String))
+        alias LogArgument = const(T);
+    else
+        alias LogArgument = T;
+}
+
+void write_log_from_args(Source, T...)(Severity severity, Source source, ref T args)
+{
+    import urt.string.format : concat_word_layout, make_concat_word_args;
+
+    if (severity > g_max_severity)
+        return;
+    static if (T.length == 1 && is_log_string!(T[0]))
+        write_source_message(severity, source, args[0][]);
+    else
+    {
+        ConcatArg[T.length] packed = void;
+        static if (concat_word_layout!T != ConcatWordLayout.unsupported)
+        {
+            make_concat_word_args!T(args, packed.ptr);
+            write_source_concat_words(severity, source, packed.ptr, concat_word_layout!T);
+        }
+        else
+        {
+            auto layout = make_concat_args(args, packed.ptr);
+            write_source_concat(severity, source, packed.ptr, layout);
+        }
+    }
+}
+
 enum is_log_string(T) = is(T : const(char)[]) || is(T : const String) ||
     is(T : const MutableString!N, size_t N) || is(T : const Array!char);
 
@@ -306,6 +336,13 @@ void write_source_concat(Source)(Severity severity, Source source, const(ConcatA
     auto tag = source_tag(source);
     auto name = source_name(source);
     write_concat_log(severity, tag.ptr, tag.length, name[].ptr, name[].length, args, layout);
+}
+
+void write_source_concat_words(Source)(Severity severity, Source source, ConcatArg* args, ConcatWordLayout layout)
+{
+    import urt.string.format : expand_concat_word_args;
+
+    write_source_concat(severity, source, args, expand_concat_word_args(args, layout));
 }
 
 pragma(inline, false)
@@ -409,10 +446,36 @@ unittest
     writeInfof("value={0}", 14);
     assert(capture.tag.length == 0 && !capture.named_object && capture.message == "value=14");
 
+    char[6] label_storage = "value=";
+    char[] mutable_label = label_storage[];
+    const(char)[] const_label = mutable_label;
+    string immutable_label = "value=";
+    int mutable_value = 15;
+    const int const_value = 16;
+    immutable int immutable_value = 17;
+    module_log.info(mutable_label, mutable_value);
+    assert(capture.tag == "module" && capture.message == "value=15");
+    module_log.info(const_label, const_value);
+    assert(capture.message == "value=16");
+    module_log.info(immutable_label, immutable_value);
+    assert(capture.message == "value=17");
+
+    module_log.info("signed=", byte.min, "/", short.min, " unsigned=", ubyte.max, "/", ushort.max);
+    assert(capture.message == "signed=-128/-32768 unsigned=255/65535");
+    module_log.info("word=", ptrdiff_t.min, "/", size_t.max);
+    static if (size_t.sizeof == 4)
+        assert(capture.message == "word=-2147483648/4294967295");
+    else static if (size_t.sizeof == 8)
+        assert(capture.message == "word=-9223372036854775808/18446744073709551615");
+    module_log.info("fallback=", false, "/", byte.min);
+    assert(capture.message == "fallback=false/-128");
+
     TestLogSource source;
     write_log_from(Severity.debug_, &source, "filtered");
+    write_log_from(Severity.debug_, &source, "filtered=", 42);
     write_logf_from(Severity.debug_, &source, "{0}", 12);
     assert(source.lookups == 0);
+    assert(capture.message == "fallback=false/-128");
 
     write_log_from(Severity.info, &source, "direct");
     assert(capture.tag == "source");

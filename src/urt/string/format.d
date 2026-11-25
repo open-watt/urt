@@ -188,24 +188,6 @@ char[] format(Args...)(char[] buffer, const(char)[] fmt, auto ref Args args)
     return r;
 }
 
-package(urt) FormatArg[Args.length] pack_format_args(Args...)(ref Args args)
-{
-    pragma(inline, true);
-    FormatArg[Args.length] packed = void;
-    static foreach (i, arg; args)
-        packed[i] = FormatArg(arg);
-    return packed;
-}
-
-package(urt) char[] format_packed(char[] buffer, const(char)[] fmt, const(FormatArg)[] args)
-{
-    debug InFormatFunction = true;
-    char[] r = formatImpl(buffer, fmt, args);
-    debug InFormatFunction = false;
-    return r;
-}
-
-
 struct FormatArg
 {
     private this(T)(ref T value) pure nothrow @nogc
@@ -237,10 +219,108 @@ private:
     ptrdiff_t function() pure nothrow @nogc _to_int_fun;
 }
 
-package(urt) enum has_custom_stringifier(T) = to_string_overload_index!T >= 0;
+package(urt):
+
+// The low half is the concat layout. The upper half marks signed integer arguments.
+enum ConcatWordLayout : size_t
+{
+    unsupported = 0,
+}
+
+enum concat_word_layout(Args...) = () {
+    static if (Args.length < 2 || Args.length >= concat_word_layout_bits)
+        return ConcatWordLayout.unsupported;
+    else
+    {
+        size_t layout = size_t(1) << Args.length;
+        static foreach (i, Arg; Args)
+        {
+            static if (concat_word_kind!Arg == ConcatWordKind.other)
+                return ConcatWordLayout.unsupported;
+            else static if (concat_word_kind!Arg == ConcatWordKind.text)
+                layout |= size_t(1) << i;
+            else static if (concat_word_kind!Arg == ConcatWordKind.signed_int)
+                layout |= size_t(1) << (i + concat_word_layout_bits);
+        }
+        return cast(ConcatWordLayout)layout;
+    }
+}();
+
+void make_concat_word_args(Args...)(ref const Args args, ConcatArg* result)
+{
+    static assert(concat_word_layout!Args != ConcatWordLayout.unsupported);
+    static foreach (i, Arg; Args)
+    {
+        static if (concat_word_kind!Arg == ConcatWordKind.text)
+            result[i].data = &args[i];
+        else static if (concat_word_kind!Arg == ConcatWordKind.signed_int)
+            result[i].data = cast(void*)cast(ptrdiff_t)args[i];
+        else
+            result[i].data = cast(void*)cast(size_t)args[i];
+    }
+}
+
+ConcatArgLayout expand_concat_word_args(ConcatArg* args, ConcatWordLayout layout)
+{
+    size_t mask = cast(size_t)layout & ((size_t(1) << concat_word_layout_bits) - 1);
+    size_t signed_words = cast(size_t)layout >> concat_word_layout_bits;
+    for (size_t kinds = mask; kinds > 1; kinds >>= 1, signed_words >>= 1, ++args)
+    {
+        if (kinds & 1)
+        {
+            const(char)[] text = *cast(const(char[])*)args.data;
+            args.data = text.ptr;
+            args.length = text.length;
+        }
+        else
+            args.stringify = signed_words & 1 ? &DefFormat!ptrdiff_t.toString : &DefFormat!size_t.toString;
+    }
+    return cast(ConcatArgLayout)mask;
+}
+
+FormatArg[Args.length] pack_format_args(Args...)(ref Args args)
+{
+    pragma(inline, true);
+    FormatArg[Args.length] packed = void;
+    static foreach (i, arg; args)
+        packed[i] = FormatArg(arg);
+    return packed;
+}
+
+char[] format_packed(char[] buffer, const(char)[] fmt, const(FormatArg)[] args)
+{
+    debug InFormatFunction = true;
+    char[] r = formatImpl(buffer, fmt, args);
+    debug InFormatFunction = false;
+    return r;
+}
+
+enum has_custom_stringifier(T) = to_string_overload_index!T >= 0;
 
 
 private:
+
+enum concat_word_layout_bits = size_t.sizeof * 4;
+
+enum ConcatWordKind
+{
+    text,
+    signed_int,
+    unsigned_int,
+    other,
+}
+
+template concat_word_kind(T)
+{
+    static if (is(Unqual!T == E[], E) && is(T : const(char)[]))
+        enum concat_word_kind = ConcatWordKind.text;
+    else static if (is_signed_int!T && T.sizeof <= size_t.sizeof)
+        enum concat_word_kind = ConcatWordKind.signed_int;
+    else static if (is_unsigned_int!T && T.sizeof <= size_t.sizeof)
+        enum concat_word_kind = ConcatWordKind.unsigned_int;
+    else
+        enum concat_word_kind = ConcatWordKind.other;
+}
 
 enum is_concat_text(T) = is(Unqual!T == char) || is(T : const(char)[]) ||
     is(T == E[N], E, size_t N) && is(Unqual!E == char) || is(Unqual!T == String) ||

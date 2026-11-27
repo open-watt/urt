@@ -61,15 +61,10 @@ void make_concat_arg(T)(ref const T arg, ref ConcatArg result)
         result.data = &arg;
         result.length = 1;
     }
-    else static if (is(T : const(char)[]) || is(T == E[N], E, size_t N) && is(Unqual!E == char))
+    else static if (is_concat_text!T)
     {
-        result.data = arg[].ptr;
-        result.length = arg[].length;
-    }
-    else static if (is(Unqual!T == String) || is(Unqual!T == MutableString!N, size_t N) || is(Unqual!T == Array!(char, N), size_t N))
-    {
-        result.data = arg[].ptr;
-        result.length = arg[].length;
+        const(char)[] text = arg[];
+        result = ConcatArg(text.ptr, text.length);
     }
     else static if (is(Unqual!T == Format))
     {

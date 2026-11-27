@@ -49,8 +49,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K)
 
     void clear() nothrow
     {
-        destroy(_root);
-        _root = null;
+        clear_tree(_root, _num_modes, &free_node);
     }
 
     V* insert(_K, _V)(auto ref _K key, auto ref _V val)
@@ -243,7 +242,7 @@ struct AVLTree(K, V, alias Pred = DefCmp!K)
 
     inout(V)* get(_K)(ref const _K key) inout
     {
-        inout(Node)* n = cast(inout(Node)*)find_key!(K, _K, Pred)(_root ? _root.base : null, key);
+        inout(Node)* n = cast(inout(Node)*)find_key!(K, _K, Pred)(_root, key);
         return n ? &n.kvp.value : null;
     }
 
@@ -289,16 +288,16 @@ struct AVLTree(K, V, alias Pred = DefCmp!K)
 
     // TODO: why don't the const overloads work properly?
     auto keys() const nothrow
-        => Range!(IterateBy.Keys, true)(_root);
+        => Range!(IterateBy.Keys, true)(cast(const(Node)*)_root);
     auto values() nothrow
-        => Range!(IterateBy.Values)(_root);
+        => Range!(IterateBy.Values)(cast(Node*)_root);
     auto values() const nothrow
-        => Range!(IterateBy.Values, true)(_root);
+        => Range!(IterateBy.Values, true)(cast(const(Node)*)_root);
 
     auto opIndex() nothrow
-        => Range!(IterateBy.KVP)(_root);
+        => Range!(IterateBy.KVP)(cast(Node*)_root);
     auto opIndex() const nothrow
-        => Range!(IterateBy.KVP, true)(_root);
+        => Range!(IterateBy.KVP, true)(cast(const(Node)*)_root);
 
     import urt.string.format : FormatArg, formatValue;
     ptrdiff_t toString()(char[] buffer, const(char)[] format, const(FormatArg)[] formatArgs) const
@@ -368,7 +367,7 @@ nothrow:
     alias Node = AVLTreeNode!(K, V);
 
     size_t _num_modes = 0;
-    Node* _root = null;
+    BaseNode* _root = null;
 
     static void free_node(void* p)
     {
@@ -377,22 +376,16 @@ nothrow:
 
     enum size_t node_traits = (Node.sizeof << 16) | (Node.kvp.offsetof + KVP!(K, V).key.offsetof);
 
-    void destroy(Node* n)
+    BaseNode* insert(BaseNode* n, Node* newnode)
     {
         pragma(inline, true);
-        _num_modes -= destroy_node(n.base, &free_node);
+        return insert_node(n, newnode.base, _num_modes, &compare_keys!(K, K, Pred), &free_node);
     }
 
-    Node* insert(Node* n, Node* newnode)
+    BaseNode* delete_node(_K)(BaseNode* root, ref const _K key)
     {
         pragma(inline, true);
-        return cast(Node*)insert_node(n.base, newnode.base, _num_modes, &compare_keys!(K, K, Pred), &free_node);
-    }
-
-    Node* delete_node(_K)(Node* _pRoot, ref const _K key)
-    {
-        pragma(inline, true);
-        return cast(Node*).delete_node(_pRoot.base, &key, _num_modes, &compare_keys!(K, _K, Pred), &compare_keys!(K, K, Pred), (void* from, void* to) {
+        return .delete_node(root, &key, _num_modes, &compare_keys!(K, _K, Pred), &compare_keys!(K, K, Pred), (void* from, void* to) {
             // Copy the in-order successor's data to this Node
             (cast(Node*)to).kvp.key = (cast(Node*)from).kvp.key; // we can't move the key, because delete_node still needs to be able to find it
             (cast(Node*)to).kvp.value = (cast(Node*)from).kvp.value.move;
@@ -979,6 +972,12 @@ void* new_node(size_t traits)
     n.height = 1;
     n.key_offset = cast(ushort)traits;
     return n;
+}
+
+void clear_tree(ref BaseNode* root, ref size_t count, DestroyFn free_node)
+{
+    count -= destroy_node(root, free_node);
+    root = null;
 }
 
 size_t destroy_node(BaseNode* n, DestroyFn free_fun)

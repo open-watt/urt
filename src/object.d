@@ -823,7 +823,7 @@ TTo[] __ArrayCast(TFrom, TTo)(return scope TFrom[] from) pure @nogc @trusted
 {
     const fromSize = from.length * TFrom.sizeof;
     if (fromSize % TTo.sizeof != 0)
-        assert(false, "Array cast misalignment");
+        fail_array_cast();
     return (cast(TTo*) from.ptr)[0 .. fromSize / TTo.sizeof];
 }
 
@@ -2132,4 +2132,13 @@ unittest
     immutable(Qualified)[2] q_immutable;
     static assert(!__traits(compiles, move_to(q_const[], q_const[])));
     static assert(!__traits(compiles, move_to(q_immutable[], q_immutable[])));
+}
+
+
+private:
+
+pragma(inline, false)
+void fail_array_cast() pure nothrow @nogc
+{
+    assert(false, "Array cast misalignment");
 }

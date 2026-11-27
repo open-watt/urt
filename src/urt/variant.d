@@ -48,41 +48,8 @@ nothrow @nogc:
             take_node_array(arr);
             flags = rh.flags;
         }
-        else if ((rh.flags & Flags.NeedDestruction) == 0)
-        {
-            __pack = rh.__pack;
-        }
-        else if (rh.isString)
-        {
-            emplace(cast(String*)&value.s, *cast(String*)&rh.value.s);
-            count = rh.count;
-            flags = rh.flags;
-        }
-        else if (rh.isBuffer)
-        {
-            ptr = .alloc(rh.count).ptr;
-            ptr[0 .. rh.count] = rh.ptr[0 .. rh.count];
-            count = rh.count;
-            flags = rh.flags;
-        }
-        else if (rh.isUserType)
-        {
-            ref const TypeDetails td = (rh.flags & Flags.Embedded) ? find_type_details(rh.alloc) : g_type_details[rh.alloc];
-            assert(td.copy_emplace !is null, "User type has no copy_emplace");
-            if (rh.flags & Flags.Embedded)
-                td.copy_emplace(rh.embed.ptr, embed.ptr, false);
-            else
-            {
-                void* mem = .alloc(td.size, td.alignment).ptr;
-                td.copy_emplace(rh.ptr, mem, false);
-                ptr = mem;
-            }
-            count = rh.count;
-            alloc = rh.alloc;
-            flags = rh.flags;
-        }
         else
-            assert(false, "What kind of thing is this?");
+            copy_non_array(rh);
     }
 
     this(ref const Variant rh) inout
@@ -97,42 +64,11 @@ nothrow @nogc:
             emplace(&arr);
             flags = rh.flags;
         }
-        else if ((rh.flags & Flags.NeedDestruction) == 0)
-        {
-            __pack = rh.__pack;
-        }
-        else if (rh.isString)
-        {
-            emplace(cast(String*)&value.s, *cast(String*)&rh.value.s);
-            count = rh.count;
-            flags = rh.flags;
-        }
-        else if (rh.isBuffer)
-        {
-            void* mem = .alloc(rh.count).ptr;
-            mem[0 .. rh.count] = rh.ptr[0 .. rh.count];
-            ptr = cast(inout(void)*)mem;
-            count = rh.count;
-            flags = rh.flags;
-        }
-        else if (rh.isUserType)
-        {
-            ref const TypeDetails td = (rh.flags & Flags.Embedded) ? find_type_details(rh.alloc) : g_type_details[rh.alloc];
-            assert(td.copy_emplace !is null, "User type has no copy_emplace");
-            if (rh.flags & Flags.Embedded)
-                td.copy_emplace(cast(void*)rh.embed.ptr, cast(void*)embed.ptr, false);
-            else
-            {
-                void* mem = .alloc(td.size, td.alignment).ptr;
-                td.copy_emplace(cast(void*)rh.ptr, mem, false);
-                ptr = cast(inout(void)*)mem;
-            }
-            count = rh.count;
-            alloc = rh.alloc;
-            flags = rh.flags;
-        }
         else
-            assert(false, "What kind of thing is this?");
+        {
+            // The constructor owns the uninitialized destination even when its result is qualified.
+            (cast(Variant*)&this).copy_non_array(rh);
+        }
     }
 
     version (EnableMoveSemantics) {
@@ -1544,6 +1480,47 @@ package:
         TypeMask        = (1 << TypeBits) - 1,
         TypeBits        = 3
     }
+
+private:
+    void copy_non_array(ref const Variant rh)
+    {
+        if ((rh.flags & Flags.NeedDestruction) == 0)
+        {
+            __pack = rh.__pack;
+        }
+        else if (rh.isString)
+        {
+            emplace(cast(String*)&value.s, *cast(String*)&rh.value.s);
+            count = rh.count;
+            flags = rh.flags;
+        }
+        else if (rh.isBuffer)
+        {
+            void* mem = .alloc(rh.count).ptr;
+            mem[0 .. rh.count] = rh.ptr[0 .. rh.count];
+            ptr = mem;
+            count = rh.count;
+            flags = rh.flags;
+        }
+        else if (rh.isUserType)
+        {
+            ref const TypeDetails td = (rh.flags & Flags.Embedded) ? find_type_details(rh.alloc) : g_type_details[rh.alloc];
+            assert(td.copy_emplace !is null, "User type has no copy_emplace");
+            if (rh.flags & Flags.Embedded)
+                td.copy_emplace(cast(void*)rh.embed.ptr, cast(void*)embed.ptr, false);
+            else
+            {
+                void* mem = .alloc(td.size, td.alignment).ptr;
+                td.copy_emplace(cast(void*)rh.ptr, mem, false);
+                ptr = mem;
+            }
+            count = rh.count;
+            alloc = rh.alloc;
+            flags = rh.flags;
+        }
+        else
+            assert(false, "What kind of thing is this?");
+    }
 }
 
 unittest
@@ -1589,6 +1566,17 @@ unittest
     Variant object_copy = Variant(*object);
     assert(object_copy.isObject && object_copy["wow"].isTrue &&
            !object_copy["bogus"].asBool);
+
+    ubyte[20] bytes;
+    bytes[0] = 42;
+    Variant buffer = Variant(cast(void[])bytes[]);
+    Variant mutable_copy = Variant(buffer);
+    const(Variant)* const_buffer = &buffer;
+    Variant const_copy = Variant(*const_buffer);
+    assert(mutable_copy.asBuffer().ptr !is buffer.asBuffer().ptr);
+    assert(const_copy.asBuffer().ptr !is buffer.asBuffer().ptr);
+    assert(cast(const(ubyte)[])mutable_copy.asBuffer() == bytes[]);
+    assert(cast(const(ubyte)[])const_copy.asBuffer() == bytes[]);
 
     // null/empty-string equivalence: "" constructs as Null and must compare equal both ways
     Variant empty = Variant("");

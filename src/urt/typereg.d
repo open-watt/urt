@@ -55,11 +55,8 @@ typeof(g_type_details)* type_details() => &g_type_details;
 ushort num_type_details() => g_num_type_details;
 
 ushort register_type_record(TypeDetails td)
-{
-    assert(g_num_type_details < g_type_details.length, "Too many user types!");
-    g_type_details[g_num_type_details] = td;
-    return g_num_type_details++;
-}
+    => register_type_details(td);
+
 
 ref immutable(TypeDetails) find_type_details(uint type_id) pure
 {
@@ -98,7 +95,8 @@ template register_type(T, string type_name = type_name_of!T)
     pragma(crt_constructor)
     void register()
     {
-        register_type_record(TypeRecordFor!(T, fnv1a(cast(const(ubyte)[])type_name), 0, false, type_name));
+        static immutable details = TypeRecordFor!(T, fnv1a(cast(const(ubyte)[])type_name), 0, false, type_name);
+        register_type_details(details);
     }
     alias register_type = void;
 }
@@ -143,7 +141,8 @@ template MakeTypeDetails(T)
     pragma(crt_constructor)
     void register()
     {
-        register_type_record(TypeDetailsFor!T);
+        static immutable details = TypeDetailsFor!T;
+        register_type_details(details);
     }
 
     alias MakeTypeDetails = void;
@@ -426,4 +425,14 @@ unittest
     Ident back;
     assert(idr.variant(&back, boxed, false));
     assert(back.id == 42);
+}
+
+
+private:
+
+ushort register_type_details(ref const TypeDetails td)
+{
+    assert(g_num_type_details < g_type_details.length, "Too many user types!");
+    g_type_details[g_num_type_details] = td;
+    return g_num_type_details++;
 }
